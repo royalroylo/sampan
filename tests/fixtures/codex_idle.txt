@@ -1,0 +1,34 @@
+╭─────────────────────────────────────────────────╮
+│ ✨ Update available! 0.147.0 -> 0.163.0         │
+│ Run npm install -g @openai/codex to update.     │
+│                                                 │
+│ See full release notes:                         │
+│ https://github.com/openai/codex/releases/latest │
+╰─────────────────────────────────────────────────╯
+
+╭────────────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.147.0)                         │
+│                                                    │
+│ model:     codex-model medium   /model to change │
+│ directory: /Users/u/proj                           │
+╰────────────────────────────────────────────────────╯
+
+  Tip: Try the Desktop app. Run 'codex app' or visit https://chatgpt.com/codex?app-landing-page=true
+
+• You have 3 usage limit resets available. Run /usage to use one.
+
+
+⚠ MCP startup incomplete (failed: memory)
+
+
+› Without running any tools, think carefully: how many ways can 8 queens be placed on a chessboard so none attack? Explain briefly.
+
+
+• There are 92 ways to place 8 indistinguishable queens on an 8×8 board so that no two share a row, column, or diagonal.
+
+  If rotations and reflections are considered the same arrangement, there are 12 fundamentally distinct solutions.
+
+
+› Write tests for @filename
+
+  codex-model medium · /Users/u/proj

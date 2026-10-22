@@ -1,0 +1,138 @@
+"""Structural guard: the test run can never reach the real tmux / claude / codex / ...
+
+Installed once by tests/__init__.py (so it is active for any way of running the tests). It wraps the
+real call points -- subprocess.run / Popen (which also covers call / check_* and sampan.runner.run,
+since those go through them) and os.exec* -- and raises RealCommandBlocked for:
+
+  * tmux, claude, codex, lsof, launchctl, uv, osascript, sampan: always;
+  * git: only network / mutating subcommands (ls-remote, fetch, clone, push, pull).
+    Read-only local git (e.g. `git ls-files` in test_scrub) stays allowed.
+
+The executable is matched on its basename, so /usr/sbin/lsof is caught like lsof.
+
+RealCommandBlocked derives from BaseException on purpose: sampan code wraps subprocess calls in
+`except OSError` / `except Exception`, and a block must not be turned into a quiet "command failed".
+Every block is also recorded in `blocked_calls`; at interpreter exit a non-empty record forces exit
+status 1, even if something still swallowed the exception (e.g. a background thread).
+A test that deliberately provokes a block clears the record afterwards (blocked_calls.clear()).
+
+Opting out (should be unnecessary; use FakeRunner instead):
+
+    with allow_real_commands("uv"):
+        ...
+"""
+import atexit
+import contextlib
+import os
+import re
+import subprocess
+import sys
+
+BLOCKED = frozenset({"tmux", "claude", "codex", "lsof", "launchctl", "uv", "osascript", "sampan"})
+BLOCKED_GIT_SUBCOMMANDS = frozenset({"ls-remote", "fetch", "clone", "push", "pull"})
+
+SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
+_WORD = re.compile(r"[^\s;&|()<>`$'\"]+")  # command-string words, splitting on shell separators and quotes
+
+blocked_calls = []
+_allowed = set()
+
+
+class RealCommandBlocked(BaseException):
+    """A test tried to run a real external command that the test suite must never touch."""
+
+
+def _git_subcommand(args):
+    it = iter(args[1:])
+    for a in it:
+        if a in ("-C", "-c", "--git-dir", "--work-tree", "--namespace"):
+            next(it, None)
+        elif not a.startswith("-"):
+            return a
+    return None
+
+
+def _argv(args):
+    if isinstance(args, (str, bytes, os.PathLike)):
+        args = os.fsdecode(args).split()
+    return [os.fsdecode(a) for a in args]
+
+
+def _shell_words(argv, is_string):
+    """Words of the command string a shell would run: a string command (shell=True), or the argument after -c of sh/bash/zsh/dash."""
+    if is_string:
+        text = " ".join(argv)
+    elif os.path.basename(argv[0]) in SHELLS and any(a.startswith("-") and "c" in a[1:] and not a.startswith("--") for a in argv[1:]):
+        text = " ".join(argv[1:])
+    else:
+        return []
+    return [os.path.basename(w) for w in _WORD.findall(text)]
+
+
+def check(args):
+    """Raise RealCommandBlocked if `args` (argv list or command string) is a forbidden command, also when hidden in `sh -c '...'` or a shell string."""
+    argv = _argv(args)
+    if not argv:
+        return
+    name = os.path.basename(argv[0])
+    if name in _allowed:
+        return
+    for word in _shell_words(argv, isinstance(args, (str, bytes, os.PathLike))):
+        if word in BLOCKED and word not in _allowed:
+            blocked_calls.append(argv)
+            raise RealCommandBlocked(f"tests must not run the real command {word!r} through a shell: {argv!r}")
+    if name in BLOCKED or (name == "git" and _git_subcommand(argv) in BLOCKED_GIT_SUBCOMMANDS):
+        blocked_calls.append(argv)
+        raise RealCommandBlocked(
+            f"tests must not run the real command {argv!r}; use FakeRunner (or, if truly needed, "
+            f"tests.guard.allow_real_commands({name!r}))")
+
+
+@contextlib.contextmanager
+def allow_real_commands(*names):
+    """Let the named executables (basename) through the guard inside the with-block."""
+    added = set(names) - _allowed
+    _allowed.update(added)
+    try:
+        yield
+    finally:
+        _allowed.difference_update(added)
+
+
+_real = {"run": subprocess.run, "Popen": subprocess.Popen}
+
+
+class _GuardedPopen(_real["Popen"]):
+    def __init__(self, args, *a, **kw):
+        check(args)
+        super().__init__(args, *a, **kw)
+
+
+def _guarded_run(args, *a, **kw):
+    check(args)
+    return _real["run"](args, *a, **kw)
+
+
+def _guarded_exec(real):
+    def guarded(file, *a, **kw):
+        check([file])
+        return real(file, *a, **kw)
+    guarded.__name__ = real.__name__
+    return guarded
+
+
+def install():
+    if getattr(subprocess.run, "_sampan_guard", False):
+        return
+    _guarded_run._sampan_guard = True
+    subprocess.run = _guarded_run
+    subprocess.Popen = _GuardedPopen
+    for name in ("execv", "execve", "execvp", "execvpe"):
+        setattr(os, name, _guarded_exec(getattr(os, name)))
+
+
+@atexit.register
+def _fail_if_anything_was_blocked():
+    if blocked_calls:
+        print(f"tests.guard: real command(s) were blocked during the run: {blocked_calls}", file=sys.stderr, flush=True)
+        os._exit(1)

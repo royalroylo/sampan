@@ -1,0 +1,58 @@
+"""sampan ui: an interactive menu that stays on one screen until you quit.
+
+Package layout (the names below are re-exported here so `sampan.ui.<name>` keeps working):
+  text     shared text helpers and key constants: display width (CJK takes two cells), pad/truncate, wrapping, pane capture cleanup
+  state    pure state machines: Picker (arrow-key menu), Checklist (restore/adopt), and the display conversion of state labels
+  cards    the info card: per-row data (gather_cards), card contents, key hints and style decisions; pure data
+  render   pure functions turning state, card and messages into lines of [(text, style), ...]
+  screen   CursesScreen, the thin curses adapter (keys, redraw, preview capture), plus curses_ui / curses_adopt_checklist
+  actions  cmd_ui: the main loop and dispatch, the question flows of the n/s/m/e/U actions, the --plain menu
+  dirpick  DirPicker, the directory chooser state machine (used by n and m)
+
+In a terminal (curses): on the left is the session list (name, agent, profile, state, claude state; the name column is only two cells wider than the
+longest name and the other columns follow right after), on the right is the info card of the row under the cursor (state, agent / profile, directory,
+conversation id, last activity, context, number of tmux windows / panes, last message, the keys available for this row); when the terminal is narrower than
+100 columns the card goes under the list. When the row under the cursor has a tmux session, the card is replaced by a compact header plus a live preview
+of that session's agent pane (tmux capture-pane, read-only, no keys sent): captured as soon as the cursor moves there, re-captured every second while
+waiting for a key, and the list is re-read every 5 seconds (cursor and checkmarks are kept); question input and checklists are not affected. At the bottom
+are the message area (the result of the last action, live progress of long actions, the input line for questions such as y/N and names) and the key help.
+
+Keys: up/down move, space checks, Enter attaches (a stopped session is reattached first), s stops (confirmed in place), m moves to another directory,
+e renames, R reattaches, A adopts claude/codex running outside tmux, r retire, a activate, n new session, w save now, U update sampan, q / Esc quit.
+
+When a newer version exists (update.Checker checks in the background, cached for 6 hours, and re-checks in the idle time while waiting for a key) one more
+line appears above the key help saying a new version is available and to press U; U updates after an in-place confirmation, the output is shown live in the
+message area; on success curses is closed and sampan is exec'd with the same arguments, on failure it stays on the list.
+
+The working directory of n and the new directory of m use the directory chooser (dirpick.DirPicker + render_dirpick): subdirectories on the left, recently
+used ones (from the registry) and the sessions already in the directory under the cursor on the right; up/down move, right / Enter enter, left / Backspace
+go up, space picks the current directory, + creates a folder, / types a path, Tab switches to recently used, . shows hidden, Esc cancels; picking the home
+directory itself asks for one more confirmation. --plain still types the path.
+
+When an agent stops at a menu on startup (Codex update, trusted directory, hooks review; Claude trust the folder): while n, Enter / R reattach, and m move
+wait for the agent, the question and options are shown under the message area (prompts.Relay -> CursesScreen.prompt_choice) and sampan does not choose for
+you; the cursor defaults to "go in and handle it myself", up/down choose, Enter sends, number keys pick directly, Esc leaves it for now. Only after an option
+is chosen is that key sent to the pane; choosing "go in and handle it myself" attaches to that session when the action ends. --plain asks the same options by number.
+
+Rules: from entering until q you stay inside sampan's screen; after an action finishes you return to the list (the registry and tmux are re-read) and the
+result stays in the message area; actions that open a tmux session (Enter reattach, R, A, n) finally go straight into that session: inside tmux the ui
+ends after switch-client, outside tmux the terminal is first restored, curses is left, and then it execs tmux attach-session. When not on a terminal (or
+with --plain) numbers are typed instead; the rules are the same.
+
+Every action goes through the existing subcommands (stop, move, restore, adopt...), so stop's protections (a busy session is not stopped, /exit is not
+sent to a worktree) apply unchanged. The screen has three layers: Picker / Checklist are pure state machines; render() turns state, card and messages
+into lines of text (pure functions); CursesScreen is a very thin curses adapter providing pick / checklist / choose_dir / ask / out to cmd_ui.
+"""
+from .actions import _attach, cmd_ui, dir_context
+from .cards import Keys, Wrap, _label, card_lines, gather_cards, preview_header, row_keys
+from .render import _list_cells, frame_text, list_cols, preview_lines, render, render_dirpick, screen_title
+from .screen import NO_SCREEN, SELF_SCREEN, CursesScreen, curses_adopt_checklist, curses_ui
+from .state import Checklist, Picker, list_state, row_text, show_state
+from .text import clean_capture, pad, text_width
+
+__all__ = [
+    "NO_SCREEN", "SELF_SCREEN", "Checklist", "CursesScreen", "Keys", "Picker", "Wrap", "_attach",
+    "_label", "_list_cells", "card_lines", "clean_capture", "cmd_ui", "curses_adopt_checklist", "curses_ui",
+    "dir_context", "frame_text", "gather_cards", "list_cols", "list_state", "pad", "preview_header",
+    "preview_lines", "render", "render_dirpick", "row_keys", "row_text", "screen_title", "show_state", "text_width",
+]

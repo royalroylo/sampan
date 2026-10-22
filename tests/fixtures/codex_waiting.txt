@@ -1,0 +1,40 @@
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+› Run exactly this shell command and nothing else: curl -sI https://example.com
+
+
+• Running the requested command exactly.
+
+• Ran curl -sI https://example.com
+  └ (no output)
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Done.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+› That curl was blocked by the sandbox network. Rerun it requesting escalated permissions (sandbox approval) so I can approve it.
+
+
+• Requesting sandbox approval to rerun the exact curl command with network access.
+
+• Running curl -sI https://example.com
+
+
+  Would you like to run the following command?
+
+  Environment: local
+
+  Reason: Do you want to allow this exact curl request to access example.com outside the sandbox?
+
+  $ curl -sI https://example.com
+
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for commands that start with `curl -sI https://example.com` (p)
+  3. No, and tell Codex what to do differently (esc)
+
+  Press enter to confirm or esc to cancel

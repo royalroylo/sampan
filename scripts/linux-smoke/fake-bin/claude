@@ -1,0 +1,43 @@
+#!/bin/bash
+# Fake `claude` for scripts/linux-smoke: just enough for sampan to see a live Claude Code in a tmux pane.
+# Uses #!/bin/bash (not env) so the process name (comm) is "claude", which is how sampan finds agents.
+# Does NOT exercise: real startup prompts (trust folder), the SessionStart hook, busy/waiting states, worktrees.
+if [ "${1:-}" = auth ]; then
+    [ "${2:-}" = status ] && echo '{"loggedIn": true, "email": "fake@example.com"}'
+    exit 0
+fi
+sid=""
+resumed=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --resume) sid="$2"; resumed=1; shift ;;
+        --session-id) sid="$2"; shift ;;
+    esac
+    shift
+done
+[ -n "$sid" ] || sid=$(cat /proc/sys/kernel/random/uuid)
+cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+enc=$(printf %s "$PWD" | tr '/.' '--')
+transcript="$cfg/projects/$enc/$sid.jsonl"
+if [ -n "$resumed" ] && [ ! -f "$transcript" ]; then
+    echo "No conversation found with session ID: $sid"
+    exit 1
+fi
+mkdir -p "$cfg/sessions" "$cfg/projects/$enc"
+if [ ! -f "$transcript" ]; then  # a real claude writes this after the first prompt; the fake writes it at once
+    now=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
+    printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"$now\",\"message\":{\"role\":\"user\",\"content\":\"hello from the fake\"}}" \
+        "{\"type\":\"assistant\",\"timestamp\":\"$now\",\"message\":{\"role\":\"assistant\",\"usage\":{\"input_tokens\":1200,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}}}" > "$transcript"
+fi
+sfile="$cfg/sessions/$$.json"
+printf '{"pid":%d,"sessionId":"%s","cwd":"%s","status":"idle","tmux":"%s"}\n' "$$" "$sid" "$PWD" "${TMUX_PANE:-}" > "$sfile"
+trap 'rm -f "$sfile"' EXIT
+trap 'exit 0' TERM HUP INT
+echo "Fake Claude Code  session=$sid${resumed:+  (resumed)}"
+echo "╭──────────────────────────────────────────╮"
+echo "│ >                                        │"
+echo "╰──────────────────────────────────────────╯"
+echo "  ? for shortcuts"
+while IFS= read -r line; do
+    [ "$line" = "/exit" ] && exit 0
+done

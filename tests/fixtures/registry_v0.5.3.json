@@ -1,0 +1,50 @@
+{
+  "version": 2,
+  "saved_at": "2026-10-21T09:00:00+08:00",
+  "sessions": [
+    {
+      "tmux": "003-帳務",
+      "agent": "claude",
+      "profile": "work",
+      "session_id": "3f2a1c9e-1111-4222-8333-444455556666",
+      "cwd": "/Users/u/proj/帳務",
+      "state": "active",
+      "seen_at": "2026-10-21T09:00:00+08:00",
+      "server": "1234-5678",
+      "pid": 4242
+    },
+    {
+      "tmux": "api",
+      "agent": "codex",
+      "profile": "",
+      "session_id": "01a1568b-81c2-71f1-99f7-b7a590f4ed96",
+      "cwd": "/Users/u/proj/api",
+      "state": "active",
+      "seen_at": "2026-10-21T09:00:00+08:00",
+      "server": "1234-5678",
+      "pid": 4300
+    },
+    {
+      "tmux": "old-experiment",
+      "agent": "claude",
+      "profile": "alice",
+      "session_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      "cwd": "/Users/u/old",
+      "state": "retired",
+      "seen_at": "2026-09-30T18:30:00+08:00",
+      "server": "1111-2222",
+      "pid": null
+    },
+    {
+      "tmux": "stopped-one",
+      "agent": "claude",
+      "profile": "alice",
+      "session_id": "bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      "cwd": "/Users/u/stopped",
+      "state": "active",
+      "seen_at": "2026-10-20T12:00:00+08:00",
+      "server": "0000-1111",
+      "pid": null
+    }
+  ]
+}

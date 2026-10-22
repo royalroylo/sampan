@@ -1,0 +1,38 @@
+#!/bin/bash
+# Fake `codex` for scripts/linux-smoke: a bash process named "codex" that holds a rollout file open (sampan finds the
+# thread id through lsof) and draws a Codex-like composer + footer (sampan reads "idle" from the screen).
+# Does NOT exercise: update/trust/hook-review menus, the working state, the threads sqlite fallback.
+tid=""
+resumed=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        resume) tid="$2"; resumed=1; shift ;;
+        -C) cd "$2" || exit 1; shift ;;
+    esac
+    shift
+done
+home="${CODEX_HOME:-$HOME/.codex}"
+[ -n "$tid" ] || tid=$(cat /proc/sys/kernel/random/uuid)
+if [ -n "$resumed" ]; then
+    rollout=$(ls "$home"/sessions/*/*/*/rollout-*-"$tid".jsonl 2>/dev/null | tail -1)
+    if [ -z "$rollout" ]; then
+        echo "ERROR: no saved session found with ID $tid"
+        exit 1
+    fi
+else
+    d="$home/sessions/2026/10/22"
+    mkdir -p "$d"
+    rollout="$d/rollout-2026-10-22T00-00-00-$tid.jsonl"
+    now=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
+    printf '%s\n' "{\"timestamp\":\"$now\",\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"hello from the fake\"}}" > "$rollout"
+fi
+exec 3>>"$rollout"
+trap 'exit 0' TERM HUP INT
+echo ">_ Fake Codex  thread=$tid${resumed:+  (resumed)}"
+echo
+echo "› Ask Codex to do something"
+echo
+echo "  gpt-fake medium · $PWD"
+while IFS= read -r line; do
+    [ "$line" = "/quit" ] && exit 0
+done

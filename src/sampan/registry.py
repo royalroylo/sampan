@@ -1,0 +1,169 @@
+import fcntl
+import json
+import os
+import shutil
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+
+from .clock import now_stamp
+from .procs import is_uuid
+
+STATES = ("active", "retired")
+AGENTS = ("claude", "codex")
+VERSION = 2
+
+
+class RegistryError(Exception):
+    pass
+
+
+@dataclass
+class Row:
+    tmux: str
+    agent: str  # "claude" | "codex"
+    profile: str  # "" for codex
+    session_id: str
+    cwd: str
+    state: str = "active"
+    seen_at: str = ""
+    server: str = ""  # tmux server when it was last seen (pid-start_time)
+    pid: int | None = None  # agent process last seen
+
+
+@dataclass(frozen=True)
+class Observed:
+    tmux: str
+    agent: str
+    profile: str
+    session_id: str
+    cwd: str
+    pid: int
+
+
+@dataclass
+class MergeResult:
+    rows: list
+    added: list = field(default_factory=list)
+    updated: list = field(default_factory=list)
+    renamed: list = field(default_factory=list)
+    pending: list = field(default_factory=list)
+    warnings: list = field(default_factory=list)
+
+
+def merge(old, observed, tmux_sessions, now, server, keep_silently=frozenset()):
+    """Merge what is running now into the registry.
+
+    Rows are never dropped: a row whose tmux session is gone (stopped, closed by hand, or a reboot) is kept as
+    pending for `sampan restore`; only the user retires it. A row whose tmux session is still
+    there but has no observed agent is kept as is, with a warning unless its name is in
+    keep_silently (sessions the caller already explained, or a Codex with no thread yet).
+    """
+    res = MergeResult(rows=[])
+    by_name = {r.tmux: r for r in old}
+    used = set()
+    new_rows = {}
+    for ob in observed:
+        prev = by_name.get(ob.tmux)
+        if prev is None:
+            prev = next((o for o in old if o.session_id == ob.session_id
+                         and o.tmux not in tmux_sessions and o.tmux not in used), None)
+            if prev is None:
+                res.added.append(ob.tmux)
+            else:
+                res.renamed.append((prev.tmux, ob.tmux))
+        elif (prev.agent, prev.profile, prev.session_id, prev.cwd) != (ob.agent, ob.profile, ob.session_id, ob.cwd):
+            res.updated.append(ob.tmux)
+        if prev is not None:
+            used.add(prev.tmux)
+        state = prev.state if prev is not None else "active"
+        new_rows[ob.tmux] = Row(ob.tmux, ob.agent, ob.profile, ob.session_id, ob.cwd, state, now, server, ob.pid)
+    for r in old:
+        if r.tmux in used or r.tmux in new_rows:
+            continue
+        if r.tmux in tmux_sessions:
+            new_rows[r.tmux] = r
+            if r.state == "active" and r.tmux not in keep_silently:
+                res.warnings.append(f"{r.tmux}：沒有 {r.agent}，沿用上次的對話 {r.session_id[:8]}")
+        elif r.state == "retired":
+            new_rows[r.tmux] = r
+        else:
+            new_rows[r.tmux] = r
+            res.pending.append(r.tmux)
+    res.pending.sort()
+    res.rows = sorted(new_rows.values(), key=lambda r: r.tmux)
+    return res
+
+
+def id_problem(session_id):
+    """Why a registered conversation id cannot be resumed (None = it is a UUID). Checked before any lookup: an empty or
+    malformed id would make claude/codex start a new conversation."""
+    if not session_id:
+        return "沒有對話 id，無法接回（不改開新對話）"
+    if not is_uuid(session_id):
+        return f"對話 id {session_id!r} 不是 UUID，無法接回（不改開新對話）"
+    return None
+
+
+@contextmanager
+def lock(state_dir):
+    state_dir = Path(state_dir)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    with open(state_dir / "registry.lock", "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def load_rows(path):
+    path = Path(path)
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text())
+        version = data["version"]
+        if version not in (1, 2):
+            raise RegistryError(f"{path} 是未知的版本 {version!r}（只認得 1、2）。不會覆蓋它；請升級 sampan 或從 state/history/ 挑一份還原。")
+        rows = [Row(**({"agent": "claude", "pid": None} | s)) for s in data["sessions"]]
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        raise RegistryError(f"{path} 無法解析（{e}）。不會覆蓋它；請從 state/history/ 挑一份還原。") from e
+    for r in rows:
+        if r.state not in STATES:
+            raise RegistryError(f"{path}：{r.tmux} 的 state 是 {r.state!r}，只能是 {STATES}")
+        if r.agent not in AGENTS:
+            raise RegistryError(f"{path}：{r.tmux} 的 agent 是 {r.agent!r}，只能是 {AGENTS}")
+        if not isinstance(r.session_id, str):
+            raise RegistryError(f"{path}：{r.tmux} 的 session_id 是 {r.session_id!r}，必須是字串")
+        if r.pid is not None and (type(r.pid) is not int):
+            raise RegistryError(f"{path}：{r.tmux} 的 pid 是 {r.pid!r}，必須是整數或 null")
+    return rows
+
+
+def write_rows(path, rows, now, history_dir, keep=20):
+    path = Path(path)
+    history_dir = Path(history_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        history_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, history_dir / f"registry-{now_stamp()}.json")
+        # By mtime, not by name: older snapshots are named in local time (Taipei), newer ones in UTC, so names
+        # from before and after an upgrade do not sort in time order.
+        snaps = sorted(history_dir.glob("registry-*.json"), key=lambda p: (p.stat().st_mtime_ns, p.name))
+        for old in snaps[:-keep]:
+            old.unlink()
+    body = {"version": VERSION, "saved_at": now, "sessions": [asdict(r) for r in rows]}
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(body, ensure_ascii=False, indent=2) + "\n")
+    os.replace(tmp, path)
+
+
+def set_state(rows, name, state):
+    if state not in STATES:
+        raise ValueError(f"state 只能是 {STATES}，不是 {state!r}")
+    for r in rows:
+        if r.tmux == name:
+            r.state = state
+            return True
+    return False

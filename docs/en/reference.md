@@ -1,0 +1,51 @@
+# Configuration and registry formats
+
+English · [繁體中文](../reference.md) · [Back to README](../../README.en.md)
+
+For migration or conversion scripts. A version sampan does not understand is never overwritten; it is reported.
+
+## `~/.config/sampan/config.toml` (`version = 1`)
+
+| Field | Meaning |
+|---|---|
+| `version` | integer, must be `1` |
+| `[restore] recent_days` | non-negative integer, default 7; `restore` pre-checks only sessions active within this many days |
+| `[ui] start_dir` | path where the directory chooser of `n` (start new work) starts; default `~/Projects` if it exists, else `~` |
+| `[codex] enabled` | boolean, default `true` |
+| `[codex] home` | Codex folder; default `$CODEX_HOME`, else `~/.codex` |
+| `[marketplaces] <name> = "owner/repo"` | plugin source: GitHub `owner/repo` or a git URL (`https://…`, `ssh://…`, `git@host:path`, e.g. a self-hosted Gitea). Local directories are not supported |
+| `[profiles.<name>] config_dir` | required path (`~/` allowed) |
+| `[profiles.<name>] default` | exactly one profile is `true` (it starts without `CLAUDE_CONFIG_DIR`) |
+| `[profiles.<name>] label` | display text, e.g. an account e-mail |
+| `[profiles.<name>] plugins` | list of `plugin@marketplace`; the marketplace must be in `[marketplaces]` |
+
+Overrides: `SAMPAN_CONFIG` (config file, default `~/.config/sampan/config.toml`), `SAMPAN_STATE_DIR` (state folder, default `~/.local/state/sampan/`).
+
+## `registry.json` (`version = 2`, in the state folder)
+
+```json
+{
+  "version": 2,
+  "saved_at": "2026-01-01T09:00:00+00:00",
+  "sessions": [
+    {"tmux": "work", "agent": "claude", "profile": "alice", "session_id": "…",
+     "cwd": "/Users/u/proj", "state": "active", "seen_at": "2026-01-01T09:00:00+00:00",
+     "server": "…", "pid": 12345}
+  ]
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `tmux` | tmux session name (unique) |
+| `agent` | `"claude"` or `"codex"` |
+| `profile` | profile name from config.toml; `""` for codex |
+| `session_id` | Claude conversation id, or Codex thread id |
+| `cwd` | working directory (absolute path) |
+| `state` | `"active"` or `"retired"` |
+| `seen_at` | when it was last seen |
+| `server` | identity of the tmux server at the last sighting (pid and start time), used to tell "the user closed it" from "waiting to be resumed after a reboot" |
+| `pid` | the agent process last seen, an integer or `null` |
+
+Version 1 files are still read (a missing `agent` counts as `claude`, a missing `pid` as `null`) and become version 2 on the
+next write. The previous file is copied to `history/registry-<time>.json` before each rewrite (newest 20 kept).

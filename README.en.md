@@ -1,0 +1,70 @@
+# sampan
+
+English · [繁體中文](README.md)
+
+Manages tmux sessions with one agent per session (Claude Code or Codex).
+
+sampan remembers which conversation each session is running. After an agent exits, tmux closes or the machine reboots,
+you can put every session back into its original conversation, one by one. It also keeps the plugins of several Claude
+profiles in sync.
+
+## Requirements
+
+- macOS (Linux is experimental, see [Platforms and limits](docs/en/platforms.md))
+- tmux
+- Python 3.11+ and [uv](https://docs.astral.sh/uv/)
+- Claude Code (`claude`); Codex CLI (`codex`) is optional
+
+No third-party Python dependencies. The package and the command are both `sampan`.
+
+## Install
+
+```
+curl -fsSL https://raw.githubusercontent.com/royalroylo/sampan/main/install.sh | sh
+```
+
+Or by hand, two lines:
+
+```
+uv tool install git+https://github.com/royalroylo/sampan@v0.6.0
+sampan init
+```
+
+For what the one-liner does, reading it first, Linux, a new machine, PATH and what `sampan init` does, see the [install guide](docs/en/install.md).
+
+## Usage
+
+Type `sampan`. The session list is on the left, an info card for the row under the cursor on the right.
+
+| Key | Action |
+|---|---|
+| Enter | Go into that session (a stopped one is resumed first) |
+| `n` | Start new work |
+| `s` | Put it away (the agent exits normally, the conversation is kept) |
+| `R` | Resume several at once |
+| `m` | Change working directory |
+| `U` | Update sampan |
+| `q` | Quit |
+
+- Starting the day: `sampan`, then Enter on the one you want.
+- Putting something away half-way: `s`; to continue, press Enter and the same conversation is resumed.
+- After a reboot: `sampan`, press `R` and confirm what to resume. sampan never resumes on its own.
+- Scripts or a very narrow terminal: `sampan ui --plain`, or use the individual commands.
+
+The full key reference, the commands and the rules for restore are in the [usage guide](docs/en/usage.md).
+
+## Documentation
+
+- [Install](docs/en/install.md)
+- [Usage](docs/en/usage.md)
+- [SSH and tmux setup](docs/en/setup.md)
+- [Configuration and registry formats](docs/en/reference.md)
+- [Platforms and limits](docs/en/platforms.md)
+- [SECURITY.md](SECURITY.md)
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [ARCHITECTURE.md](ARCHITECTURE.md)
+- [CHANGELOG.md](CHANGELOG.md)
+
+## License
+
+MIT, see [LICENSE](LICENSE).
