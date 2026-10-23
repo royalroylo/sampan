@@ -5,6 +5,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- A Claude or Codex started as the pane's own command (`tmux new-session -s x claude`, no shell in between) is now
+  seen: before, the session showed "沒有 agent", `save` warned `session 檔指向 … 不在那個 pane 裡` and never
+  recorded its conversation, and `stop` could not stop it.
+
+### Changed
+- AGENTS.md: agents open sessions with `sampan new` rather than raw `tmux new-session`.
+
 ## [0.6.3] - 2026-10-23
 
 ### Security

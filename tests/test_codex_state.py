@@ -71,6 +71,14 @@ class ProcTest(unittest.TestCase):
         procs = list_procs(ps_runner([ps_line(100, 1, "-zsh", "-zsh"), ps_line(300, 100, "vim", "vim x")]))
         self.assertIsNone(codex_pid_in_pane(procs, 100))
 
+    def test_codex_as_pane_root(self):
+        # `tmux new-session -s x codex`: the native binary is the pane's own process
+        procs = list_procs(ps_runner([ps_line(100, 1, "codex", "codex")]))
+        self.assertEqual(codex_pid_in_pane(procs, 100), 100)
+        # node wrapper as the pane root, native binary below it: the deepest still wins
+        procs = list_procs(ps_runner([ps_line(100, 1, "node", "node /opt/bin/codex"), ps_line(101, 100, "codex", "codex")]))
+        self.assertEqual(codex_pid_in_pane(procs, 100), 101)
+
     def test_codex_pid_ignores_zombie_and_lookalikes(self):
         procs = list_procs(ps_runner([
             ps_line(100, 1, "-zsh", "-zsh"),

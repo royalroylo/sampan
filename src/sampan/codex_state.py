@@ -43,12 +43,14 @@ def _is_codex(p):
 
 
 def codex_pid_in_pane(procs, pane_pid):
-    """Deepest codex process under the pane (the native binary holds the rollout open, not the node wrapper)."""
+    """Deepest codex process in the pane, the pane's own process included (the native binary holds the rollout open, not the node wrapper)."""
     children = {}
     for p in procs.values():
         children.setdefault(p.ppid, []).append(p)
     best, best_depth = None, -1
-    queue = deque((p, 0) for p in children.get(pane_pid, []))
+    root = procs.get(pane_pid)
+    # the pane's own process counts too (a pane started as `tmux new-session … codex` has no shell)
+    queue = deque([(root, 0)] if root is not None else ((p, 1) for p in children.get(pane_pid, [])))
     seen = set()
     while queue:
         p, depth = queue.popleft()

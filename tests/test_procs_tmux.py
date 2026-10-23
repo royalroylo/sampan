@@ -44,6 +44,24 @@ class ProcsTest(unittest.TestCase):
         self.assertFalse(is_descendant(procs, 200, 300))
         self.assertFalse(is_descendant(procs, 999, 100))
 
+    def test_claude_as_pane_root(self):
+        # `tmux new-session -s x claude` (no shell): the pane's own process is claude
+        procs = list_procs(FakeRunner().on(["ps", "-A"], cp(out="\n".join([
+            ps_line(1, 0, "/sbin/launchd", "/sbin/launchd"),
+            ps_line(9052, 1, "tmux", "tmux new-session -d"),
+            ps_line(88823, 9052, "claude", "claude"),
+            ps_line(88900, 88823, "node", "node mcp-server.js"),
+        ]) + "\n")))
+        self.assertEqual(descendant_claude(procs, 88823).pid, 88823)
+        self.assertTrue(is_descendant(procs, 88823, 88823))
+        self.assertTrue(is_descendant(procs, 88900, 88823))
+        self.assertFalse(is_descendant(procs, 9052, 88823))
+        self.assertFalse(is_descendant(procs, 999, 999))  # an unknown pid is never inside a pane
+
+    def test_zombie_claude_as_pane_root_is_not_an_agent(self):
+        procs = list_procs(FakeRunner().on(["ps", "-A"], cp(out=ps_line(100, 1, "claude", "claude", stat="Z") + "\n")))
+        self.assertIsNone(descendant_claude(procs, 100))
+
     def test_resume_id(self):
         self.assertEqual(resume_id(f"claude --resume {UUID}"), UUID)
         self.assertEqual(resume_id(f"claude --session-id={UUID} -c"), UUID)

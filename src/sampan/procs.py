@@ -46,6 +46,10 @@ def claude_pids(procs):
 
 
 def is_descendant(procs, pid, root_pid):
+    """Whether pid runs inside the tree rooted at root_pid, root_pid itself included (a pane started as
+    `tmux new-session … claude` has claude as its own process, with no shell in between)."""
+    if pid == root_pid:
+        return pid in procs
     seen = set()
     cur = procs.get(pid)
     while cur is not None and cur.pid not in seen:
@@ -60,7 +64,8 @@ def descendant_claude(procs, root_pid):
     children = {}
     for p in procs.values():
         children.setdefault(p.ppid, []).append(p)
-    queue = deque(children.get(root_pid, []))
+    root = procs.get(root_pid)
+    queue = deque([root] if root is not None else children.get(root_pid, []))  # the pane's own process counts
     while queue:
         p = queue.popleft()
         if p.comm == "claude" and not p.zombie:
