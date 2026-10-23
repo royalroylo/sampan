@@ -400,13 +400,43 @@ class UiUpdateTest(unittest.TestCase):
         self.assertEqual(asked, ["要重新安裝目前版本嗎？(y/N): "])
         self.assertEqual(self.msgs[-1], "已取消")
 
-    def test_U_latest_unknown_says_so_then_offers_reinstall(self):
+    def test_U_latest_unknown_pins_the_clean_current_version(self):
         from sampan.ui.actions import _update
-        up = FakeUpdater(latest=None)
-        self.assertTrue(_update(self.msgs.append, lambda _p: "y", up,
+        up = FakeUpdater(latest=None, current="0.6.1")
+        asked = []
+        self.assertTrue(_update(self.msgs.append, lambda p: asked.append(p) or "y", up,
                                 lambda out, *, current, **kw: self.update_kws.append(kw) or True))
         self.assertIn("查不到最新版（離線或連不到 GitHub）", self.msgs)
-        self.assertEqual(self.update_kws, [{"latest": None, "force": True}])
+        self.assertEqual(asked, ["要重新安裝目前版本（v0.6.1）嗎？(y/N): "])
+        self.assertEqual(self.update_kws, [{"latest": "0.6.1", "force": True}])
+
+    def test_U_latest_unknown_and_dev_build_offers_nothing(self):
+        from sampan.ui.actions import _update
+        for cur in ("0.6.2.dev3+gabc", "unknown", "0.6.1+dirty"):
+            self.msgs.clear()
+            up = FakeUpdater(latest=None, current=cur)
+            self.assertFalse(_update(self.msgs.append, lambda p: 1 / 0, up, lambda *a, **k: 1 / 0), cur)
+            self.assertEqual(self.msgs, ["▶ 檢查最新版…", "查不到最新版（離線或連不到 GitHub）"])
+
+    def test_U_dev_build_ahead_offers_switch_not_reinstall(self):
+        from sampan.ui.actions import _update
+        up = FakeUpdater(latest="0.6.1", current="0.6.2.dev3+gabc")
+        asked = []
+        self.assertTrue(_update(self.msgs.append, lambda p: asked.append(p) or "y", up,
+                                lambda out, *, current, **kw: self.update_kws.append(kw) or True))
+        self.assertEqual(asked, ["目前版本比最新版新；要改裝 v0.6.1 嗎？(y/N): "])
+        self.assertFalse(any("目前已是最新版" in m for m in self.msgs))
+        self.assertEqual(self.update_kws, [{"latest": "0.6.1", "force": True}])
+
+    def test_U_newer_passes_latest(self):
+        self.ui([("update", [])], ["y"], updater=FakeUpdater())
+        self.assertEqual(self.update_kws, [{"latest": "0.4.6"}])
+
+    def test_clean_release(self):
+        self.assertEqual(update.clean_release("0.6.1"), "0.6.1")
+        self.assertEqual(update.clean_release("v0.6.1"), "0.6.1")
+        for v in ("0.6.1.dev2+gabc", "0.6.1+dirty", "unknown", "0.0.0+unknown", "", None, "0.6"):
+            self.assertIsNone(update.clean_release(v), v)
 
     def test_plain_prints_hint_once_and_accepts_u(self):
         self.ui([], ["x", "U", "y"], updater=FakeUpdater(), picker=False, argv=["ui", "--plain"])
@@ -468,7 +498,7 @@ class ScreenHintTest(unittest.TestCase):
             return rc
         rc = curses_ui(self.cfg, FakeRunner(), lambda _l: None, wrapper=wrapper, rows_fn=lambda c, r: [row("a")],
                        exec_fn=lambda f, a: events.append(("exec", f, a)), updater=FakeUpdater(), argv=[],
-                       update_fn=lambda out, *, current: True)
+                       update_fn=lambda out, *, current, **kw: True)
         self.assertEqual(rc, 0)
         self.assertEqual(events, ["curses closed", ("exec", "sampan", ["sampan"])])
 

@@ -84,6 +84,15 @@ def base_version(v):
     return tuple(int(x) for x in m.groups()) if m else None
 
 
+_CLEAN = re.compile(r"v?(\d+\.\d+\.\d+)$")
+
+
+def clean_release(v):
+    """"0.6.1" for a clean release version (no dev or local part), else None: the tag to pin a reinstall to when the latest is unknown."""
+    m = _CLEAN.match((v or "").strip())
+    return m.group(1) if m else None
+
+
 def latest_tag(run=_run):
     """The highest vX.Y.Z in the repo (without the v, e.g. "0.4.6"); None on any failure."""
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
@@ -213,10 +222,11 @@ def installed_version(run=_run):
 
 def do_update(out, *, current, stream=_stream, run=_run, which=shutil.which, latest=None, force=False,
               reopen=True):
-    """Update sampan; returns whether the version really changed (the caller restarts sampan on success). Output goes line by line to out.
+    """Update sampan; returns whether it succeeded (the caller restarts sampan on success). Output goes line by line to out.
+    Without force, success = the version really changed.
     latest: the version to pin (e.g. "0.6.1"); if not given, look up the highest tag in the repo now, and reinstall unpinned if that fails.
-    force=True: skip uv tool upgrade and reinstall right away; success = the reinstall exits 0 and the installed version is readable
-    (it may equal current).
+    force=True: skip uv tool upgrade and reinstall right away; returns True when the reinstall exits 0 and the installed version is
+    readable, even when that version equals current.
     reopen=False (sampan update): the success line does not say sampan reopens."""
     if which("uv") is None:
         out(f"❌ 找不到 uv；請在終端機手動更新：{' '.join(UPGRADE)}（不行再 {' '.join(reinstall_cmd(latest))}）")

@@ -135,13 +135,36 @@ def _update_cmd(yes, force, *, run=None, stream=None, which=None, ask=input, isa
     latest, _at = update.check(state_dir or paths.state_dir(), run=run, force=True)
     out(f"目前 {current}，最新 {latest or '查不到'}")
     is_newer = update.newer(current, latest)
-    if not is_newer and not force:
+    pin = latest
+    if update.base_version(current) is None:  # "unknown" (or unparseable): never offer an upgrade by comparison
+        if not force:
+            out("讀不到目前版本；要重新安裝請加 --force")
+            return 1
         if latest is None:
+            out("查不到最新版（離線或連不到 GitHub）")
+            return 1
+        question = f"要重新安裝 v{latest}？(y/N): "
+    elif is_newer:
+        question = f"更新到 v{latest}？(y/N): "
+    elif latest is None:
+        if not force:
             out("查不到最新版")
             return 1
-        out("已是最新版")
-        return 0
-    question = f"更新到 v{latest}？(y/N): " if is_newer else f"要重新安裝 v{latest or current}？(y/N): "
+        pin = update.clean_release(current)
+        if pin is None:  # a dev build and no known release: nothing sensible to reinstall
+            out("查不到最新版（離線或連不到 GitHub）")
+            return 1
+        question = f"要重新安裝 v{pin}？(y/N): "
+    elif update.newer(latest, current):  # a dev build ahead of the newest release
+        if not force:
+            out(f"目前版本比最新版新（v{latest}）")
+            return 0
+        question = f"目前版本比最新版新；要改裝 v{latest} 嗎？(y/N): "
+    else:
+        if not force:
+            out("已是最新版")
+            return 0
+        question = f"要重新安裝 v{latest}？(y/N): "
     if not yes:
         if not tty:
             out("要更新請在終端機執行，或加 --yes")
@@ -153,7 +176,7 @@ def _update_cmd(yes, force, *, run=None, stream=None, which=None, ask=input, isa
         if (answer or "").strip().lower() != "y":
             out("已取消")
             return 0
-    ok = update.do_update(out, current=current, stream=stream, run=run, which=which, latest=latest,
+    ok = update.do_update(out, current=current, stream=stream, run=run, which=which, latest=pin,
                           force=not is_newer, reopen=False)
     return 0 if ok else 1
 

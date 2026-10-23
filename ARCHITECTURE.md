@@ -40,7 +40,7 @@ callable (`runner.py`). That is what makes the suite fast and safe: tests pass a
 - The registry never deletes a row by itself. A session whose tmux is gone becomes "stopped", not removed. If tmux itself
   cannot be read, the state is "unknown", never "stopped".
 - Every write is atomic, and the previous registry is copied to `history/` first.
-- No telemetry; the only network use is the version-tag check and what the user confirms (`U`).
+- No telemetry; the only network use is the version-tag check and what the user confirms (`U`, `sampan update`).
 
 ## Data files
 

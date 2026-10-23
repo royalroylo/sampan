@@ -257,12 +257,23 @@ def _update(out, ask, updater, update_fn):
         if (_ask(ask, f"更新到 v{latest}？(y/N): ") or "").lower() != "y":
             out("已取消")
             return False
-        return update_fn(out, current=updater.current)
-    out("查不到最新版（離線或連不到 GitHub）" if updater.latest is None else f"目前已是最新版（v{updater.latest}）")
-    if (_ask(ask, "要重新安裝目前版本嗎？(y/N): ") or "").lower() != "y":
+        return update_fn(out, current=updater.current, latest=latest)
+    pin = updater.latest
+    if pin is None:
+        out("查不到最新版（離線或連不到 GitHub）")
+        pin = update_mod.clean_release(updater.current)
+        if pin is None:  # a dev / unknown build with no known release: nothing sensible to reinstall
+            return False
+        question = f"要重新安裝目前版本（v{pin}）嗎？(y/N): "
+    elif update_mod.newer(pin, updater.current):
+        question = f"目前版本比最新版新；要改裝 v{pin} 嗎？(y/N): "
+    else:
+        out(f"目前已是最新版（v{pin}）")
+        question = "要重新安裝目前版本嗎？(y/N): "
+    if (_ask(ask, question) or "").lower() != "y":
         out("已取消")
         return False
-    return update_fn(out, current=updater.current, latest=updater.latest, force=True)
+    return update_fn(out, current=updater.current, latest=pin, force=True)
 
 
 def _first_opened(out, opened, verb):

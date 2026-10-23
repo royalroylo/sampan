@@ -291,10 +291,41 @@ class UpdateCmdTest(unittest.TestCase):
         self.assertIn("✔ 已重新安裝 0.6.0", self.msgs)
         self.assertFalse(any("重新開啟" in m for m in self.msgs), self.msgs)
 
-    def test_force_with_unknown_latest_names_current(self):
+    def test_force_with_unknown_latest_pins_clean_current(self):
         self.call(latest=None, force=True, answer="n")
         self.assertEqual(self.msgs[0], "目前 0.6.0，最新 查不到")
         self.assertEqual(self.asked, ["要重新安裝 v0.6.0？(y/N): "])
+        self.msgs, self.streamed, self.asked = [], [], []
+        self.assertEqual(self.call(latest=None, force=True, yes=True, after="0.6.0"), 0)
+        self.assertEqual(self.streamed, [["uv", "tool", "install", "--reinstall", "git+https://github.com/royalroylo/sampan@v0.6.0"]])
+        self.assertEqual(len(self.run.called(["git", "ls-remote"])), 1)  # no second lookup inside do_update
+
+    def test_force_with_unknown_latest_and_dev_build_refuses(self):
+        self.assertEqual(self.call(latest=None, current="0.6.1.dev2+gabc", force=True, yes=True), 1)
+        self.assertEqual(self.msgs[-1], "查不到最新版（離線或連不到 GitHub）")
+        self.assertEqual((self.asked, self.streamed), ([], []))
+
+    def test_dev_build_ahead_of_latest(self):
+        self.assertEqual(self.call(latest="0.6.1", current="0.6.2.dev1+gabc"), 0)
+        self.assertEqual(self.msgs[-1], "目前版本比最新版新（v0.6.1）")
+        self.assertEqual((self.asked, self.streamed), ([], []))
+        self.msgs = []
+        with mock.patch("sampan.update.do_update", return_value=True) as du:
+            self.assertEqual(self.call(latest="0.6.1", current="0.6.2.dev1+gabc", force=True), 0)
+        self.assertEqual(self.asked, ["目前版本比最新版新；要改裝 v0.6.1 嗎？(y/N): "])
+        self.assertEqual((du.call_args.kwargs["latest"], du.call_args.kwargs["force"]), ("0.6.1", True))
+
+    def test_unknown_current_version(self):
+        self.assertEqual(self.call(current="unknown"), 1)
+        self.assertEqual(self.msgs[-1], "讀不到目前版本；要重新安裝請加 --force")
+        self.assertEqual((self.asked, self.streamed), ([], []))
+        self.msgs = []
+        with mock.patch("sampan.update.do_update", return_value=True) as du:
+            self.assertEqual(self.call(current="unknown", force=True, yes=True), 0)
+        self.assertEqual((du.call_args.kwargs["latest"], du.call_args.kwargs["force"]), ("0.6.1", True))
+        self.msgs = []
+        self.assertEqual(self.call(current="unknown", latest=None, force=True, yes=True), 1)
+        self.assertEqual(self.msgs[-1], "查不到最新版（離線或連不到 GitHub）")
 
     def test_not_a_tty_without_yes_refuses_when_it_would_ask(self):
         for kw in ({}, {"latest": "0.6.0", "force": True}):

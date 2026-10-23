@@ -26,7 +26,7 @@ which conversation each session runs, so sessions can be resumed after an agent 
 - Safe (do not change sessions or config): `sampan --version`, `sampan status`, `sampan doctor`, `sampan plugins status`. They need a config, so the user must have run `sampan init` first.
 - Never send keys to the user's tmux sessions, and never edit `~/.local/state/sampan/registry.json` by hand.
   Use the sampan commands instead (see docs/en/usage.md).
-- `sampan update` is not read-only: it reinstalls sampan. Only run it if the user asks.
+- `sampan update` is not read-only: it reinstalls sampan. Only run it if the user asks, and do not pass `--yes` to `sampan update` on the user's behalf.
 
 ## Working on the code
 
