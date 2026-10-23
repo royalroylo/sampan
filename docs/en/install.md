@@ -21,7 +21,7 @@ What it does (it asks before installing anything; `--yes` answers yes to everyth
 - If `~/.local/bin` is not on your PATH it prints the exact line to add for your shell (zsh, bash or fish); it never edits rc files.
 - Finally it runs `sampan init` (interactive; answers are read from `/dev/tty`, because under `curl | sh` stdin is the pipe. With no terminal it skips init and tells you to run it) and prints `sampan --version`.
 
-Options go after `sh -s --`, for example `curl ... | sh -s -- --yes --no-init`: `--yes`, `--no-init`, `--version vX.Y.Z`, `--help`.
+Options go after `sh -s --`, for example `curl ... | sh -s -- --yes --no-init`: `--yes` (also runs `sampan init --yes`, so init takes its defaults; if init fails the installer only says so and carries on), `--no-init`, `--version vX.Y.Z`, `--help`.
 
 **Read it first**: if you would rather not pipe a script from the internet into a shell, download it, read it, then run it:
 

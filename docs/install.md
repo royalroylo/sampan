@@ -21,7 +21,7 @@ curl -fsSL https://raw.githubusercontent.com/royalroylo/sampan/main/install.sh |
 - `~/.local/bin` 不在 PATH：印出該加到你的 shell（zsh、bash、fish）的那一行，不會自己改設定檔。
 - 最後執行 `sampan init`（互動式，答案從終端機讀；`curl | sh` 的 stdin 是管線，所以改讀 `/dev/tty`；沒有終端機時略過並提示你自己跑），並印出 `sampan --version`。
 
-選項（接在 `sh -s --` 後面，例如 `curl ... | sh -s -- --yes --no-init`）：`--yes`、`--no-init`、`--version vX.Y.Z`、`--help`。
+選項（接在 `sh -s --` 後面，例如 `curl ... | sh -s -- --yes --no-init`）：`--yes`（也會讓 `sampan init` 以 `--yes` 執行，所有問題用預設值；init 失敗時只提示，不中斷安裝）、`--no-init`、`--version vX.Y.Z`、`--help`。
 
 **看過再跑**：不想直接把網路上的腳本接給 shell，可以先下載、讀完，再執行：
 

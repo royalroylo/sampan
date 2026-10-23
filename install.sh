@@ -3,7 +3,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/royalroylo/sampan/main/install.sh | sh
 #   curl -fsSL .../install.sh | sh -s -- --yes --version v0.6.0
 # Read it first if you like: download it, open it, then run `sh install.sh`.
-# Options: --yes (assume yes to every question)  --no-init (do not run `sampan init`)  --version vX.Y.Z  --help
+# Options: --yes (assume yes to every question, and run `sampan init --yes` so init takes its defaults)  --no-init (do not run `sampan init`)  --version vX.Y.Z  --help
 # Testing overrides (env): SAMPAN_INSTALL_SPEC (exact spec for `uv tool install`, e.g. a local path),
 #   SAMPAN_INSTALL_TTY (file to read answers from instead of /dev/tty).
 # Everything lives in main(), called on the last line, so a truncated download runs nothing.
@@ -24,7 +24,7 @@ Usage: install.sh [--yes] [--no-init] [--version vX.Y.Z]
 Installs sampan (package sampan) with uv, after offering to install what is missing
 (uv, tmux; on Linux also ps, lsof, git). Then runs `sampan init` if Claude Code is installed.
 
-  --yes             assume yes to every question
+  --yes             assume yes to every question; `sampan init` also takes its defaults (`sampan init --yes`)
   --no-init         do not run `sampan init`
   --version vX.Y.Z  install this tag (default: the latest v* tag, or v0.6.0 if it cannot be found)
 USAGE
@@ -243,9 +243,21 @@ main() {
 
     if [ -z "$skip_init" ]; then
         say ""
-        say "Running 'sampan init' (it asks a few questions)..."
+        init_args="init"
+        if [ "$ASSUME_YES" = 1 ]; then
+            init_args="init --yes"
+            say "Running 'sampan init --yes' (every question takes its default)..."
+        else
+            say "Running 'sampan init' (it asks a few questions)..."
+        fi
         # The original PATH plus the absolute binary: init's own PATH hint then fires when BIN_DIR is not on the user's PATH.
-        PATH="$ORIG_PATH" "$BIN_DIR/sampan" init <"$TTY"
+        # $init_args is unquoted on purpose (two words at most). A failing init must not abort the installer under set -e.
+        init_rc=0
+        # shellcheck disable=SC2086
+        PATH="$ORIG_PATH" "$BIN_DIR/sampan" $init_args <"$TTY" || init_rc=$?
+        if [ "$init_rc" != 0 ]; then
+            say "sampan init did not finish (exit $init_rc). Run 'sampan init' yourself in a terminal."
+        fi
     else
         say ""
         say "Skipped 'sampan init': $skip_init. Run 'sampan init' yourself when ready."

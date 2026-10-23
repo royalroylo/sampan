@@ -29,6 +29,7 @@ expect "uv installed in ~/.local/bin" test -x "$HOME/.local/bin/uv"
 expect "sampan installed" test -x "$HOME/.local/bin/sampan"
 expect "init ran and wrote the config" test -s ~/.config/sampan/config.toml
 expect "init output seen" has "sampan init" "$out"
+expect "--yes was passed through to init" has "→ 預設（--yes）" "$out"
 expect "installer's own PATH hint printed (~/.local/bin was not on PATH)" has "$HOME/.local/bin is not on your PATH. Add it" "$out"
 expect "sampan init's own PATH hint printed too" has "不在 PATH" "$out"
 expect "sampan --version printed" has "sampan" "$(tail -1 <<<"$out")"
@@ -38,6 +39,7 @@ step "B: run it again (idempotent: upgrades in place, init re-run changes nothin
 cp ~/.config/sampan/config.toml /tmp/config.before
 out=$(sh "$SRC/install.sh" --yes --version v0.6.0 2>&1); rc=$?; echo "$out" | tail -8
 expect "exit 0" test "$rc" = 0
+expect "--yes was passed through to init" has "→ 預設（--yes）" "$out"
 expect "config unchanged" cmp -s /tmp/config.before ~/.config/sampan/config.toml
 expect "nothing to install the second time" bash -c '! grep -q "^Missing:" <<<"$0"' "$out"
 
