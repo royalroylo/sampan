@@ -1,5 +1,5 @@
 # Linux smoke environment for sampan (see scripts/linux-smoke/run.sh). Build context = `git archive` of the repo.
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
  && apt-get install -y --no-install-recommends tmux git curl ca-certificates locales lsof procps util-linux \
