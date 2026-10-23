@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sampan import update
-from sampan.update import Checker, do_update, latest_tag, newer
+from sampan.update import Checker, do_update, latest_tag, newer, reinstall_cmd
 from tests.fakes import FakeRunner, cp
 from tests.helpers import status_row
 
@@ -104,6 +104,16 @@ class CacheTest(unittest.TestCase):
         update.write_cache(self.dir, "0.1.0", NOW + timedelta(days=1))
         self.assertEqual(self.check(NOW)[0], "0.4.6")
 
+    def test_check_force_ignores_fresh_cache(self):
+        update.write_cache(self.dir, "0.6.0", NOW - timedelta(minutes=5))
+        r = FakeRunner().on(["git", "ls-remote"], tags("v0.6.0", "v0.6.1"))
+        self.assertEqual(update.check(self.dir, run=r, now=lambda: NOW)[0], "0.6.0")  # fresh cache, no network
+        self.assertEqual(r.calls, [])
+        latest, at = update.check(self.dir, run=r, now=lambda: NOW, force=True)
+        self.assertEqual((latest, at), ("0.6.1", NOW))
+        self.assertEqual(len(r.calls), 1)
+        self.assertEqual(update.read_cache(self.dir), ("0.6.1", NOW))
+
     def test_read_cache_ignores_age(self):
         update.write_cache(self.dir, "0.4.6", NOW - timedelta(days=30))
         self.assertEqual(update.read_cache(self.dir), ("0.4.6", NOW - timedelta(days=30)))
@@ -153,6 +163,15 @@ class CheckerTest(unittest.TestCase):
         c.start()
         self.assertIsNone(c.hint())
         self.assertFalse(c._busy)
+
+    def test_refresh_force_passes_through(self):
+        update.write_cache(self.dir, "0.4.5", NOW - timedelta(minutes=1))
+        c = self.checker()
+        c.refresh()
+        self.assertEqual((c.latest, self.r.calls), ("0.4.5", []))
+        c.refresh(force=True)
+        self.assertEqual(c.latest, "0.4.6")
+        self.assertEqual(len(self.r.calls), 1)
 
     def test_load_cache_only(self):
         update.write_cache(self.dir, "0.4.6", NOW - timedelta(days=2))
@@ -216,6 +235,29 @@ class DoUpdateTest(unittest.TestCase):
         self.assertIn("  error: y", self.msgs)
         self.assertTrue(self.msgs[-1].startswith("❌"))
 
+    def test_do_update_force_reinstalls_same_version(self):
+        ok = do_update(self.msgs.append, current="0.6.1", stream=self.stream([(0, ["Installed sampan"])]),
+                       run=self.versions("0.6.1"), which=lambda n: "/x/uv", latest="0.6.1", force=True)
+        self.assertTrue(ok)
+        self.assertEqual(self.streamed, [["uv", "tool", "install", "--reinstall", f"git+{update.REPO}@v0.6.1"]])
+        self.assertEqual(self.msgs[-1], "✔ 已重新安裝 0.6.1，重新開啟 sampan…")
+
+    def test_force_looks_up_the_tag_when_not_given(self):
+        run = self.versions("0.6.1").on(["git", "ls-remote"], tags("v0.6.1"))
+        self.assertTrue(do_update(self.msgs.append, current="0.6.1", stream=self.stream([(0, [])]), run=run,
+                                  which=lambda n: "/x/uv", force=True))
+        self.assertEqual(self.streamed, [reinstall_cmd("0.6.1")])
+
+    def test_force_failure(self):
+        ok = do_update(self.msgs.append, current="0.6.1", stream=self.stream([(1, ["error: x"])]),
+                       run=self.versions("0.6.1"), which=lambda n: "/x/uv", latest="0.6.1", force=True)
+        self.assertFalse(ok)
+        self.assertEqual(len(self.streamed), 1)
+        self.assertTrue(self.msgs[-1].startswith("❌"))
+        run = FakeRunner().on(["sampan", "--version"], cp(rc=1))
+        self.assertFalse(do_update(self.msgs.append, current="0.6.1", stream=self.stream([(0, [])]), run=run,
+                                   which=lambda n: "/x/uv", latest="0.6.1", force=True))
+
     def test_uv_missing(self):
         ok = do_update(self.msgs.append, current="0.4.5", stream=self.stream([]), run=FakeRunner(),
                        which=lambda n: None)
@@ -247,7 +289,10 @@ class ReinstallCmdTest(unittest.TestCase):
 
 class FakeUpdater:
     def __init__(self, latest="0.4.6", current="0.4.5"):
-        self.latest, self.current, self.ticks = latest, current, 0
+        self.latest, self.current, self.ticks, self.refreshed = latest, current, 0, []
+
+    def refresh(self, force=False):
+        self.refreshed.append(force)
 
     def available(self):
         return self.latest if newer(self.current, self.latest) else None
@@ -267,14 +312,15 @@ class UiUpdateTest(unittest.TestCase):
     def setUp(self):
         from tests.helpers import make_env
         self.cfg = make_env(Path(tempfile.mkdtemp()))
-        self.msgs, self.execs, self.updates = [], [], []
+        self.msgs, self.execs, self.updates, self.update_kws = [], [], [], []
 
     def ui(self, actions, answers=(), *, updater=None, result=True, picker=True, argv=("ui",)):
         from sampan.ui import cmd_ui
         actions, answers = iter(actions), iter(answers)
 
-        def update_fn(out, *, current):
+        def update_fn(out, *, current, **kw):
             self.updates.append(current)
+            self.update_kws.append(kw)
             out("  uv 的輸出")
             return result
         return cmd_ui(self.cfg, FakeRunner(), self.msgs.append, lambda _p: next(answers),
@@ -298,10 +344,61 @@ class UiUpdateTest(unittest.TestCase):
         self.ui([("update", []), ("quit", [])], ["n"], updater=FakeUpdater())
         self.assertEqual(self.updates, [])
         self.assertIn("已取消", self.msgs)
-        self.ui([("update", []), ("update", []), ("quit", [])], updater=FakeUpdater(latest="0.4.5"))
         self.ui([("update", []), ("quit", [])], updater=None)
-        self.assertEqual(self.msgs.count("目前已是最新版"), 3)
+        self.assertEqual(self.msgs.count("目前已是最新版"), 1)
         self.assertEqual(self.updates, [])
+
+    def test_U_rechecks_when_cache_says_up_to_date(self):
+        state = Path(tempfile.mkdtemp())
+        update.write_cache(state, "0.6.0", NOW - timedelta(minutes=5))
+        r = FakeRunner().on(["git", "ls-remote"], tags("v0.6.0", "v0.6.1"))
+        checker = Checker("0.6.0", state, run=r, now=lambda: NOW, spawn=lambda f: None)
+        checker.load_cache()
+        asked = []
+        from sampan.ui.actions import _update
+
+        def ask(prompt):
+            asked.append(prompt)
+            return "y"
+
+        def update_fn(out, *, current, **kw):
+            self.updates.append(current)
+            return True
+        self.assertTrue(_update(self.msgs.append, ask, checker, update_fn))
+        self.assertIn("▶ 檢查最新版…", self.msgs)
+        self.assertEqual(asked, ["更新到 v0.6.1？(y/N): "])
+        self.assertEqual(self.updates, ["0.6.0"])
+        self.assertEqual(len(r.calls), 1)
+
+    def test_U_up_to_date_offers_reinstall(self):
+        up = FakeUpdater(latest="0.4.5")
+        rc = self.ui([("update", [])], ["y"], updater=up)
+        self.assertEqual(rc, 0)
+        self.assertEqual(up.refreshed, [True])
+        self.assertIn("▶ 檢查最新版…", self.msgs)
+        self.assertIn("目前已是最新版（v0.4.5）", self.msgs)
+        self.assertEqual(self.updates, ["0.4.5"])
+        self.assertEqual(self.update_kws, [{"latest": "0.4.5", "force": True}])
+        self.assertEqual(self.execs, [("sampan", ["sampan", "ui"])])
+
+    def test_U_up_to_date_reinstall_declined(self):
+        asked = []
+        from sampan.ui.actions import _update
+
+        def ask(prompt):
+            asked.append(prompt)
+            return "n"
+        self.assertFalse(_update(self.msgs.append, ask, FakeUpdater(latest="0.4.5"), lambda *a, **k: 1 / 0))
+        self.assertEqual(asked, ["要重新安裝目前版本嗎？(y/N): "])
+        self.assertEqual(self.msgs[-1], "已取消")
+
+    def test_U_latest_unknown_says_so_then_offers_reinstall(self):
+        from sampan.ui.actions import _update
+        up = FakeUpdater(latest=None)
+        self.assertTrue(_update(self.msgs.append, lambda _p: "y", up,
+                                lambda out, *, current, **kw: self.update_kws.append(kw) or True))
+        self.assertIn("查不到最新版（離線或連不到 GitHub）", self.msgs)
+        self.assertEqual(self.update_kws, [{"latest": None, "force": True}])
 
     def test_plain_prints_hint_once_and_accepts_u(self):
         self.ui([], ["x", "U", "y"], updater=FakeUpdater(), picker=False, argv=["ui", "--plain"])

@@ -8,6 +8,7 @@ unparseable version numbers are not announced.
 Update: first uv tool upgrade sampan and confirm the version changed with a fresh child process sampan --version; if it did not,
 uv tool install --reinstall git+REPO@v<latest> (pinned to the latest tag found; unpinned if none was found). All child processes go through
 injectable run/stream, so tests never touch the network or a real installation.
+U in the ui and sampan update re-check now (force, skipping the cache); with force, do_update reinstalls without trying upgrade first.
 The hourly sampan save does not check.
 """
 import json
@@ -137,10 +138,11 @@ def fresh(at, now):
     return at is not None and timedelta(0) <= now - at < TTL
 
 
-def check(state_dir, *, run=_run, now=_now):
-    """(latest or None, checked_at): use the cache while it is fresh (within 6 hours), otherwise query the network and write the cache back (null is recorded too if nothing was found)."""
+def check(state_dir, *, run=_run, now=_now, force=False):
+    """(latest or None, checked_at): use the cache while it is fresh (within 6 hours), otherwise query the network and write the cache back (null is recorded too if nothing was found).
+    force=True: skip the cache and query now (U in the ui, sampan update)."""
     t = now()
-    cached = read_cache(state_dir)
+    cached = None if force else read_cache(state_dir)
     if cached is not None and fresh(cached[1], t):
         return cached
     latest = latest_tag(run)
@@ -166,8 +168,8 @@ class Checker:
         if cached is not None:
             self.latest, self.checked_at = cached
 
-    def refresh(self):
-        self.latest, self.checked_at = check(self.state_dir, run=self.run, now=self.now)
+    def refresh(self, force=False):
+        self.latest, self.checked_at = check(self.state_dir, run=self.run, now=self.now, force=force)
 
     def _bg(self):
         try:
@@ -209,13 +211,27 @@ def installed_version(run=_run):
     return parts[1] if r.returncode == 0 and len(parts) >= 2 and parts[0] == "sampan" else None
 
 
-def do_update(out, *, current, stream=_stream, run=_run, which=shutil.which, latest=None):
+def do_update(out, *, current, stream=_stream, run=_run, which=shutil.which, latest=None, force=False):
     """Update sampan; returns whether the version really changed (the caller restarts sampan on success). Output goes line by line to out.
-    latest: the version to pin (e.g. "0.6.1"); if not given, look up the highest tag in the repo now, and reinstall unpinned if that fails."""
+    latest: the version to pin (e.g. "0.6.1"); if not given, look up the highest tag in the repo now, and reinstall unpinned if that fails.
+    force=True: skip uv tool upgrade and reinstall right away; success = the reinstall exits 0 and the installed version is readable
+    (it may equal current)."""
     if which("uv") is None:
         out(f"❌ 找不到 uv；請在終端機手動更新：{' '.join(UPGRADE)}（不行再 {' '.join(reinstall_cmd(latest))}）")
         return False
     tag = latest
+    if force:
+        if tag is None:
+            tag = latest_tag(run)
+        cmd = reinstall_cmd(tag)
+        out(f"▶ {' '.join(cmd)}")
+        rc = stream(cmd, lambda line: out(f"  {line}"))
+        after = installed_version(run)
+        if rc == 0 and after:
+            out(f"✔ 已重新安裝 {after}，重新開啟 sampan…")
+            return True
+        out(f"❌ 重新安裝沒有成功（exit {rc}，版本 {after or '讀不到'}）；可以在終端機手動執行：{' '.join(cmd)}")
+        return False
     for step in ("upgrade", "reinstall"):
         if step == "reinstall" and tag is None:
             tag = latest_tag(run)

@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 from sampan import cli
-from tests.fakes import FakeRunner
+from tests.fakes import FakeRunner, cp
 from tests.helpers import make_env
 
 
@@ -214,6 +214,117 @@ class HookCliTest(unittest.TestCase):
                     self.assertRaises(SystemExit) as cm:
                 cli.main(["hook", "session-start"])
             self.assertEqual((cm.exception.code, out.getvalue(), err.getvalue()), (0, "", ""), stdin)
+
+
+SHA = "0123456789abcdef0123456789abcdef01234567"
+
+
+class UpdateCmdTest(unittest.TestCase):
+    """sampan update [--yes] [--force]: always a fresh check; run/stream/which are fakes (no network, no real uv)."""
+
+    def setUp(self):
+        self.state = Path(tempfile.mkdtemp())
+        self.msgs, self.streamed, self.asked = [], [], []
+
+    def call(self, *, latest="0.6.1", current="0.6.0", after=None, yes=False, force=False, tty=True, answer="y",
+             cache=None):
+        from sampan import update
+        if cache is not None:
+            update.write_cache(self.state, cache, update._now())
+        self.run = FakeRunner(strict=True)
+        if latest is None:
+            self.run.on(["git", "ls-remote"], cp(rc=128))
+        else:
+            self.run.on(["git", "ls-remote"], cp(out=f"{SHA}\trefs/tags/v{latest}\n"))
+        self.run.on(["sampan", "--version"], cp(out=f"sampan {after or latest or current}\n"))
+
+        def stream(args, on_line):
+            self.streamed.append(args)
+            return 0
+
+        def ask(prompt):
+            self.asked.append(prompt)
+            return answer
+        with mock.patch("sampan.cli.out", self.msgs.append):
+            return cli._update_cmd(yes, force, run=self.run, stream=stream, which=lambda n: "/x/uv", ask=ask,
+                                   isatty=lambda: tty, current=current, state_dir=self.state)
+
+    def test_newer_with_yes_updates(self):
+        self.assertEqual(self.call(yes=True, cache="0.6.0"), 0)  # fresh cache says 0.6.0: ignored
+        self.assertEqual(self.msgs[0], "目前 0.6.0，最新 0.6.1")
+        self.assertEqual(self.asked, [])
+        self.assertEqual(self.streamed, [["uv", "tool", "upgrade", "sampan"]])
+        self.assertIn("✔ 已更新到 0.6.1，重新開啟 sampan…", self.msgs)
+
+    def test_newer_asks_on_a_terminal(self):
+        self.assertEqual(self.call(answer="y"), 0)
+        self.assertEqual(self.asked, ["更新到 v0.6.1？(y/N): "])
+        self.assertEqual(len(self.streamed), 1)
+        self.msgs, self.streamed, self.asked = [], [], []
+        self.assertEqual(self.call(answer="n"), 0)
+        self.assertEqual(self.streamed, [])
+        self.assertIn("已取消", self.msgs)
+
+    def test_update_failure_is_rc_1(self):
+        self.assertEqual(self.call(yes=True, after="0.6.0"), 1)
+        self.assertTrue(self.msgs[-1].startswith("❌"))
+
+    def test_up_to_date_without_force(self):
+        self.assertEqual(self.call(latest="0.6.0", tty=False), 0)
+        self.assertEqual(self.msgs, ["目前 0.6.0，最新 0.6.0", "已是最新版"])
+        self.assertEqual((self.asked, self.streamed), ([], []))
+
+    def test_force_yes_reinstalls(self):
+        with mock.patch("sampan.update.do_update", return_value=True) as du:
+            self.assertEqual(self.call(latest="0.6.0", force=True, yes=True), 0)
+        self.assertTrue(du.call_args.kwargs["force"])
+        self.assertEqual(du.call_args.kwargs["latest"], "0.6.0")
+        self.assertEqual(du.call_args.kwargs["current"], "0.6.0")
+        self.assertEqual(self.asked, [])
+
+    def test_force_asks_and_runs_reinstall_only(self):
+        self.assertEqual(self.call(latest="0.6.0", force=True), 0)
+        self.assertEqual(self.asked, ["要重新安裝 v0.6.0？(y/N): "])
+        self.assertEqual(self.streamed, [["uv", "tool", "install", "--reinstall", "git+https://github.com/royalroylo/sampan@v0.6.0"]])
+        self.assertIn("✔ 已重新安裝 0.6.0，重新開啟 sampan…", self.msgs)
+
+    def test_force_with_unknown_latest_names_current(self):
+        self.call(latest=None, force=True, answer="n")
+        self.assertEqual(self.msgs[0], "目前 0.6.0，最新 查不到")
+        self.assertEqual(self.asked, ["要重新安裝 v0.6.0？(y/N): "])
+
+    def test_not_a_tty_without_yes_refuses_when_it_would_ask(self):
+        for kw in ({}, {"latest": "0.6.0", "force": True}):
+            self.msgs, self.streamed, self.asked = [], [], []
+            with mock.patch("sampan.update.do_update") as du:
+                self.assertEqual(self.call(tty=False, **kw), 2)
+            du.assert_not_called()
+            self.assertEqual((self.asked, self.streamed), ([], []))
+            self.assertEqual(self.msgs[-1], "要更新請在終端機執行，或加 --yes")
+
+    def test_latest_unknown(self):
+        self.assertEqual(self.call(latest=None), 1)
+        self.assertEqual(self.msgs, ["目前 0.6.0，最新 查不到", "查不到最新版"])
+        self.assertEqual(self.streamed, [])
+
+    def test_main_parses_and_needs_no_config(self):
+        with mock.patch("sampan.cli.load_config", side_effect=AssertionError), \
+                mock.patch("sampan.cli._update_cmd", return_value=0) as uc:
+            self.assertEqual(cli.main(["update"]), 0)
+            self.assertEqual(cli.main(["update", "--yes", "--force"]), 0)
+        self.assertEqual([c.args for c in uc.call_args_list], [(False, False), (True, True)])
+
+    def test_listed_in_help(self):
+        self.assertIn("檢查並更新 sampan（不看快取）", cli.build_parser().format_help())
+
+    def test_real_default_uses_state_dir_and_fresh_check(self):
+        tmp = Path(tempfile.mkdtemp())
+        with mock.patch.dict("os.environ", {"SAMPAN_STATE_DIR": str(tmp)}), \
+                mock.patch("sampan.update.check", return_value=(None, None)) as ch, \
+                mock.patch("sampan.cli.out", self.msgs.append):
+            self.assertEqual(cli._update_cmd(False, False, current="0.6.0"), 1)
+        self.assertEqual(ch.call_args.args, (tmp,))
+        self.assertTrue(ch.call_args.kwargs["force"])
 
 
 if __name__ == "__main__":

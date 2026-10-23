@@ -243,15 +243,26 @@ def _resume_line(cfg, name):
 
 
 def _update(out, ask, updater, update_fn):
-    """U: update after confirmation; returns whether it switched to a new version."""
-    latest = updater.available() if updater is not None else None
-    if not latest:
+    """U: update after confirmation; returns whether sampan must be restarted (new version, or reinstalled).
+    Nothing newer known: re-check now (the cache may predate a fresh tag), and if still nothing newer offer a reinstall."""
+    if updater is None:
         out("目前已是最新版")
         return False
-    if (_ask(ask, f"更新到 v{latest}？(y/N): ") or "").lower() != "y":
+    latest = updater.available()
+    if not latest:
+        out("▶ 檢查最新版…")
+        updater.refresh(force=True)
+        latest = updater.available()
+    if latest:
+        if (_ask(ask, f"更新到 v{latest}？(y/N): ") or "").lower() != "y":
+            out("已取消")
+            return False
+        return update_fn(out, current=updater.current)
+    out("查不到最新版（離線或連不到 GitHub）" if updater.latest is None else f"目前已是最新版（v{updater.latest}）")
+    if (_ask(ask, "要重新安裝目前版本嗎？(y/N): ") or "").lower() != "y":
         out("已取消")
         return False
-    return update_fn(out, current=updater.current)
+    return update_fn(out, current=updater.current, latest=updater.latest, force=True)
 
 
 def _first_opened(out, opened, verb):
@@ -272,7 +283,8 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
     restore_picker_fn / adopt_picker_fn are the checklist interfaces for R / A; when None, restore / adopt ask in text themselves.
     loop=True: after an action return to the list, leaving only on q / Esc (or when an opened session is attached); False does just one action.
     choose_dir_fn(start, allow_missing=…) is the directory chooser screen for n / m (returns a path or None); when None, the directory is typed.
-    When updater (update.Checker) knows of a new version, U updates after confirmation; on success sampan is re-executed with the same arguments (argv).
+    U (updater = update.Checker) updates after confirmation, re-checking first when no newer version is known and offering a reinstall when there is none;
+    on success sampan is re-executed with the same arguments (argv).
     prompt_fn(name, agent, prompt): used when R reattach or m move waits for the agent (n and Enter-reattach of one do not wait, they go straight into tmux) and the agent stops at a startup menu (in curses it is
     CursesScreen.prompt_choice, with --plain prompts.plain_prompt); when "go in and handle it myself" is chosen, that session is attached when the action ends.
     None = do not look at prompts (as before)."""

@@ -23,6 +23,7 @@ e renames, R reattaches, A adopts claude/codex running outside tmux, r retire, a
 When a newer version exists (update.Checker checks in the background, cached for 6 hours, and re-checks in the idle time while waiting for a key) one more
 line appears above the key help saying a new version is available and to press U; U updates after an in-place confirmation, the output is shown live in the
 message area; on success curses is closed and sampan is exec'd with the same arguments, on failure it stays on the list.
+When no newer version is known, U re-checks right away (skipping the cache) and, if still nothing newer, offers to reinstall the current version.
 
 The working directory of n and the new directory of m use the directory chooser (dirpick.DirPicker + render_dirpick): subdirectories on the left, recently
 used ones (from the registry) and the sessions already in the directory under the cursor on the right; up/down move, right / Enter enter, left / Backspace

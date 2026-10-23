@@ -1,4 +1,5 @@
 import argparse
+import shutil
 import sys
 from pathlib import Path
 
@@ -67,6 +68,9 @@ def build_parser():
     it.add_argument("--no-launchd", action="store_true", help="不安裝自動存檔排程")
     it.add_argument("--yes", action="store_true", help="所有問題都用預設值，不讀 stdin（沒有終端機時用）")
     it.add_argument("--hook", action="store_true", help="詢問是否安裝 SessionStart hook（預設不問）")
+    up = sub.add_parser("update", help="檢查並更新 sampan（不看快取）")
+    up.add_argument("--yes", action="store_true", help="不問，直接更新（或 --force 時直接重新安裝）")
+    up.add_argument("--force", action="store_true", help="已是最新版也重新安裝")
     pf = sub.add_parser("profile", help="profile 管理").add_subparsers(dest="action", required=True)
     pa = pf.add_parser("add", help="新增 profile：建立 ~/.claude-profiles/<名稱> 並登入；--dir 用既有目錄（不建、不登入）")
     pa.add_argument("name")
@@ -118,6 +122,42 @@ def _init(no_launchd, yes=False, hook=False):
         return 130
 
 
+def _update_cmd(yes, force, *, run=None, stream=None, which=None, ask=input, isatty=None, current=None,
+                state_dir=None):
+    """sampan update: always a fresh check (no cache), then update or, with force, reinstall. Needs no config file.
+    Exits after do_update; no restart is exec'd. 0 ok / up to date / cancelled, 1 failed or latest unknown, 2 needs a terminal."""
+    from . import update
+    run = run or update._run
+    stream = stream or update._stream
+    which = which or shutil.which
+    current = current or version()
+    tty = isatty() if isatty is not None else bool(sys.stdin and sys.stdin.isatty())
+    latest, _at = update.check(state_dir or paths.state_dir(), run=run, force=True)
+    out(f"目前 {current}，最新 {latest or '查不到'}")
+    is_newer = update.newer(current, latest)
+    if not is_newer and not force:
+        if latest is None:
+            out("查不到最新版")
+            return 1
+        out("已是最新版")
+        return 0
+    question = f"更新到 v{latest}？(y/N): " if is_newer else f"要重新安裝 v{latest or current}？(y/N): "
+    if not yes:
+        if not tty:
+            out("要更新請在終端機執行，或加 --yes")
+            return 2
+        try:
+            answer = ask(question)
+        except EOFError:
+            answer = ""
+        if (answer or "").strip().lower() != "y":
+            out("已取消")
+            return 0
+    ok = update.do_update(out, current=current, stream=stream, run=run, which=which, latest=latest,
+                          force=not is_newer)
+    return 0 if ok else 1
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
     if argv[:2] == ["hook", "session-start"]:
@@ -135,6 +175,12 @@ def main(argv=None):
         args = build_parser().parse_args(argv)
     if args.cmd == "init":
         return _init(args.no_launchd, args.yes, args.hook)
+    if args.cmd == "update":
+        try:
+            return _update_cmd(args.yes, args.force)
+        except KeyboardInterrupt:
+            out("\n已取消")
+            return 130
     try:
         cfg = load_config(paths.config_path(), state_dir=paths.state_dir())
     except ConfigError as e:
