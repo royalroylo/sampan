@@ -118,3 +118,23 @@ class InitConfigModeTests(InitBase):
     def test_new_config_is_private(self):
         self.assertEqual(self.init(self.runner(), asker({}, []), no_launchd=True), 0)
         self.assertEqual(mode(self.cfg_path), 0o600)
+
+
+class ChmodRefusedTests(Umask022):
+    """A state dir the user does not own, or a filesystem that refuses chmod: tightening is skipped, writes still work."""
+
+    def test_save_log_registry_and_lock_still_work(self):
+        from unittest import mock
+        cfg = make_env(self.tmp)
+        refuse = mock.Mock(side_effect=PermissionError("refused"))
+        with mock.patch("os.chmod", refuse), mock.patch("os.fchmod", refuse):
+            with lock(cfg.state_dir):
+                write_rows(cfg.registry_path, [Row("one", "claude", "alice", SID, "/c")], "t", cfg.history_dir)
+                write_rows(cfg.registry_path, [Row("one", "claude", "alice", SID, "/c")], "t2", cfg.history_dir)
+            append_log(cfg, "one")
+            update.write_cache(cfg.state_dir, "0.6.3", datetime(2026, 10, 23, tzinfo=timezone.utc))
+        self.assertTrue(refuse.called)
+        self.assertIn('"t2"', cfg.registry_path.read_text())
+        self.assertTrue(list(cfg.history_dir.glob("registry-*.json")))
+        self.assertIn("one", cfg.save_log.read_text())
+        self.assertTrue((cfg.state_dir / update.CACHE).exists())

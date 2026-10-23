@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .clock import now_stamp
-from .fsutil import PRIVATE_FILE, atomic_write, private_dir, private_file
+from .fsutil import PRIVATE_FILE, atomic_write, private_dir, private_file, try_chmod
 from .procs import is_uuid
 
 STATES = ("active", "retired")
@@ -110,7 +110,7 @@ def id_problem(session_id):
 def lock(state_dir):
     state_dir = private_dir(state_dir)
     with os.fdopen(os.open(state_dir / "registry.lock", os.O_WRONLY | os.O_CREAT, PRIVATE_FILE), "w") as fh:
-        os.fchmod(fh.fileno(), PRIVATE_FILE)
+        try_chmod(fh.fileno(), PRIVATE_FILE)
         fcntl.flock(fh, fcntl.LOCK_EX)
         try:
             yield
@@ -149,8 +149,15 @@ def write_rows(path, rows, now, history_dir, keep=20):
     if path.exists():
         private_dir(history_dir)
         snap = history_dir / f"registry-{now_stamp()}.json"
-        shutil.copy2(path, snap)
+        # Created 0600 and copied by hand, not shutil.copy2: copy2 also copies the mode with chmod, which fails where chmod is refused.
+        with open(path, "rb") as src, os.fdopen(os.open(snap, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, PRIVATE_FILE), "wb") as dst:
+            shutil.copyfileobj(src, dst)
         private_file(snap)
+        st = path.stat()
+        try:
+            os.utime(snap, ns=(st.st_atime_ns, st.st_mtime_ns))  # keep the registry's mtime: snapshots are pruned by mtime
+        except OSError:
+            pass
         # By mtime, not by name: older snapshots are named in local time (Taipei), newer ones in UTC, so names
         # from before and after an upgrade do not sort in time order.
         snaps = sorted(history_dir.glob("registry-*.json"), key=lambda p: (p.stat().st_mtime_ns, p.name))

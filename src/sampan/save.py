@@ -1,7 +1,7 @@
 import os
 
 from .clock import now_iso
-from .fsutil import PRIVATE_FILE, private_dir
+from .fsutil import PRIVATE_FILE, private_dir, try_chmod
 from .observe import PROC_ROOT, agent_sessions, observe
 from .procs import list_procs
 from .registry import RegistryError, load_rows, lock, merge, write_rows
@@ -11,7 +11,7 @@ from .tmux import Tmux, unreadable_message
 def append_log(cfg, msg):
     private_dir(cfg.save_log.parent)
     with os.fdopen(os.open(cfg.save_log, os.O_WRONLY | os.O_APPEND | os.O_CREAT, PRIVATE_FILE), "a") as fh:
-        os.fchmod(fh.fileno(), PRIVATE_FILE)
+        try_chmod(fh.fileno(), PRIVATE_FILE)
         fh.write(f"{now_iso()} {msg}\n")
 
 

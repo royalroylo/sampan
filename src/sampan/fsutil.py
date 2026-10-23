@@ -13,17 +13,29 @@ PRIVATE_FILE = 0o600  # files under the state dir: only the user may read or wri
 PRIVATE_DIR = 0o700
 
 
+def try_chmod(path_or_fd, mode):
+    """chmod (fchmod for an int fd), best-effort: a directory the user does not own or a filesystem that refuses
+    chmod must never fail the write itself."""
+    try:
+        if isinstance(path_or_fd, int):
+            os.fchmod(path_or_fd, mode)
+        else:
+            os.chmod(path_or_fd, mode)
+    except OSError:
+        pass
+
+
 def private_dir(path):
-    """mkdir -p path and make it PRIVATE_DIR, also when it already existed with looser bits."""
+    """mkdir -p path (errors raise) and make it PRIVATE_DIR, also when it already existed with looser bits (best-effort)."""
     path = Path(path)
     path.mkdir(parents=True, exist_ok=True)
-    os.chmod(path, PRIVATE_DIR)
+    try_chmod(path, PRIVATE_DIR)
     return path
 
 
 def private_file(path):
-    """Set path to PRIVATE_FILE (fixes a file an older version left with looser bits)."""
-    os.chmod(path, PRIVATE_FILE)
+    """Set path to PRIVATE_FILE (fixes a file an older version left with looser bits); best-effort."""
+    try_chmod(path, PRIVATE_FILE)
 
 
 def atomic_write(path, text, *, mode=None, new_mode=None):
@@ -40,7 +52,7 @@ def atomic_write(path, text, *, mode=None, new_mode=None):
         with os.fdopen(fd, "w") as fh:
             fh.write(text)
         if final is not None:
-            os.chmod(tmp, final)
+            try_chmod(tmp, final)
         os.replace(tmp, target)
     finally:
         tmp.unlink(missing_ok=True)
