@@ -49,3 +49,5 @@ Overrides: `SAMPAN_CONFIG` (config file, default `~/.config/sampan/config.toml`)
 
 Version 1 files are still read (a missing `agent` counts as `claude`, a missing `pid` as `null`) and become version 2 on the
 next write. The previous file is copied to `history/registry-<time>.json` before each rewrite (newest 20 kept).
+Times (`saved_at`, `seen_at`, the history file names) are written in UTC (`+00:00`) and converted to local time only for
+display; history files left by older versions may be named in local time.

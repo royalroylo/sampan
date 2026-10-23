@@ -5,6 +5,25 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-10-23
+
+### Security
+- The state directory (and its `history/` and `hooks/`) is kept at `700` and every file sampan writes there (registry, history
+  snapshots, `save.log`, lock, update-check cache, hook records) at `600`, whatever the umask; looser files left by an older
+  version are fixed on the next write. A new `config.toml` from `sampan init` is created `600` (an existing one is never changed).
+  SECURITY.md no longer asks you to `chmod` by hand.
+
+### Fixed
+- An action that fails in the ui no longer closes it: the message area shows `❌ <action> 失敗：<error>` and the list stays.
+- `sampan stop` prints the "tmux unreadable" warning once instead of twice.
+
+### Changed
+- CI: Dependabot keeps the GitHub Actions current; the Linux smoke image pins uv (0.11.3) instead of `latest`.
+- Tests: the guard also blocks network / mutating `git` subcommands inside shell strings.
+- Documentation: the update check is described the same way in README and SECURITY.md; the registry reference says times
+  are stored in UTC; the usage guide says `m` starts at `[ui] start_dir` when the session's directory is gone; release pins
+  move to v0.6.3.
+
 ## [0.6.2] - 2026-10-23
 
 ### Fixed
@@ -160,7 +179,8 @@ First public release. Versions up to 0.5.3 were released privately under the nam
 ### Security
 - Credentials in git URLs are no longer shown in output.
 
-[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.6.2...HEAD
+[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.6.3...HEAD
+[0.6.3]: https://github.com/royalroylo/sampan/releases/tag/v0.6.3
 [0.6.2]: https://github.com/royalroylo/sampan/releases/tag/v0.6.2
 [0.6.1]: https://github.com/royalroylo/sampan/releases/tag/v0.6.1
 [0.6.0]: https://github.com/royalroylo/sampan/releases/tag/v0.6.0

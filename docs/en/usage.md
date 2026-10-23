@@ -34,7 +34,7 @@ list. Press `q` to quit.
 | Resume several at once | `R` | Checklist (pre-checked: active in the last 7 days); after resuming, takes you into the first one |
 | Bring Claude agents running outside tmux (in any terminal program) into tmux | `A` | Pick which, name each; you type `/exit` in the original terminal, sampan waits, then resumes the same conversation in tmux and takes you in |
 | Rename | `e` | tmux and registry together; the agent keeps running |
-| Change working directory | `m` | Directory chooser (starting at its current directory); after you confirm, the agent exits and resumes the same conversation in the new directory |
+| Change working directory | `m` | Directory chooser (starting at its current directory; if that directory is gone, at `[ui] start_dir`, as for `n`); after you confirm, the agent exits and resumes the same conversation in the new directory |
 | Mark as done | `r` | Retired; not offered for resuming |
 | Save the registry now | `w` | Normally saved on the hour |
 | Update sampan | `U` (a line "new version v… (current …), press U to update" appears above the key help when a newer one exists) | Confirms at the bottom of the screen, runs `uv tool upgrade sampan` (if the version does not change, `uv tool install --reinstall git+https://github.com/royalroylo/sampan@v<latest>`), shows the output in the message area; on success sampan reopens itself at the list, on failure it stays in the list. When no newer version is known, `U` first checks again right then (skipping the cache); if it is still up to date (or the check fails) it offers to reinstall the current version |

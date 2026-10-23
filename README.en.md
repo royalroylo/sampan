@@ -27,7 +27,7 @@ curl -fsSL https://raw.githubusercontent.com/royalroylo/sampan/main/install.sh |
 Or by hand, two lines:
 
 ```
-uv tool install git+https://github.com/royalroylo/sampan@v0.6.2
+uv tool install git+https://github.com/royalroylo/sampan@v0.6.3
 sampan init
 ```
 
@@ -43,6 +43,7 @@ Tip: sampan is a long name to type, and on macOS `sam` plus Tab collides with `/
 - macOS: one launchd job runs `sampan save` every hour. It only saves.
 - Claude's `settings.json` is not touched unless you run `sampan init --hook` (or accept repairing a hook installed earlier).
 - It types into tmux panes only when you act: open, resume, stop or move.
+- Network: while the UI is open it checks sampan's version tags on GitHub at most every 6 hours; `U` or `sampan update` checks again right away.
 - `sampan init` asks questions and must be run by you in a terminal. It refuses to run without one unless `--yes` is given.
 
 More in [SECURITY.md](SECURITY.md).

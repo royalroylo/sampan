@@ -39,12 +39,14 @@ no account. The complete list of what it changes or touches:
 - `claude plugin install/update/uninstall` per profile (`sampan plugins sync`). `--prune` removes plugins that are not
   in your config; use `--dry-run` first.
 - `tmux`, `ps`, `lsof`, `git ls-remote` and (macOS) `launchctl`.
-- `uv tool upgrade sampan` (or a reinstall pinned to the newest tag) when you press `U` in the UI and confirm.
+- `uv tool upgrade sampan` (or a reinstall pinned to the newest tag) when you press `U` in the UI or run `sampan update`,
+  and confirm.
 
 **Network**
 
-- A check of the repository's version tags on GitHub, at most every 6 hours while the UI is open. No other traffic
-  from sampan itself (the agents and `claude plugin` commands do their own).
+- A check of the repository's version tags on GitHub (`git ls-remote`), at most every 6 hours while the UI is open.
+  `U` in the UI and `sampan update` check again right away. No other traffic from sampan itself (the agents and
+  `claude plugin` commands do their own).
 
 **Data it reads**
 
