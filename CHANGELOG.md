@@ -5,11 +5,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.1]
+
 ### Changed
 - `sampan init` refuses to run when stdin is not a terminal (exit code 2, nothing written); `--yes` takes every default instead.
 - The SessionStart hook is asked about only with `sampan init --hook`; repairing a broken hook is still offered. `sampan doctor` no longer reports an absent hook.
 - `install.sh --yes` now runs `sampan init --yes`, and a failing `sampan init` no longer aborts the installer (it prints a note and carries on).
 - `~/.claude-profiles/*.retired.*` directories are skipped by `sampan init` and `sampan doctor`.
+- Documentation: README says that Claude Code is required and Codex CLI is optional, and the README has a short
+  "What it changes on your machine" section plus a tip to alias `sampan` to `sp`.
+
+### Added
+- Session list: each row has a number (its place in the full list). Type `1`-`9` to jump to it; two digits typed within 1 second make
+  one number (`1`, `2` is row 12). `/` searches by name (case-insensitive substring); Enter opens the selection, Esc cancels,
+  Backspace on an empty query leaves search. Digits typed while searching go into the query.
+- Plain menu (`sampan ui --plain`): `/text` searches; one match attaches, several are listed with their numbers.
+- `AGENTS.md`: guidance for AI coding agents (what to tell a user, what to run, what never to run).
 
 ## [0.6.0] - 2026-10-23
 

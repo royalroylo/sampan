@@ -27,6 +27,8 @@ list. Press `q` to quit.
 | To do this | Press | What happens |
 |---|---|---|
 | Work in a session | Enter on its row | Goes into its tmux (switches if you are already in tmux). A stopped one is resumed first |
+| Jump to a row | `1`-`9` (the number is the row's place in the full list) | Moves the cursor there; for 10 and up, type two digits within 1 second, e.g. `1`, `2` is row 12 |
+| Search by name | `/`, then text | Case-insensitive; rows whose name contains the text stay. Enter opens the row under the cursor, Esc cancels, Backspace on an empty query leaves search. While searching, digits are text and do not jump |
 | Start new work | `n` | Asks for a name and agent / profile, then a directory (the chooser starts at `[ui] start_dir`, default `~/Projects` if it exists, else `~`); once created you are taken straight in |
 | Put one away (free memory, clear the screen) | `s` (space checks several) | Asks to confirm at the bottom of the screen; the agent exits normally and tmux closes too. The conversation is kept; resume with Enter or `R` |
 | Resume several at once | `R` | Checklist (pre-checked: active in the last 7 days); after resuming, takes you into the first one |
@@ -86,7 +88,7 @@ schedules never look at or press anything).
 You can also keep a dedicated sampan session or pane in tmux: what you pick there is switched to, sampan stays where it is,
 and when you switch back you still see the list.
 
-**You don't want the full-screen UI** (scripts, a very narrow terminal): `sampan ui --plain` takes numbers; every action
+**You don't want the full-screen UI** (scripts, a very narrow terminal): `sampan ui --plain` takes numbers, and `/text` searches (one match goes straight in, several are listed with their numbers); every action
 also has its own command, see "Commands" below.
 
 ## Commands

@@ -13,7 +13,8 @@ profiles in sync.
 - macOS (Linux is experimental, see [Platforms and limits](docs/en/platforms.md))
 - tmux
 - Python 3.11+ and [uv](https://docs.astral.sh/uv/)
-- Claude Code (`claude`); Codex CLI (`codex`) is optional
+- Claude Code (`claude`), required
+- Codex CLI (`codex`), optional; skip it if you do not use Codex
 
 No third-party Python dependencies. The package and the command are both `sampan`.
 
@@ -32,6 +33,18 @@ sampan init
 
 For what the one-liner does, reading it first, Linux, a new machine, PATH and what `sampan init` does, see the [install guide](docs/en/install.md).
 
+Tip: sampan is a long name to type, and on macOS `sam` plus Tab collides with `/usr/bin/sample`. Add `alias sp=sampan` to your shell rc (sampan does not ship an `sp` binary).
+
+## What it changes on your machine
+
+- Config goes in `~/.config/sampan/`; the registry and history in `~/.local/state/sampan/`.
+- macOS: one launchd job runs `sampan save` every hour. It only saves.
+- Claude's `settings.json` is not touched unless you run `sampan init --hook`.
+- It types into tmux panes only when you act: open, resume, stop or move.
+- `sampan init` asks questions and must be run by you in a terminal. It refuses to run without one unless `--yes` is given.
+
+More in [SECURITY.md](SECURITY.md).
+
 ## Usage
 
 Type `sampan`. The session list is on the left, an info card for the row under the cursor on the right.
@@ -39,6 +52,8 @@ Type `sampan`. The session list is on the left, an info card for the row under t
 | Key | Action |
 |---|---|
 | Enter | Go into that session (a stopped one is resumed first) |
+| `1`-`9` | Jump to that row (type two digits quickly for row 10 and up) |
+| `/` | Search by name (Enter opens, Esc cancels) |
 | `n` | Start new work |
 | `s` | Put it away (the agent exits normally, the conversation is kept) |
 | `R` | Resume several at once |

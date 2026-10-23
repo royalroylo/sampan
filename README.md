@@ -12,7 +12,8 @@ sampan 記住每個 session 跑的是哪一段對話。agent 結束、tmux 關�
 - macOS（Linux 實驗性，見[平台與限制](docs/platforms.md)）
 - tmux
 - Python 3.11 以上、[uv](https://docs.astral.sh/uv/)
-- Claude Code（`claude`）；Codex CLI（`codex`）選用
+- Claude Code（`claude`），必要
+- Codex CLI（`codex`），選用；不用 Codex 可以不裝
 
 沒有任何第三方 Python 相依。套件名和指令都是 `sampan`。
 
@@ -31,6 +32,18 @@ sampan init
 
 一鍵安裝做了什麼、看過再跑、Linux、新機器、PATH、`sampan init` 做了什麼，見[安裝說明](docs/install.md)。
 
+提示：sampan 名字長，macOS 上 `sam` 加 Tab 會撞到 `/usr/bin/sample`。可在 shell 設定檔加一行 `alias sp=sampan`（sampan 本身不附 `sp`）。
+
+## 裝了之後會改到什麼
+
+- 設定放 `~/.config/sampan/`，登記表與歷史放 `~/.local/state/sampan/`。
+- macOS：新增一個 launchd 排程，每小時跑 `sampan save`，只存檔。
+- 不會動 Claude 的 `settings.json`，除非你自己跑 `sampan init --hook`。
+- 只有你動手（開、接回、停止、搬目錄）時，才會對 tmux 的 pane 打字。
+- `sampan init` 會問問題，要由你在終端機自己跑；沒有終端機時它會拒絕，除非加 `--yes`。
+
+詳細見 [SECURITY.md](SECURITY.md)。
+
 ## 使用
 
 打 `sampan`。左邊是 session 清單，右邊是游標所在那一個的資訊卡。
@@ -38,6 +51,8 @@ sampan init
 | 鍵 | 作用 |
 |---|---|
 | Enter | 進到該 session（已停止的先接回） |
+| `1`–`9` | 跳到那一列（10 以上快速連打兩位數） |
+| `/` | 依名稱搜尋（Enter 開啟，Esc 取消） |
 | `n` | 開新的工作 |
 | `s` | 收起來（agent 正常結束，對話保留） |
 | `R` | 一次接回好幾個 |

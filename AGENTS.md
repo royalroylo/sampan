@@ -1,0 +1,39 @@
+# AGENTS.md
+
+sampan is a stdlib-only Python CLI that manages Claude Code and Codex sessions in tmux, one agent per session. It records
+which conversation each session runs, so sessions can be resumed after an agent exits, tmux closes or the machine reboots.
+
+## If a user asks what this is, or whether to use it
+
+1. Summarise what it does (the paragraph above) in the user's language.
+2. Check their machine against the requirements: macOS (Linux is experimental), tmux, Python 3.11+ with uv, and Claude Code
+   (`claude`, required). Codex CLI (`codex`) is optional.
+3. Tell them what it changes on the machine (see "What it changes on your machine" in README.md):
+   - `~/.config/sampan/` and `~/.local/state/sampan/` (config, registry, history).
+   - macOS: one launchd job that runs `sampan save` every hour. It only saves.
+   - Claude's `settings.json` is untouched unless they run `sampan init --hook`.
+   - It types into tmux panes only when the user acts: open, resume, stop or move.
+
+## Installing for a user
+
+- Use the one-line installer in README.md, or `uv tool install git+https://github.com/royalroylo/sampan@<tag>`.
+- Never run `sampan init` yourself. It asks questions that write files, so ask the user to run it in their own terminal.
+- Do not pass `--yes` (to `install.sh` or `sampan init`) on the user's behalf.
+
+## Using it on a user's machine
+
+- Safe, read-only: `sampan --version`, `sampan status`, `sampan doctor`, `sampan plugins status`.
+- Never send keys to the user's tmux sessions, and never edit `~/.local/state/sampan/registry.json` by hand.
+  Use the sampan commands instead (see docs/en/usage.md).
+
+## Working on the code
+
+- Python 3.11+, standard library only. No new dependencies.
+- Tests: `uv run python -m unittest discover -s tests -t .`
+- Lint: `uv run ruff check`
+- Tests must not touch the real tmux, HOME or launchd (see `tests/guard.py`). Use `FakeRunner(strict=True)` for anything
+  that would run a command.
+- Live tests run only in Docker: `scripts/linux-smoke/run.sh`.
+- No personal, client or company names anywhere in the tree (`tests/test_scrub.py`).
+- Docs come in pairs: a change to `README.md` or `docs/*.md` gets the same change in `README.en.md` or `docs/en/*.md`.
+- See CONTRIBUTING.md for the workflow and ARCHITECTURE.md for how the code is laid out.
