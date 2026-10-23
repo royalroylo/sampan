@@ -35,6 +35,7 @@ class UiTest(unittest.TestCase):
             new_fn=lambda cfg, run, out, name, profile, cwd, **kw: self.calls.append(("new", name, profile, cwd)) or 0,
             set_state_fn=lambda cfg, out, name, state: self.calls.append(("state", name, state)) or 0,
             move_fn=lambda cfg, run, out, name, dest, **kw: self.calls.append(("move", name, dest, kw)) or 0,
+            switch_fn=lambda cfg, run, out, name, prof, **kw: self.calls.append(("switch", name, prof, kw)) or 0,
             rename_fn=lambda cfg, run, out, old, new: self.calls.append(("rename", old, new)) or 0,
             restore_fn=lambda cfg, run, out, ask, **kw: self.calls.append(("restore", kw)) or 0,
             restore_picker_fn=restore_picker,
@@ -464,6 +465,24 @@ class UiTest(unittest.TestCase):
         self.assertIn(f"a → {dest}（目錄不存在，將建立）", self.text())
         self.assertEqual(self.calls, [("move", "a", str(dest), {"own_pane": "%9"})])
 
+    def test_plain_switch_picks_profile_confirms_and_warns_gap(self):
+        self.ui(["P", "1", "2", "y"])
+        text = self.text()
+        self.assertIn("[1] alice（alice@example.com）  ← 目前", text)
+        self.assertIn("將換 profile：a　alice → work（work@example.com）", text)
+        self.assertIn("⚠ work 沒有裝：superpowers@claude-plugins-official", text)
+        self.assertIn("會結束這個 session 的 claude", text)
+        self.assertEqual(self.calls, [("switch", "a", "work", {"own_pane": "%9", "warn_gap": False})])
+
+    def test_plain_switch_cancel_same_and_codex(self):
+        self.ui(["P", "1", "2", "n"])
+        self.ui(["P", "1", "1"])
+        self.assertIn("a 已經是 alice", self.text())
+        self.ui(["P", "1", ""])
+        self.ui(["P", "1"], rows=[row("cx", agent="codex", profile="-")])
+        self.assertIn("只有 Claude session 能換 profile", self.text())
+        self.assertEqual(self.calls, [])
+
     def test_move_confirmation_names_the_agent(self):
         dest = Path(tempfile.mkdtemp()).resolve()
         self.ui(["m", "1", str(dest), "n"], rows=[row("cx", agent="codex", profile="-")])
@@ -564,6 +583,7 @@ class PickerTest(unittest.TestCase):
         self.assertEqual(self.p.key("a"), ("active", ["b"]))
         self.assertEqual(self.p.key("n"), ("new", []))
         self.assertEqual(self.p.key("m"), ("move", ["b"]))
+        self.assertEqual(self.p.key("P"), ("switch", ["b"]))
         self.assertEqual(self.p.key("q"), ("quit", []))
         self.assertEqual(self.p.key("\x1b"), ("quit", []))
         self.assertIsNone(self.p.key("x"))
@@ -793,6 +813,7 @@ class InteractiveUiTest(UiTest):
             new_fn=lambda cfg, run, out, name, profile, cwd, **kw: self.calls.append(("new", name, profile, cwd)) or 0,
             set_state_fn=lambda cfg, out, name, state: self.calls.append(("state", name, state)) or 0,
             move_fn=lambda cfg, run, out, name, dest, **kw: self.calls.append(("move", name, dest)) or 0,
+            switch_fn=lambda cfg, run, out, name, prof, **kw: self.calls.append(("switch", name, prof, kw)) or 0,
             rename_fn=lambda cfg, run, out, old, new: self.calls.append(("rename", old, new)) or 0,
             restore_fn=lambda cfg, run, out, ask, **kw: self.calls.append(("restore",)) or 0,
             adopt_fn=lambda cfg, run, out, ask, **kw: self.calls.append(("adopt",)) or 0,
@@ -814,6 +835,15 @@ class InteractiveUiTest(UiTest):
     def test_stop_cancel(self):
         self.ui_keys(("stop", ["a"]), [""])
         self.assertEqual(self.calls, [])
+
+    def test_switch_stopped_says_reattach(self):
+        stopped = [row("a", state=State.STOPPED, agent_status="-")]
+        answers = iter(["2", "y"])
+        cmd_ui(self.cfg, self.r, self.msgs.append, lambda _p: next(answers), own_pane="%9",
+               rows_fn=lambda c, r: stopped, picker_fn=lambda rows, cur: ("switch", ["a"]),
+               switch_fn=lambda cfg, run, out, name, prof, **kw: self.calls.append(("switch", name, prof)) or 0)
+        self.assertIn("會用新 profile 接回這段對話", "\n".join(self.msgs))
+        self.assertEqual(self.calls, [("switch", "a", "work")])
 
     def test_move_confirms_first(self):
         self.ui_keys(("move", ["a"]), ["/tmp", "y"])

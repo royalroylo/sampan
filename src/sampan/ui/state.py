@@ -174,6 +174,8 @@ class Picker:
             return None
         if k == "m":
             return ("move", [self._here()])
+        if k == "P":
+            return ("switch", [self._here()])
         if k == "e":
             return ("rename", [self._here()])
         if k in ("r", "a"):

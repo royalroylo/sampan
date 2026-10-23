@@ -99,9 +99,9 @@ def row_keys(row, info):
     if state is State.RETIRED:
         keys = (["Enter 接上"] if live else []) + ["a activate"]
     elif state is State.STOPPED:
-        keys = ["Enter 接回", "e 改名", "r retire"]
+        keys = ["Enter 接回"] + (["P 換 profile"] if row.agent == "claude" else []) + ["e 改名", "r retire"]
     elif state is State.RUNNING:
-        keys = ["Enter 接上", "s 停掉", "m 搬", "e 改名", "r retire"]
+        keys = ["Enter 接上", "s 停掉", "m 搬"] + (["P 換 profile"] if row.agent == "claude" else []) + ["e 改名", "r retire"]
     else:
         keys = ["Enter 接上"] if live else []
     return "　".join(keys)

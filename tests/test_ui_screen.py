@@ -133,7 +133,7 @@ class CardTest(unittest.TestCase):
         self.assertEqual(lines[0], "proj-a-handy")
         for want in ("執行中（idle）", "claude ・ carol", "~/Projects/proj-a/handy", "b5768af2", "（3 分鐘前）",
                      "93k", "1 個視窗、1 個 pane", "最後一句話", "「幫我改設定頁」",
-                     "Enter 接上　s 停掉　m 搬　e 改名　r retire"):
+                     "Enter 接上　s 停掉　m 搬　P 換 profile　e 改名　r retire"):
             self.assertIn(want, text)
 
     def test_stopped_card_says_stopped_and_offers_restore(self):
@@ -141,7 +141,7 @@ class CardTest(unittest.TestCase):
         self.assertIn("已停止", text)
         self.assertNotIn("該跑沒跑", text)
         self.assertNotIn("tmux ", text)
-        self.assertIn("Enter 接回　e 改名　r retire", text)
+        self.assertIn("Enter 接回　P 換 profile　e 改名　r retire", text)
 
     def test_codex_card_has_no_profile(self):
         text = "\n".join(self.card(row("cx", agent="codex", profile="", sid=TID), windows=1, panes=2))
@@ -163,6 +163,8 @@ class CardTest(unittest.TestCase):
         self.assertEqual(list_state(row("x", State.PROFILE_MISMATCH, detail="（登記 carol）")), "prof 不符")
         self.assertEqual(list_state(row("x", State.AGENT_MISMATCH, detail="（登記 codex）")), "agent 不符")
         self.assertEqual(row_keys(row("x", state=State.UNREGISTERED), {"panes": 1}), "Enter 接上")
+        self.assertEqual(row_keys(row("x", state=State.RUNNING, agent="codex"), {"panes": 1}),
+                         "Enter 接上　s 停掉　m 搬　e 改名　r retire")  # Codex has no profiles
 
     def test_gather_cards_reads_registry_tmux_and_last_message(self):
         cwd = self.cfg.home / "proj"

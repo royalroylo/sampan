@@ -4,7 +4,7 @@ import time
 import uuid
 from pathlib import Path
 
-from .claude_state import transcript_problem
+from .claude_state import move_transcript, transcript_carry, transcript_problem
 from .clock import now_iso
 from .codex_state import _is_codex, codex_pid_in_pane, find_rollout
 from .launch import launch_line, send_line
@@ -359,13 +359,15 @@ def _shell_pane(tmux, name, pane_id):
 
 
 def cmd_move(cfg, run, out, name, dest, *, dry_run=False, sleep=time.sleep, timeout=60,
-             own_pane=None, proc_root=Path("/proc"), on_prompt=None):
+             own_pane=None, proc_root=Path("/proc"), on_prompt=None, profile=None):
     """Move a session to another directory and continue the same conversation: end the agent → reattach the original conversation in the new directory → automatically trust the new directory → save.
 
     Only a trust prompt "whose displayed path is exactly the new directory" is answered automatically, always through prompts.Relay: Claude moves to "Yes, I trust
     this folder" according to where the cursor actually is and then presses Enter, Codex sends the number of "Yes, continue". Other prompts (Codex update, hooks review, trust for another directory,
     an unrecognised menu) sampan does not answer for you: with on_prompt it is relayed to it to ask, without one (command line) no key is pressed and it stops waiting and explains.
-    Nothing is touched if the session is busy, a worktree, our own pane, has several agents, or its state cannot be determined."""
+    Nothing is touched if the session is busy, a worktree, our own pane, has several agents, or its state cannot be determined.
+    profile (Claude only, used by cmd_switch): reattach under this profile instead of the registered one; a transcript the new
+    profile cannot see is moved to it (never copied) after the agent has exited."""
     from .save import cmd_save
     rows = _load(cfg, out)
     if rows is None:
@@ -381,11 +383,15 @@ def cmd_move(cfg, run, out, name, dest, *, dry_run=False, sleep=time.sleep, time
     if agent == "claude" and row.profile not in cfg.profiles:
         out(f"❌ {name}：profile {row.profile} 不在設定檔")
         return 2
-    target = Path(dest).expanduser().resolve()
+    new_prof = profile or row.profile
+    switching = new_prof != row.profile
+    where_to = f"用 {new_prof} " if switching else "在新目錄"
+    # a switch stays in the recorded directory, spelled as recorded: Claude finds the transcript by the cwd's path
+    target = Path(dest).expanduser() if switching else Path(dest).expanduser().resolve()
     if target.exists() and not target.is_dir():
         out(f"❌ 不是目錄：{target}")
         return 2
-    if Path(row.cwd).resolve() == target:
+    if Path(row.cwd).resolve() == target and not switching:
         out(f"= {name} 已經在 {target}")
         return 0
     tmux = Tmux(run)
@@ -433,7 +439,7 @@ def cmd_move(cfg, run, out, name, dest, *, dry_run=False, sleep=time.sleep, time
             out(f"❌ {name}：登記的是 {agent}，pane 裡跑的是 {lc.agent}；先 sampan save")
             return 1
         if lc.status != "idle":
-            out(f"❌ {name} 忙碌中（{lc.status}），等它閒置再搬")
+            out(f"❌ {name} 忙碌中（{lc.status}），等它閒置再{'換' if switching else '搬'}")
             return 1
         if agent == "claude" and WORKTREE_MARK in lc.cwd:
             out(f"❌ {name} 是 worktree session（/exit 會問要不要保留 worktree），請手動處理")
@@ -467,15 +473,19 @@ def cmd_move(cfg, run, out, name, dest, *, dry_run=False, sleep=time.sleep, time
         if find_rollout(cfg.codex.home, session_id) is None:
             out(f"❌ {name}：找不到 rollout {session_id[:8]}，搬過去會變成新對話，不動")
             return 1
-    else:
+    carry = None
+    if agent == "claude":
         why = transcript_problem(cfg.profiles.values(), row.profile, session_id)
+        if why is None and switching:
+            carry, why = transcript_carry(cfg.profiles.values(), row.profile, new_prof, session_id)
         if why:
             out(f"❌ {name}：{why}，不動")
             return 1
-    cmd = launch_line(cfg, agent, row.profile, resume=session_id, cwd=str(target))
+    cmd = launch_line(cfg, agent, new_prof, resume=session_id, cwd=str(target))
     if dry_run:
         made = "" if target.is_dir() else "（目錄不存在，將建立）"
-        out(f"[dry-run] {name}：{f'結束 {agent} → ' if exit_pid else ''}{cmd}{made}")
+        moved = f"搬逐字稿到 {new_prof} → " if carry else ""
+        out(f"[dry-run] {name}：{f'結束 {agent} → ' if exit_pid else ''}{moved}{cmd}{made}")
         return 0
     if not target.is_dir():
         target.mkdir(parents=True)
@@ -489,16 +499,25 @@ def cmd_move(cfg, run, out, name, dest, *, dry_run=False, sleep=time.sleep, time
         out(f"▶ {name}：等待 {agent} 結束…")
         while _alive(list_procs(run), exit_pid, agent):
             if waited >= timeout:
-                out(f"❌ {name}：{timeout} 秒內 {agent} 沒結束，沒有在新目錄啟動")
+                out(f"❌ {name}：{timeout} 秒內 {agent} 沒結束，沒有{where_to}啟動")
+                if switching:
+                    out(f"  可能停在額度或其他選單：請進去按 Esc 再打 /exit，之後再換一次（已停止的 session 會直接用 {new_prof} 接回）")
                 return 1
             sleep(1)
             waited += 1
     if _shell_pane(tmux, name, pane.pane_id) is None:
-        out(f"❌ {name}：{agent} 結束後找不到 shell pane，沒有在新目錄啟動")
+        out(f"❌ {name}：{agent} 結束後找不到 shell pane，沒有{where_to}啟動")
         return 1
+    if carry is not None:
+        try:
+            move_transcript(carry, cfg.profiles[new_prof].projects_dir)
+        except OSError as e:
+            out(f"❌ {name}：逐字稿搬不過去（{e}），沒有{where_to}啟動；對話還在 {row.profile}，sampan restore {name} 可接回")
+            return 1
+        out(f"  已把逐字稿搬到 {new_prof}")
     tmux.send_keys(pane.pane_id, "C-u")
     send_line(tmux, pane.pane_id, agent, cmd, sleep)
-    out(f"▶ {name}：在 {target} 接回 {session_id[:8]}")
+    out(f"▶ {name}：{f'用 {new_prof}' if switching else f'在 {target}'} 接回 {session_id[:8]}")
     trusted, redraw_left = False, None
     waiting = []  # filled when auto itself answered SKIP (slow redraw), so a SKIP chosen by the user is never mistaken for it
 
@@ -531,7 +550,10 @@ def cmd_move(cfg, run, out, name, dest, *, dry_run=False, sleep=time.sleep, time
                                                        (hit.status == "idle" and hit.session_id == session_id)):
             cmd_save(cfg, run, lambda _m: None, quiet=True, proc_root=proc_root)  # report only the move result
             now = next((r for r in load_rows(cfg.registry_path) if r.tmux == name), None)
-            out(f"✔ {name} 已搬到 {now.cwd if now else hit.cwd}（{hit.session_id[:8]}）")
+            if switching:
+                out(f"✔ {name} 已換到 {now.profile if now else new_prof}（{hit.session_id[:8]}）")
+            else:
+                out(f"✔ {name} 已搬到 {now.cwd if now else hit.cwd}（{hit.session_id[:8]}）")
             return 0
         waiting.clear()
         res = relay.check(name, agent, pane.pane_id, tmux.capture(pane.pane_id))
@@ -551,3 +573,87 @@ def cmd_move(cfg, run, out, name, dest, *, dry_run=False, sleep=time.sleep, time
             return 1
     out(f"⚠ {name}：{timeout} 秒內沒看到 {agent} 接回，請到視窗裡看；之後 sampan save 會更新登記表")
     return 1
+
+
+def plugin_gap(cfg, old, new):
+    """Plugins listed for profile old that profile new does not list (they will not be there after a switch)."""
+    have = set(cfg.profiles[new].plugins)
+    return [pid for pid in cfg.profiles[old].plugins if pid not in have]
+
+
+def gap_line(cfg, old, new):
+    gap = plugin_gap(cfg, old, new)
+    return f"⚠ {new} 沒有裝：{'、'.join(gap)}（換過去後這些 plugin 用不到）" if gap else None
+
+
+def cmd_switch(cfg, run, out, name, profile, *, dry_run=False, own_pane=None, on_prompt=None, warn_gap=True,
+               sleep=time.sleep, timeout=60, proc_root=Path("/proc"), restore_fn=None):
+    """Continue a Claude session's conversation under another profile (another account, e.g. when one has used up its
+    quota). A running session goes through cmd_move's flow in its own directory: /exit → relaunch with the new
+    CLAUDE_CONFIG_DIR → trust only that directory → save. A stopped one gets its registry row changed and is restored
+    under the new profile right away. A transcript the new profile cannot see is moved to it, never copied, so there is
+    only ever one copy of the conversation."""
+    rows = _load(cfg, out)
+    if rows is None:
+        return 2
+    row = next((r for r in rows if r.tmux == name), None)
+    if row is None:
+        out(f"❌ 登記表沒有 {name}")
+        return 2
+    if row.agent != "claude":
+        out(f"❌ {name} 是 {row.agent}，只有 Claude session 能換 profile")
+        return 2
+    if profile not in cfg.profiles:
+        out(f"❌ 未知的 profile：{profile}（設定檔裡有：{'、'.join(cfg.profiles)}）")
+        return 2
+    if profile == row.profile:
+        out(f"= {name} 已經是 {profile}")
+        return 0
+    if row.profile not in cfg.profiles:
+        out(f"❌ {name}：profile {row.profile} 不在設定檔")
+        return 2
+    gap = gap_line(cfg, row.profile, profile) if warn_gap else None
+    if gap:
+        out(gap)
+    try:
+        panes = Tmux(run).require_panes()
+    except TmuxUnreadable as e:
+        out(f"❌ {e}；不動 {name}")
+        return 2
+    if any(p.session == name for p in panes):
+        return cmd_move(cfg, run, out, name, row.cwd, profile=profile, dry_run=dry_run, sleep=sleep, timeout=timeout,
+                        own_pane=own_pane, proc_root=proc_root, on_prompt=on_prompt)
+    # stopped: no agent to end; change the registry row, then reattach under the new profile
+    why = transcript_problem(cfg.profiles.values(), row.profile, row.session_id)
+    carry = None
+    if why is None:
+        carry, why = transcript_carry(cfg.profiles.values(), row.profile, profile, row.session_id)
+    if why:
+        out(f"❌ {name}：{why}，不動")
+        return 1
+    if dry_run:
+        moved = f"搬逐字稿到 {profile}、" if carry else ""
+        out(f"[dry-run] {name}（已停止）：{moved}登記表改成 {profile}，再用 {profile} 接回")
+        return 0
+    old = row.profile
+    with lock(cfg.state_dir):
+        rows = _load(cfg, out)
+        if rows is None:
+            return 2
+        row = next((r for r in rows if r.tmux == name), None)
+        if row is None or row.profile != old:
+            out(f"❌ {name} 的登記剛被改過，什麼都沒動；再試一次")
+            return 1
+        if carry is not None:
+            try:
+                move_transcript(carry, cfg.profiles[profile].projects_dir)
+            except OSError as e:
+                out(f"❌ {name}：逐字稿搬不過去（{e}），什麼都沒改")
+                return 1
+            out(f"  已把逐字稿搬到 {profile}")
+        row.profile = profile
+        write_rows(cfg.registry_path, rows, now_iso(), cfg.history_dir)
+    out(f"✔ {name}：登記表改成 {profile}，接回中…")
+    if restore_fn is None:
+        from .restore import cmd_restore as restore_fn
+    return restore_fn(cfg, run, out, lambda _p: "", names=(name,), confirm=False, on_prompt=on_prompt)

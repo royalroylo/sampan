@@ -49,6 +49,11 @@ def build_parser():
     mv.add_argument("dest", help="新的工作目錄；不存在會建立")
     mv.add_argument("--timeout", type=int, default=60, help="等 agent 結束／接回的秒數（預設 60）")
     mv.add_argument("--dry-run", action="store_true")
+    sw = sub.add_parser("switch", help="換 profile（換帳號）繼續同一段對話，例如額度用完時；已停止的直接用新 profile 接回")
+    sw.add_argument("name")
+    sw.add_argument("profile")
+    sw.add_argument("--timeout", type=int, default=60, help="等 claude 結束／接回的秒數（預設 60）")
+    sw.add_argument("--dry-run", action="store_true")
     for verb, help_ in (("retire", "標記為不再重開"), ("activate", "恢復為重開")):
         sv = sub.add_parser(verb, help=help_)
         sv.add_argument("name")
@@ -289,7 +294,7 @@ def _dispatch(cfg, args):
     if cmd == "status":
         from .status import cmd_status
         return cmd_status(cfg, run, out)
-    if cmd in ("new", "stop", "move", "rename", "retire", "activate"):
+    if cmd in ("new", "stop", "move", "switch", "rename", "retire", "activate"):
         from . import session_run
         if cmd == "new":
             on_prompt, want = _prompt_fn()
@@ -303,6 +308,12 @@ def _dispatch(cfg, args):
                                         own_pane=os.environ.get("TMUX_PANE"))
         if cmd == "rename":
             return session_run.cmd_rename(cfg, run, out, args.name, args.new)
+        if cmd == "switch":
+            on_prompt, want = _prompt_fn()
+            rc = session_run.cmd_switch(cfg, run, out, args.name, args.profile, dry_run=args.dry_run,
+                                        timeout=args.timeout, own_pane=os.environ.get("TMUX_PANE"),
+                                        on_prompt=on_prompt)
+            return _go_in(run, want, rc)
         if cmd == "move":
             return session_run.cmd_move(cfg, run, out, args.name, args.dest, dry_run=args.dry_run,
                                         timeout=args.timeout, own_pane=os.environ.get("TMUX_PANE"))

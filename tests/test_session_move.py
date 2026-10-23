@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from sampan.registry import Row, load_rows, write_rows
-from sampan.session_run import cmd_move
+from sampan.session_run import cmd_move, cmd_switch
 from tests.fakes import FakeRunner, cp, pane_line, ps_line
 from tests.helpers import make_env
 from tests.test_claude_state import write_session
@@ -23,7 +23,7 @@ TRUST = (" Accessing workspace:\n\n {path}\n\n Quick safety check: Is this a pro
          " ❯ No, exit\n   Yes, I trust this folder\n Enter to confirm · Esc to cancel\n")
 
 
-class MoveTest(unittest.TestCase):
+class MoveFixture(unittest.TestCase):
     """State machine of one pane (%1, shell pid 100): /exit -> shell; launch command sent -> trust prompt or straight up; Down+Enter -> up."""
 
     def setUp(self):
@@ -47,15 +47,18 @@ class MoveTest(unittest.TestCase):
         self.started = False
         self.screen_prefix = ""
         self.cursor_on_yes = False  # trust prompt starts with ❯ already on "Yes, I trust this folder"
+        self.live_profile = "alice"  # profile of the claude in the pane (a relaunch with CLAUDE_CONFIG_DIR=… makes it work)
+        self.relaunch_cwd = None   # where a relaunched claude runs (None = self.dest, i.e. a move)
         self.sync_files()
 
     def sync_files(self):
-        d = self.cfg.profiles["alice"].config_dir / "sessions"
-        if d.exists():
-            for f in d.iterdir():
-                f.unlink()
+        for prof in self.cfg.profiles.values():
+            d = prof.config_dir / "sessions"
+            if d.exists():
+                for f in d.iterdir():
+                    f.unlink()
         if self.claude and self.has_file:
-            write_session(self.cfg, "alice", self.claude, sid=A, cwd=self.cwd, status=self.status, tmux="994-monitor:@1.%1")
+            write_session(self.cfg, self.live_profile, self.claude, sid=A, cwd=self.cwd, status=self.status, tmux="994-monitor:@1.%1")
 
     def ps(self, _a):
         if self.claude == 100:  # claude is the pane's own process (`tmux new-session … claude`), no shell
@@ -78,7 +81,8 @@ class MoveTest(unittest.TestCase):
             self.claude, self.screen = None, ""
         elif len(keys) == 2 and keys[1] == "Enter" and "--resume" in keys[0]:
             self.claude, self.started = 300, True
-            self.cwd = str(self.dest)
+            self.cwd = self.relaunch_cwd or str(self.dest)
+            self.live_profile = "alice" if "-u CLAUDE_CONFIG_DIR" in keys[0] else "work"
             if self.trust_shows:
                 self.has_file, self.screen = False, self.screen_prefix + (TRUST_YES if self.cursor_on_yes else TRUST).format(
                     path=self.trust_shows)
@@ -113,6 +117,9 @@ class MoveTest(unittest.TestCase):
     def launch(self):
         return [f"cd {self.dest} && env -u CLAUDE_CONFIG_DIR claude --resume {A}", "Enter"]
 
+
+
+class MoveTest(MoveFixture):
     def test_idle_moves_creates_dir_accepts_trust_and_saves(self):
         self.trust_shows = str(self.dest)
         self.assertEqual(self.move(), 0)
@@ -635,3 +642,106 @@ class CodexMoveTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SwitchTest(MoveFixture):
+    """sampan switch: the move flow in the session's own directory, under another profile."""
+
+    def setUp(self):
+        super().setUp()
+        self.relaunch_cwd = str(self.old)
+        self.side = self.cfg.default_profile.projects_dir / "-old" / A
+        (self.side / "subagents").mkdir(parents=True)
+        (self.side / "subagents" / "x.jsonl").write_text("s")
+
+    def switch(self, profile="work", **kw):
+        kw.setdefault("own_pane", "%9")
+        return cmd_switch(self.cfg, self.runner(), self.msgs.append, "994-monitor", profile,
+                          sleep=lambda _: None, proc_root=NO_PROC, **kw)
+
+    def old_transcript(self):
+        return self.cfg.default_profile.projects_dir / "-old" / f"{A}.jsonl"
+
+    def new_transcript(self):
+        return self.cfg.profiles["work"].projects_dir / "-old" / f"{A}.jsonl"
+
+    def test_running_moves_transcript_and_relaunches_under_new_profile(self):
+        self.assertEqual(self.switch(), 0)
+        work = self.cfg.profiles["work"].config_dir
+        self.assertIn([f"cd {self.old} && env CLAUDE_CONFIG_DIR={work} claude --resume {A}", "Enter"], self.keys)
+        self.assertFalse(self.old_transcript().exists())  # moved, never copied: one copy only
+        self.assertTrue(self.new_transcript().exists())
+        self.assertTrue((self.new_transcript().with_suffix("") / "subagents" / "x.jsonl").exists())
+        self.assertFalse(self.side.exists())
+        self.assertEqual(self.row().profile, "work")
+        self.assertEqual(self.row().cwd, str(self.old))
+        text = "\n".join(self.msgs)
+        self.assertIn("已把逐字稿搬到 work", text)
+        self.assertIn("✔ 994-monitor 已換到 work", text)
+
+    def test_shared_projects_moves_nothing(self):
+        work = self.cfg.profiles["work"].config_dir
+        (work / "projects").symlink_to(self.cfg.default_profile.projects_dir)
+        self.assertEqual(self.switch(), 0)
+        self.assertTrue(self.old_transcript().exists())
+        self.assertNotIn("已把逐字稿搬到", "\n".join(self.msgs))
+        self.assertEqual(self.row().profile, "work")
+
+    def test_plugin_gap_is_shown_but_does_not_block(self):
+        self.assertEqual(self.switch(), 0)
+        self.assertIn("⚠ work 沒有裝：superpowers@claude-plugins-official", "\n".join(self.msgs))
+
+    def test_busy_is_refused_and_nothing_moves(self):
+        self.status = "busy"
+        self.sync_files()
+        self.assertEqual(self.switch(), 1)
+        self.assertEqual(self.keys, [])
+        self.assertTrue(self.old_transcript().exists())
+        self.assertIn("等它閒置再換", "\n".join(self.msgs))
+
+    def test_transcript_already_in_new_profile_is_refused_untouched(self):
+        self.new_transcript().parent.mkdir(parents=True)
+        self.new_transcript().write_text("other")
+        self.assertEqual(self.switch(), 1)
+        self.assertEqual(self.keys, [])
+        self.assertTrue(self.old_transcript().exists())
+        self.assertIn("是兩份", "\n".join(self.msgs))
+
+    def test_exit_timeout_gives_quota_menu_hint_and_moves_nothing(self):
+        self.exits_on_exit = False
+        self.assertEqual(self.switch(timeout=3), 1)
+        self.assertTrue(self.old_transcript().exists())
+        text = "\n".join(self.msgs)
+        self.assertIn("沒有用 work 啟動", text)
+        self.assertIn("按 Esc 再打 /exit", text)
+
+    def test_same_profile_unknown_profile_and_codex(self):
+        self.assertEqual(self.switch("alice"), 0)
+        self.assertIn("已經是 alice", self.msgs[-1])
+        self.assertEqual(self.switch("nope"), 2)
+        write_rows(self.cfg.registry_path, [Row("994-monitor", "codex", "", A, str(self.old))], "t", self.cfg.history_dir)
+        self.assertEqual(self.switch(), 2)
+        self.assertIn("只有 Claude session 能換 profile", self.msgs[-1])
+        self.assertEqual(self.keys, [])
+
+    def test_dry_run_changes_nothing(self):
+        self.assertEqual(self.switch(dry_run=True), 0)
+        self.assertEqual(self.keys, [])
+        self.assertTrue(self.old_transcript().exists())
+        self.assertEqual(self.row().profile, "alice")
+        self.assertIn("搬逐字稿到 work", "\n".join(self.msgs))
+
+    def test_stopped_session_changes_registry_moves_transcript_and_restores(self):
+        self.claude = None
+        calls = []
+        r = self.runner()
+        r.on(["tmux", "-u", "list-panes"], cp(out=pane_line("other", "%5", 500, "zsh", "/x") + "\n"))
+        rc = cmd_switch(self.cfg, r, self.msgs.append, "994-monitor", "work", sleep=lambda _: None,
+                        proc_root=NO_PROC, restore_fn=lambda *a, **k: calls.append(k) or 0)
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls[0]["names"], ("994-monitor",))
+        self.assertFalse(calls[0]["confirm"])
+        self.assertEqual(self.row().profile, "work")
+        self.assertTrue(self.new_transcript().exists())
+        self.assertFalse(self.old_transcript().exists())
+        self.assertEqual(self.keys, [])

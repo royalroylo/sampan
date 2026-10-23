@@ -5,6 +5,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Switch a Claude session to another profile (another account, e.g. when one has used up its quota) and continue the
+  same conversation: `P` in the ui, `sampan switch <name> <profile> [--dry-run]` on the command line. A running session
+  exits and is reattached under the new profile in its own directory (trusting it automatically, as `move` does); a
+  stopped one is reattached under the new profile directly. Plugins the new profile does not list are named first. If
+  the new profile cannot see the transcript, it is moved there (never copied, so there is one copy only); an existing
+  transcript of the same conversation in the new profile is never overwritten.
+
 ## [0.6.4] - 2026-10-23
 
 ### Fixed

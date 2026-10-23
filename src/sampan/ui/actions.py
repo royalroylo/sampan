@@ -14,7 +14,7 @@ from ..tmux import TMUX, Tmux
 from .dirpick import recent_dirs, sessions_by_dir
 from .state import row_text
 
-HELP = ("編號 = 接上／切過去（已停止的先接回）；s 停掉　m 搬目錄　e 改名　R 接回　A 接手 tmux 外的　r retire　a activate"
+HELP = ("編號 = 接上／切過去（已停止的先接回）；s 停掉　m 搬目錄　P 換 profile　e 改名　R 接回　A 接手 tmux 外的　r retire　a activate"
         "　n 開新 session　w 立即存檔　/文字 搜尋　q 離開")
 
 
@@ -163,6 +163,39 @@ def _move(cfg, run, out, ask, name, agent, own_pane, move_fn, choose_dir_fn=None
     return move_fn(cfg, run, out, name, str(dest), own_pane=own_pane, **(prompt_kw or {}))
 
 
+def _switch(cfg, run, out, ask, r, own_pane, switch_fn, prompt_kw=None):
+    """P: pick another profile for a Claude session, confirm, then continue the same conversation under it."""
+    if r.agent != "claude":
+        out(f"{r.name} 是 {r.agent}，只有 Claude session 能換 profile")
+        return 1
+    profiles = list(cfg.profiles)
+    for i, p in enumerate(profiles, 1):
+        label = cfg.profiles[p].label
+        out(f"  [{i}] {p}{f'（{label}）' if label else ''}{'  ← 目前' if p == r.profile else ''}")
+    raw = _ask(ask, "換到哪個 profile？(編號，Enter 取消): ")
+    if not raw:
+        out("已取消")
+        return 0
+    if not raw.isdigit() or not 1 <= int(raw) <= len(profiles):
+        out(f"無效編號：{raw}")
+        return 1
+    new = profiles[int(raw) - 1]
+    if new == r.profile:
+        out(f"{r.name} 已經是 {new}")
+        return 0
+    label = cfg.profiles[new].label
+    out(f"將換 profile：{r.name}　{r.profile} → {new}{f'（{label}）' if label else ''}")
+    gap = session_run.gap_line(cfg, r.profile, new) if r.profile in cfg.profiles else None
+    if gap:
+        out(gap)
+    out("會用新 profile 接回這段對話" if r.state is State.STOPPED
+        else "會結束這個 session 的 claude，用新 profile 接回同一段對話")
+    if (_ask(ask, "確定？(y/N): ") or "").lower() != "y":
+        out("已取消")
+        return 0
+    return switch_fn(cfg, run, out, r.name, new, own_pane=own_pane, warn_gap=False, **(prompt_kw or {}))
+
+
 def _rename(cfg, run, out, ask, name, rename_fn):
     new = (_ask(ask, f"{name} 的新名稱（Enter 取消）: ") or "").strip()
     if not new:
@@ -207,6 +240,9 @@ def _plain_action(ask, out, rows, current):
     if choice.isdigit():
         picked = _pick(lambda _p: choice, out, rows, "", many=False)
         return ("attach", picked) if picked else ("invalid", [])
+    if choice == "P":
+        picked = _pick(ask, out, rows, "要換哪一個的 profile？(編號): ", many=False)
+        return ("switch", picked) if picked else ("quit" if picked is None else "invalid", [])
     if c == "n":
         return ("new", [])
     if c == "s":
@@ -286,7 +322,7 @@ def _first_opened(out, opened, verb):
 def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, picker_fn=None,
            rows_fn=status_rows, exec_fn=os.execvp, stop_fn=session_run.cmd_stop,
            new_fn=session_run.cmd_new, set_state_fn=session_run.cmd_set_state, move_fn=session_run.cmd_move,
-           rename_fn=session_run.cmd_rename,
+           rename_fn=session_run.cmd_rename, switch_fn=session_run.cmd_switch,
            restore_fn=restore_mod.cmd_restore, restore_picker_fn=None,
            adopt_fn=adopt_mod.cmd_adopt, adopt_picker_fn=None, save_fn=save_mod.cmd_save, loop=False,
            attach_fn=None, choose_dir_fn=None, updater=None, update_fn=update_mod.do_update, argv=(), prompt_fn=None):
@@ -342,6 +378,13 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
         agent = next((r.agent for r in rows if r.name == names[0] and r.agent != "-"), "agent")
         return _move(cfg, run, out, ask, names[0], agent, own_pane, move_fn, choose_dir_fn, kw), None
 
+    def _switch_row(names, rows, kw):
+        r = next((x for x in rows if x.name == names[0]), None)
+        if r is None:
+            out(f"找不到 {names[0]}")
+            return 1, None
+        return _switch(cfg, run, out, ask, r, own_pane, switch_fn, kw), None
+
     # one handler per action: (names, rows, kw) -> (rc, session to attach to, or None);
     # an unknown action raises directly and is never written to the registry as a state
     handlers = {
@@ -355,6 +398,7 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
         "adopt": _adopt,
         "rename": lambda names, rows, kw: (_rename(cfg, run, out, ask, names[0], rename_fn), None),
         "move": _move_row,
+        "switch": _switch_row,
         "retired": lambda names, rows, kw: (set_state_fn(cfg, out, names[0], "retired"), None),
         "active": lambda names, rows, kw: (set_state_fn(cfg, out, names[0], "active"), None),
     }

@@ -117,6 +117,15 @@ class CliTest(unittest.TestCase):
             cli.main(["new", "x", "codex", "/tmp"])
         self.assertEqual(nw.call_args.args[3:6], ("x", "codex", "/tmp"))
 
+    def test_switch_parses_and_passes_own_pane(self):
+        os.environ["TMUX_PANE"] = "%4"
+        with mock.patch("sampan.session_run.cmd_switch", return_value=0) as sw, \
+                mock.patch("sys.stdin.isatty", return_value=False):
+            self.assertEqual(cli.main(["switch", "a", "work", "--dry-run", "--timeout", "5"]), 0)
+        self.assertEqual(sw.call_args.args[3:5], ("a", "work"))
+        kw = sw.call_args.kwargs
+        self.assertEqual((kw["dry_run"], kw["timeout"], kw["own_pane"], kw["on_prompt"]), (True, 5, "%4", None))
+
     def test_session_group_is_gone(self):
         with self.assertRaises(SystemExit), mock.patch("sys.stderr", io.StringIO()):
             cli.main(["session", "save"])

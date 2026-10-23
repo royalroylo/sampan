@@ -28,6 +28,7 @@
 | 一次接回好幾個 | `R` | 勾選清單（預設勾最近 7 天有動過的），接回後進到第一個 |
 | 把 tmux 外的終端機（任何終端機程式）裡的 Claude 收進來 | `A` | 勾選要接手的，逐一取名；你自己在原本那個終端機分頁打 `/exit`，sampan 等它結束後在 tmux 接回同一段對話，然後進去 |
 | 改名 | `e` | tmux 與登記表一起改，agent 照常跑 |
+| 換帳號繼續（例如額度用完） | `P`（只有 Claude） | 列出 profile 讓你選，確認後 claude 結束、用新的 profile 在同一個目錄接回同一段對話；新帳號第一次進這個目錄時自動信任（規則同 `m`）。已停止的 session 直接用新 profile 接回。新 profile 沒裝原本有的 plugin 時會先列出來，但照樣可以換。卡在額度選單、等不到 claude 結束時，sampan 不亂按鍵，會請你自己按 Esc 再打 `/exit`，之後再按 `P` 一次 |
 | 換工作目錄 | `m` | 用選目錄畫面挑新目錄（從它現在的目錄開始；那個目錄已經不在時，從 `[ui] start_dir` 開始，和 `n` 一樣），確認後 agent 結束、在新目錄接回同一段對話 |
 | 這件事做完了 | `r` | 標成 retired，之後不會出現在接回清單 |
 | 立刻存一次登記表 | `w` | 平常每個整點會自動存 |
@@ -83,6 +84,7 @@
 | 重開機後接回 | `sampan restore [名稱…] [--all] [--dry-run]` |
 | 接手在 tmux 外（例如終端機程式的分頁）跑的 claude／codex | `sampan adopt [--dry-run]`（或 ui 按 A）：列出 tmux 外的 claude／codex（目錄、最後活動、最後一句話），勾選後逐一問 session 名稱；你自己在原視窗 `/exit`（Codex：`/quit`），sampan 等它結束後才在新的 tmux session 接回同一段對話並登記。sampan 不對原視窗按任何鍵；判斷不出對話 id 或 profile 的不能選 |
 | 改 session 名稱 | `sampan rename <名稱> <新名稱>`（或 ui 按 e）：tmux session 與登記表一起改，agent 照常執行、不送任何按鍵。名稱不能含 `.` 或 `:` |
+| session 換 profile（換帳號）繼續同一段對話 | `sampan switch <名稱> <profile> [--dry-run]`（或 ui 按 P）：執行中的照 `sampan move` 的流程在原目錄、用新 profile 接回；已停止的改登記表後直接接回。逐字稿在新 profile 讀不到時（各 profile 的 `projects/` 沒共用）會**搬**過去而不是複製，永遠只有一份；新 profile 已經有同一段對話的逐字稿時不動，請你先決定留哪份。Codex 沒有 profile，不適用 |
 | session 換到別的工作目錄 | `sampan move <名稱> <目錄>`（或 ui 按 m）：結束 agent、在新目錄接回同一段對話、自動信任新目錄（只在提示顯示的路徑就是新目錄時）、更新登記表。目錄不存在會建立；忙碌中、worktree、自己的 pane 不動 |
 | 某個 session 以後不用重開 | `sampan retire <名稱>`（恢復：`sampan activate <名稱>`） |
 | 看各 profile 的 plugin 版本 | `sampan plugins status` |

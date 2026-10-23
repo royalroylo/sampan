@@ -146,3 +146,41 @@ def _last_user_text(path):
                 and not INJECTED_TAG.match(content)):
             return content
     return ""
+
+
+def transcript_carry(profiles, old, new, session_id):
+    """What switching session_id from profile old to profile new needs: (transcript to move, None), (None, None) when new
+    already sees it (a shared projects/), or (None, reason) when it cannot be done. Never two copies: a transcript the new
+    profile already has under the same id is a reason, not something to overwrite."""
+    profiles = list(profiles)
+    by_name = {p.name: p for p in profiles}
+    path = find_transcript(profiles, session_id, prefer=old)
+    if path is None:
+        return None, f"找不到逐字稿 {session_id[:8]}，不改開新對話"
+    if new in transcript_owners(profiles, path):
+        return None, None
+    dest = Path(by_name[new].projects_dir) / path.parent.name / path.name
+    if dest.exists():
+        return None, f"{new} 已經有同一個對話的逐字稿（{dest}），和 {path} 是兩份；請先決定留哪一份"
+    return path, None
+
+
+def move_transcript(path, projects_dir):
+    """Move a transcript and its sidecar directory (<id>/: subagents, tool results) into projects_dir under the same
+    project folder; returns the new path. A rename on the same filesystem, so it is never half done."""
+    import shutil
+
+    dest_dir = Path(projects_dir) / path.parent.name
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    side = path.with_suffix("")
+    moved = []
+    try:
+        for src in [path] + ([side] if side.is_dir() else []):
+            target = dest_dir / src.name
+            shutil.move(str(src), str(target))
+            moved.append((src, target))
+    except OSError:
+        for src, target in reversed(moved):  # put back what already moved, so the conversation stays in one place
+            shutil.move(str(target), str(src))
+        raise
+    return dest_dir / path.name
