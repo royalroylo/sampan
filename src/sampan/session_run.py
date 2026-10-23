@@ -656,7 +656,11 @@ def cmd_switch(cfg, run, out, name, profile, *, dry_run=False, own_pane=None, on
         out(f"❌ {name}：目錄不存在 {row.cwd}，不換")
         return 2
     from .restore import _observe, _old_agent_alive
-    live = _observe(cfg, run)
+    try:
+        live = _observe(cfg, run)
+    except TmuxUnreadable as e:
+        out(f"❌ {e}；不動 {name}")
+        return 2
     where = live.by_id.get(row.session_id)
     if where is not None or _old_agent_alive(live.procs, os.kill, row.pid):
         out(f"❌ {name}：這個對話{f'已在 {where} 執行' if where else '上次記錄的 claude 還在執行'}，不換（避免兩邊同時寫）")
