@@ -188,8 +188,8 @@ def _switch(cfg, run, out, ask, r, own_pane, switch_fn, prompt_kw=None):
     gap = session_run.gap_line(cfg, r.profile, new) if r.profile in cfg.profiles else None
     if gap:
         out(gap)
-    out("會用新 profile 接回這段對話" if r.state is State.STOPPED
-        else "會結束這個 session 的 claude，用新 profile 接回同一段對話")
+    out("會結束這個 session 的 claude，用新 profile 接回同一段對話" if r.state is State.RUNNING
+        else "會用新 profile 接回這段對話")
     if (_ask(ask, "確定？(y/N): ") or "").lower() != "y":
         out("已取消")
         return 0

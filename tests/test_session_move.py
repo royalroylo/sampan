@@ -118,7 +118,6 @@ class MoveFixture(unittest.TestCase):
         return [f"cd {self.dest} && env -u CLAUDE_CONFIG_DIR claude --resume {A}", "Enter"]
 
 
-
 class MoveTest(MoveFixture):
     def test_idle_moves_creates_dir_accepts_trust_and_saves(self):
         self.trust_shows = str(self.dest)
@@ -640,9 +639,6 @@ class CodexMoveTest(unittest.TestCase):
             self.assertFalse(self.dest.exists())
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class SwitchTest(MoveFixture):
     """sampan switch: the move flow in the session's own directory, under another profile."""
@@ -705,7 +701,7 @@ class SwitchTest(MoveFixture):
         self.assertEqual(self.switch(), 1)
         self.assertEqual(self.keys, [])
         self.assertTrue(self.old_transcript().exists())
-        self.assertIn("是兩份", "\n".join(self.msgs))
+        self.assertIn("兩份逐字稿", "\n".join(self.msgs))
 
     def test_exit_timeout_gives_quota_menu_hint_and_moves_nothing(self):
         self.exits_on_exit = False
@@ -745,3 +741,109 @@ class SwitchTest(MoveFixture):
         self.assertTrue(self.new_transcript().exists())
         self.assertFalse(self.old_transcript().exists())
         self.assertEqual(self.keys, [])
+
+    def test_interrupted_earlier_switch_is_completed(self):
+        # an earlier switch moved the transcript, then the relaunch failed: the row may still say alice
+        self.new_transcript().parent.mkdir(parents=True)
+        self.old_transcript().rename(self.new_transcript())
+        self.assertEqual(self.switch(), 0)
+        self.assertEqual(self.row().profile, "work")
+        self.assertNotIn("已把逐字稿搬到", "\n".join(self.msgs))
+
+    def test_registry_follows_the_transcript_even_if_the_relaunch_fails(self):
+        real_send = self.send
+
+        def no_relaunch(args):  # the new account never comes up (e.g. not logged in)
+            if "--resume" in " ".join(args):
+                self.keys.append(args[5:])
+                return cp()
+            return real_send(args)
+        self.send = no_relaunch
+        self.assertEqual(self.switch(timeout=3), 1)
+        self.assertTrue(self.new_transcript().exists())
+        self.assertEqual(self.row().profile, "work")  # restore / switch still find it
+
+    def test_other_conversation_in_the_pane_is_not_success(self):
+        real_send = self.send
+
+        def wrong_id(args):
+            res = real_send(args)
+            if "--resume" in " ".join(args):  # something else came up: a fresh conversation id
+                write_session(self.cfg, "work", self.claude, sid="bbbbbbbb-0000-4000-8000-000000000002",
+                              cwd=str(self.old), status="idle", tmux="994-monitor:@1.%1")
+            return res
+        self.send = wrong_id
+        self.assertEqual(self.switch(timeout=3), 1)
+        self.assertNotIn("✔ 994-monitor 已換到", "\n".join(self.msgs))
+
+    def test_move_failure_puts_everything_back(self):
+        import os
+        from unittest import mock
+
+        real = os.rename
+        calls = []
+
+        def flaky(src, dst):
+            calls.append(src)
+            if len(calls) == 2:  # the sidecar directory fails after the .jsonl moved
+                raise OSError("boom")
+            return real(src, dst)
+        with mock.patch("sampan.claude_state.os.rename", side_effect=flaky):
+            self.assertEqual(self.switch(), 1)
+        self.assertTrue(self.old_transcript().exists())
+        self.assertTrue(self.side.is_dir())
+        self.assertFalse(self.new_transcript().exists())
+        self.assertIn("逐字稿搬不過去（boom）", "\n".join(self.msgs))
+        self.assertEqual(self.row().profile, "alice")
+
+    def test_sidecar_already_in_new_profile_is_refused(self):
+        (self.cfg.profiles["work"].projects_dir / "-old" / A).mkdir(parents=True)
+        self.assertEqual(self.switch(), 1)
+        self.assertEqual(self.keys, [])
+        self.assertIn("附屬資料夾", "\n".join(self.msgs))
+
+    def test_copy_in_another_project_folder_is_refused(self):
+        other = self.cfg.profiles["work"].projects_dir / "-elsewhere"
+        other.mkdir(parents=True)
+        (other / f"{A}.jsonl").write_text("x")
+        self.assertEqual(self.switch(), 1)
+        self.assertIn("兩份逐字稿", "\n".join(self.msgs))
+
+    def stopped_switch(self, **kw):
+        self.claude = None
+        self.calls = []
+        r = self.runner()
+        r.on(["tmux", "-u", "list-panes"], cp(out=pane_line("other", "%5", 500, "zsh", "/x") + "\n"))
+        return cmd_switch(self.cfg, r, self.msgs.append, "994-monitor", "work", sleep=lambda _: None,
+                          proc_root=NO_PROC, restore_fn=lambda *a, **k: self.calls.append(k) or 0, **kw)
+
+    def test_stopped_retired_or_missing_dir_is_refused_untouched(self):
+        write_rows(self.cfg.registry_path, [Row("994-monitor", "claude", "alice", A, str(self.old), "retired")], "t",
+                   self.cfg.history_dir)
+        self.assertEqual(self.stopped_switch(), 2)
+        self.assertIn("sampan activate 994-monitor", self.msgs[-1])
+        write_rows(self.cfg.registry_path, [Row("994-monitor", "claude", "alice", A, str(self.tmp / "gone"))], "t",
+                   self.cfg.history_dir)
+        self.assertEqual(self.stopped_switch(), 2)
+        self.assertIn("目錄不存在", self.msgs[-1])
+        self.assertEqual(self.calls, [])
+        self.assertTrue(self.old_transcript().exists())
+
+    def test_stopped_but_conversation_live_elsewhere_is_refused(self):
+        self.claude = None
+        r = self.runner()
+        r.on(["tmux", "-u", "list-panes"], cp(out=pane_line("other", "%5", 100, "claude", str(self.old)) + "\n"))
+        r.on(["ps", "-A"], cp(out=ps_line(100, 1, "-zsh", "-zsh") + "\n" + ps_line(400, 100, "claude", "claude") + "\n"))
+        write_session(self.cfg, "alice", 400, sid=A, cwd=str(self.old), status="idle", tmux="other:@5.%5")
+        calls = []
+        rc = cmd_switch(self.cfg, r, self.msgs.append, "994-monitor", "work", sleep=lambda _: None,
+                        proc_root=NO_PROC, restore_fn=lambda *a, **k: calls.append(k) or 0)
+        self.assertEqual(rc, 1)
+        self.assertIn("已在 other 執行", self.msgs[-1])
+        self.assertEqual(calls, [])
+        self.assertTrue(self.old_transcript().exists())
+        self.assertEqual(self.row().profile, "alice")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -394,6 +394,9 @@ def cmd_move(cfg, run, out, name, dest, *, dry_run=False, sleep=time.sleep, time
     if Path(row.cwd).resolve() == target and not switching:
         out(f"= {name} 已經在 {target}")
         return 0
+    if switching and not target.is_dir():
+        out(f"❌ {name}：目錄不存在 {target}，不換")
+        return 2
     tmux = Tmux(run)
     try:
         all_panes = tmux.require_panes()
@@ -475,9 +478,10 @@ def cmd_move(cfg, run, out, name, dest, *, dry_run=False, sleep=time.sleep, time
             return 1
     carry = None
     if agent == "claude":
-        why = transcript_problem(cfg.profiles.values(), row.profile, session_id)
-        if why is None and switching:
+        if switching:
             carry, why = transcript_carry(cfg.profiles.values(), row.profile, new_prof, session_id)
+        else:
+            why = transcript_problem(cfg.profiles.values(), row.profile, session_id)
         if why:
             out(f"❌ {name}：{why}，不動")
             return 1
@@ -501,7 +505,7 @@ def cmd_move(cfg, run, out, name, dest, *, dry_run=False, sleep=time.sleep, time
             if waited >= timeout:
                 out(f"❌ {name}：{timeout} 秒內 {agent} 沒結束，沒有{where_to}啟動")
                 if switching:
-                    out(f"  可能停在額度或其他選單：請進去按 Esc 再打 /exit，之後再換一次（已停止的 session 會直接用 {new_prof} 接回）")
+                    out(f"  可能停在額度或其他選單：請進去按 Esc 再打 /exit，claude 結束後再按一次 P（或 sampan switch {name} {new_prof}）")
                 return 1
             sleep(1)
             waited += 1
@@ -515,6 +519,10 @@ def cmd_move(cfg, run, out, name, dest, *, dry_run=False, sleep=time.sleep, time
             out(f"❌ {name}：逐字稿搬不過去（{e}），沒有{where_to}啟動；對話還在 {row.profile}，sampan restore {name} 可接回")
             return 1
         out(f"  已把逐字稿搬到 {new_prof}")
+    if switching and not _set_profile(cfg, name, session_id, new_prof):
+        # registry and transcript must agree before anything is launched: if the relaunch then fails (e.g. the new
+        # account is not logged in), restore and switch still find the conversation under the new profile
+        out(f"⚠ {name}：登記表沒能改成 {new_prof}；之後 sampan save 會依實際狀態更新")
     tmux.send_keys(pane.pane_id, "C-u")
     send_line(tmux, pane.pane_id, agent, cmd, sleep)
     out(f"▶ {name}：{f'用 {new_prof}' if switching else f'在 {target}'} 接回 {session_id[:8]}")
@@ -546,8 +554,9 @@ def cmd_move(cfg, run, out, name, dest, *, dry_run=False, sleep=time.sleep, time
         if panes_now is None:  # unreadable this round: make no judgement, look again next round
             continue
         hit = _agents(cfg, run, panes_now, list_procs(run), proc_root)[0].get(pane.pane_id)
-        if hit is not None and hit.agent == agent and (agent == "claude" or
-                                                       (hit.status == "idle" and hit.session_id == session_id)):
+        if hit is not None and hit.agent == agent and ((agent == "claude" and not switching) or
+                                                       hit.session_id == session_id and
+                                                       (agent == "claude" or hit.status == "idle")):
             cmd_save(cfg, run, lambda _m: None, quiet=True, proc_root=proc_root)  # report only the move result
             now = next((r for r in load_rows(cfg.registry_path) if r.tmux == name), None)
             if switching:
@@ -573,6 +582,22 @@ def cmd_move(cfg, run, out, name, dest, *, dry_run=False, sleep=time.sleep, time
             return 1
     out(f"⚠ {name}：{timeout} 秒內沒看到 {agent} 接回，請到視窗裡看；之後 sampan save 會更新登記表")
     return 1
+
+
+def _set_profile(cfg, name, session_id, profile):
+    """Record profile on the registry row of name, only while it still holds session_id; returns whether it did."""
+    with lock(cfg.state_dir):
+        try:
+            rows = load_rows(cfg.registry_path)
+        except RegistryError:
+            return False
+        row = next((r for r in rows if r.tmux == name and r.session_id == session_id), None)
+        if row is None:
+            return False
+        if row.profile != profile:
+            row.profile = profile
+            write_rows(cfg.registry_path, rows, now_iso(), cfg.history_dir)
+        return True
 
 
 def plugin_gap(cfg, old, new):
@@ -624,25 +649,38 @@ def cmd_switch(cfg, run, out, name, profile, *, dry_run=False, own_pane=None, on
         return cmd_move(cfg, run, out, name, row.cwd, profile=profile, dry_run=dry_run, sleep=sleep, timeout=timeout,
                         own_pane=own_pane, proc_root=proc_root, on_prompt=on_prompt)
     # stopped: no agent to end; change the registry row, then reattach under the new profile
-    why = transcript_problem(cfg.profiles.values(), row.profile, row.session_id)
-    carry = None
-    if why is None:
-        carry, why = transcript_carry(cfg.profiles.values(), row.profile, profile, row.session_id)
+    if row.state != "active":
+        out(f"❌ {name} 是 {row.state}；要接回請先 sampan activate {name}")
+        return 2
+    if not Path(row.cwd).is_dir():
+        out(f"❌ {name}：目錄不存在 {row.cwd}，不換")
+        return 2
+    from .restore import _observe, _old_agent_alive
+    live = _observe(cfg, run)
+    where = live.by_id.get(row.session_id)
+    if where is not None or _old_agent_alive(live.procs, os.kill, row.pid):
+        out(f"❌ {name}：這個對話{f'已在 {where} 執行' if where else '上次記錄的 claude 還在執行'}，不換（避免兩邊同時寫）")
+        return 1
+    key = (row.session_id, row.cwd, row.profile, row.state)
+    _carry, why = transcript_carry(cfg.profiles.values(), row.profile, profile, row.session_id)
     if why:
         out(f"❌ {name}：{why}，不動")
         return 1
     if dry_run:
-        moved = f"搬逐字稿到 {profile}、" if carry else ""
+        moved = f"搬逐字稿到 {profile}、" if _carry else ""
         out(f"[dry-run] {name}（已停止）：{moved}登記表改成 {profile}，再用 {profile} 接回")
         return 0
-    old = row.profile
     with lock(cfg.state_dir):
         rows = _load(cfg, out)
         if rows is None:
             return 2
         row = next((r for r in rows if r.tmux == name), None)
-        if row is None or row.profile != old:
+        if row is None or (row.session_id, row.cwd, row.profile, row.state) != key:
             out(f"❌ {name} 的登記剛被改過，什麼都沒動；再試一次")
+            return 1
+        carry, why = transcript_carry(cfg.profiles.values(), row.profile, profile, row.session_id)  # again, under the lock
+        if why:
+            out(f"❌ {name}：{why}，不動")
             return 1
         if carry is not None:
             try:

@@ -149,27 +149,36 @@ def _last_user_text(path):
 
 
 def transcript_carry(profiles, old, new, session_id):
-    """What switching session_id from profile old to profile new needs: (transcript to move, None), (None, None) when new
-    already sees it (a shared projects/), or (None, reason) when it cannot be done. Never two copies: a transcript the new
-    profile already has under the same id is a reason, not something to overwrite."""
+    """What continuing session_id under profile new (instead of old) needs: (transcript to move, None),
+    (None, None) when new already sees it (a shared projects/, or an earlier switch that moved it but was interrupted),
+    or (None, reason). There is only ever one copy: a second transcript of the same conversation anywhere in new's or
+    old's projects is a reason to stop, never something to overwrite."""
     profiles = list(profiles)
     by_name = {p.name: p for p in profiles}
-    path = find_transcript(profiles, session_id, prefer=old)
+    path = find_transcript(profiles, session_id, prefer=new)
     if path is None:
         return None, f"找不到逐字稿 {session_id[:8]}，不改開新對話"
-    if new in transcript_owners(profiles, path):
+    real = os.path.realpath(path)
+    owners = transcript_owners(profiles, path)
+    copies = [h for name in (old, new) for h in Path(by_name[name].projects_dir).glob(f"*/{session_id}.jsonl")
+              if os.path.realpath(h) != real]
+    if copies:
+        return None, f"同一個對話有兩份逐字稿（{path}、{copies[0]}）；請先決定留哪一份"
+    if new in owners:
         return None, None
-    dest = Path(by_name[new].projects_dir) / path.parent.name / path.name
-    if dest.exists():
-        return None, f"{new} 已經有同一個對話的逐字稿（{dest}），和 {path} 是兩份；請先決定留哪一份"
+    if old not in owners:
+        return None, f"逐字稿在 profile {owners[0] if owners else path.parent}，不是 {old}"
+    dest_dir = Path(by_name[new].projects_dir) / path.parent.name
+    side = path.with_suffix("")
+    if (dest_dir / side.name).exists():
+        return None, f"{new} 已經有這個對話的附屬資料夾（{dest_dir / side.name}）；請先決定留哪一份"
     return path, None
 
 
 def move_transcript(path, projects_dir):
     """Move a transcript and its sidecar directory (<id>/: subagents, tool results) into projects_dir under the same
-    project folder; returns the new path. A rename on the same filesystem, so it is never half done."""
-    import shutil
-
+    project folder; returns the new path. Renames only (same filesystem), so each piece moves whole; a failure puts
+    back what already moved and raises the original error."""
     dest_dir = Path(projects_dir) / path.parent.name
     dest_dir.mkdir(parents=True, exist_ok=True)
     side = path.with_suffix("")
@@ -177,10 +186,13 @@ def move_transcript(path, projects_dir):
     try:
         for src in [path] + ([side] if side.is_dir() else []):
             target = dest_dir / src.name
-            shutil.move(str(src), str(target))
+            os.rename(src, target)
             moved.append((src, target))
     except OSError:
-        for src, target in reversed(moved):  # put back what already moved, so the conversation stays in one place
-            shutil.move(str(target), str(src))
+        for src, target in reversed(moved):  # keep the conversation in one place
+            try:
+                os.rename(target, src)
+            except OSError:
+                pass
         raise
     return dest_dir / path.name
