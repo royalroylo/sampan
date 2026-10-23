@@ -9,8 +9,14 @@ since those go through them) and os.exec* -- and raises RealCommandBlocked for:
     Read-only local git (e.g. `git ls-files` in test_scrub) stays allowed.
 
 Shell strings (shell=True, or the argument after `sh -c` / `bash -c` / `zsh -c` ...) are split into simple commands on
-; & | newline ( ) and backticks, and every word is checked, so `sh -c 'cd x && tmux kill-server'` and
-`sh -c 'git ls-remote ...'` are blocked too.
+; & | ( ) and backticks, and every word is checked against the blocked names, so `sh -c 'cd x && tmux kill-server'`
+is blocked wherever tmux appears. git is checked per simple command (its subcommand), so `sh -c 'git ls-remote ...'`
+is blocked too. Limits of this word-level parse (it is not a shell):
+  * newlines split commands only inside an argv `-c` argument; a shell=True string is first split on whitespace and
+    re-joined with spaces, so there a newline does not end a command and a git subcommand on the next line is not
+    seen as one (blocked names such as tmux are still caught anywhere);
+  * quotes are dropped, so a quoted value with spaces after a git option (`git -C 'my repo' fetch`) shifts the words
+    and the subcommand is misread.
 
 The executable is matched on its basename, so /usr/sbin/lsof is caught like lsof.
 

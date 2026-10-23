@@ -43,7 +43,7 @@ Tip: sampan is a long name to type, and on macOS `sam` plus Tab collides with `/
 - macOS: one launchd job runs `sampan save` every hour. It only saves.
 - Claude's `settings.json` is not touched unless you run `sampan init --hook` (or accept repairing a hook installed earlier).
 - It types into tmux panes only when you act: open, resume, stop or move.
-- Network: while the UI is open it checks sampan's version tags on GitHub at most every 6 hours; `U` or `sampan update` checks again right away.
+- Network: while the UI is open it checks sampan's version tags on GitHub at most every 6 hours; `U` checks again right away when no newer version is known yet, and `sampan update` always checks again.
 - `sampan init` asks questions and must be run by you in a terminal. It refuses to run without one unless `--yes` is given.
 
 More in [SECURITY.md](SECURITY.md).
@@ -61,7 +61,7 @@ Type `sampan`. The session list is on the left, an info card for the row under t
 | `s` | Put it away (the agent exits normally, the conversation is kept) |
 | `R` | Resume several at once |
 | `m` | Change working directory |
-| `U` | Update sampan (checks for the newest version right then; when already up to date it offers a reinstall) |
+| `U` | Update sampan (updates when a newer version is already known; otherwise checks right then, and when already up to date it offers a reinstall) |
 | `q` | Quit |
 
 - Starting the day: `sampan`, then Enter on the one you want.

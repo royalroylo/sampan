@@ -214,7 +214,8 @@ def cmd_stop(cfg, run, out, *, names=(), profile=None, force=False, dry_run=Fals
     # save's lines are held back until we know tmux is readable: when it is not, save has said so already and
     # the stop message below says it again, so only that one is shown
     save_lines = []
-    if not dry_run and cmd_save(cfg, run, save_lines.append, quiet=True, proc_root=proc_root) == 2:
+    save_rc = 0 if dry_run else cmd_save(cfg, run, save_lines.append, quiet=True, proc_root=proc_root)
+    if save_rc == 2:
         for line in save_lines:
             out(line)
         return 2
@@ -222,6 +223,10 @@ def cmd_stop(cfg, run, out, *, names=(), profile=None, force=False, dry_run=Fals
     try:
         panes = tmux.require_panes()
     except TmuxUnreadable as e:
+        if save_rc == 0:  # save could read tmux and may have warnings worth keeping; never the unreadable line twice
+            for line in save_lines:
+                if str(e) not in line:
+                    out(line)
         out(f"❌ {e}；不知道哪些 session 在跑，什麼都沒停")
         return 2
     for line in save_lines:

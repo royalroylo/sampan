@@ -138,3 +138,44 @@ class ChmodRefusedTests(Umask022):
         self.assertTrue(list(cfg.history_dir.glob("registry-*.json")))
         self.assertIn("one", cfg.save_log.read_text())
         self.assertTrue((cfg.state_dir / update.CACHE).exists())
+
+
+class ReviewFixTests(Umask022):
+    def test_keeping_a_user_files_mode_is_strict(self):
+        from unittest import mock
+        p = self.tmp / "settings.json"
+        p.write_text("old")
+        os.chmod(p, 0o644)
+        with mock.patch("os.chmod", side_effect=PermissionError("refused")):
+            with self.assertRaises(PermissionError):
+                atomic_write(p, "new")
+        self.assertEqual(mode(p), 0o644)
+        self.assertEqual(p.read_text(), "old")
+        self.assertEqual([f.name for f in self.tmp.iterdir()], ["settings.json"])  # no temp file left
+
+    def test_kept_snapshots_and_hook_records_are_tightened(self):
+        state = self.tmp / "state"
+        hist = state / "history"
+        rows = [Row("one", "claude", "alice", SID, "/c")]
+        write_rows(state / "registry.json", rows, "t", hist)
+        write_rows(state / "registry.json", rows, "t2", hist)
+        old_snap = next(hist.glob("registry-*.json"))
+        os.chmod(old_snap, 0o644)
+        write_rows(state / "registry.json", rows, "t3", hist)
+        self.assertEqual(mode(old_snap), 0o600)
+        old_rec = state / "hooks" / "55.json"
+        old_rec.parent.mkdir(parents=True)
+        old_rec.write_text("{}")
+        os.chmod(old_rec, 0o644)
+        fake = {p.pid: p for p in (Proc(100, 1, "S", "claude", "claude"), Proc(101, 100, "S", "sh", "sh"))}
+        stdin = io.StringIO(json.dumps({"session_id": "s-1", "cwd": "/x", "source": "startup"}))
+        hook.run_session_start(stdin, {}, state_dir=state, procs_fn=lambda: fake, now=lambda: "t", start_pid=101)
+        self.assertEqual(mode(old_rec), 0o600)
+
+    def test_launchd_plist_sets_a_private_umask(self):
+        import plistlib
+
+        from sampan import launchd
+        text = launchd.plist_text("/bin/sampan", self.tmp / "state", "/usr/bin")
+        self.assertIn("<key>Umask</key>\n\t<integer>63</integer>", text)
+        self.assertEqual(plistlib.loads(text.encode())["Umask"], 0o077)

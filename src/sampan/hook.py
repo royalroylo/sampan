@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .clock import now_stamp
-from .fsutil import PRIVATE_FILE, atomic_write, private_dir, write_target
+from .fsutil import PRIVATE_FILE, atomic_write, private_dir, try_chmod, write_target
 
 HOOK_MARK = "sampan hook session-start"
 _SUFFIX = " hook session-start"
@@ -51,6 +51,8 @@ def run_session_start(stdin, env, *, state_dir, procs_fn, now, start_pid=None):
                "source": data.get("source", ""), "at": now()}
         private_dir(state_dir)
         d = private_dir(Path(state_dir) / "hooks")
+        for f in d.glob("*.json"):
+            try_chmod(f, PRIVATE_FILE)  # records an older version left readable by others
         atomic_write(d / f"{pid}.json", json.dumps(rec, ensure_ascii=False), mode=PRIVATE_FILE)
     except BaseException:
         pass

@@ -40,6 +40,7 @@ def plist_text(sampan_path, state_dir, path_env, env=None):
         "EnvironmentVariables": variables,
         "StartCalendarInterval": SCHEDULE,
         "RunAtLoad": False,
+        "Umask": 0o077,  # the launchd logs in the state dir are created private (600)
         "StandardOutPath": str(state_dir / "launchd.out.log"),
         "StandardErrorPath": str(state_dir / "launchd.err.log"),
     }, sort_keys=False).decode()

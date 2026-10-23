@@ -45,7 +45,7 @@ no account. The complete list of what it changes or touches:
 **Network**
 
 - A check of the repository's version tags on GitHub (`git ls-remote`), at most every 6 hours while the UI is open.
-  `U` in the UI and `sampan update` check again right away. No other traffic from sampan itself (the agents and
+  `U` in the UI checks again right away when no newer version is known yet; `sampan update` always checks again. No other traffic from sampan itself (the agents and
   `claude plugin` commands do their own).
 
 **Data it reads**
@@ -59,7 +59,9 @@ The registry holds working directories and conversation ids, and sampan acts on 
 `registry.json` can make sampan type resume commands into your tmux panes. sampan keeps the state directory private
 itself: whenever it writes there, the directory (and `history/`, `hooks/`) is set to `700` and the files it writes
 (`registry.json`, the history snapshots, `save.log`, the lock, the update-check cache, the hook records) to `600`,
-whatever your umask, also fixing files an older version left readable by others. A new `config.toml` written by
+whatever your umask, also fixing files an older version left readable by others; the launchd job runs with umask `077`
+so its logs there are private too. This is best-effort: where chmod is refused (a state directory you do not own,
+some filesystems) the write still happens, so check the permissions yourself in that case. A new `config.toml` written by
 `sampan init` is created `600`; sampan never changes the permissions of an existing config file, so keep `config.toml`
 (it names the marketplaces `plugins sync` installs from) and the profile `settings.json` files writable only by you.
 

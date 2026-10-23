@@ -42,7 +42,7 @@ sampan init
 - macOS：新增一個 launchd 排程，每小時跑 `sampan save`，只存檔。
 - 不會動 Claude 的 `settings.json`，除非你自己跑 `sampan init --hook`（或同意修復以前裝的 hook）。
 - 只有你動手（開、接回、停止、搬目錄）時，才會對 tmux 的 pane 打字。
-- 網路：畫面開著時，最多每 6 小時到 GitHub 查一次 sampan 的版本 tag；按 `U` 或跑 `sampan update` 會當下重新查。
+- 網路：畫面開著時，最多每 6 小時到 GitHub 查一次 sampan 的版本 tag；還不知道有新版時按 `U` 會當下重新查，`sampan update` 每次都重新查。
 - `sampan init` 會問問題，要由你在終端機自己跑；沒有終端機時它會拒絕，除非加 `--yes`。
 
 詳細見 [SECURITY.md](SECURITY.md)。
@@ -60,7 +60,7 @@ sampan init
 | `s` | 收起來（agent 正常結束，對話保留） |
 | `R` | 一次接回好幾個 |
 | `m` | 換工作目錄 |
-| `U` | 更新 sampan（當下重新查最新版；已是最新時可選擇重新安裝） |
+| `U` | 更新 sampan（已知有新版就直接更新；還不知道時當下重新查，已是最新時可選擇重新安裝） |
 | `q` | 離開 |
 
 - 每天開工：`sampan`，Enter 進到要做的那個。

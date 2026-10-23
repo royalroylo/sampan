@@ -10,17 +10,20 @@ All notable changes to this project are documented here. The format follows
 ### Security
 - The state directory (and its `history/` and `hooks/`) is kept at `700` and every file sampan writes there (registry, history
   snapshots, `save.log`, lock, update-check cache, hook records) at `600`, whatever the umask; looser files left by an older
-  version are fixed on the next write. A new `config.toml` from `sampan init` is created `600` (an existing one is never changed).
-  SECURITY.md no longer asks you to `chmod` by hand.
+  version are fixed on the next write. The hourly launchd job runs with umask `077`, so its logs are private too (takes effect
+  when the plist is rewritten, e.g. by `sampan init`). Tightening is best-effort: where chmod is refused (a state dir you do
+  not own, some filesystems) the write still succeeds. A new `config.toml` from `sampan init` is created `600` (an existing one
+  is never changed). SECURITY.md no longer asks you to `chmod` by hand.
 
 ### Fixed
 - An action that fails in the ui no longer closes it: the message area shows `❌ <action> 失敗：<error>` and the list stays.
 - `sampan stop` prints the "tmux unreadable" warning once instead of twice.
 
 ### Changed
-- CI: Dependabot keeps the GitHub Actions current; the Linux smoke image pins uv (0.11.3) instead of `latest`.
+- CI: Dependabot keeps the GitHub Actions and the Linux smoke base images current; the Linux smoke image pins uv (0.11.3) instead of `latest`.
 - Tests: the guard also blocks network / mutating `git` subcommands inside shell strings.
-- Documentation: the update check is described the same way in README and SECURITY.md; the registry reference says times
+- Documentation: the update check is described the same way in README and SECURITY.md (`U` checks again when no newer
+  version is known yet, `sampan update` always checks again); the registry reference says times
   are stored in UTC; the usage guide says `m` starts at `[ui] start_dir` when the session's directory is gone; release pins
   move to v0.6.3.
 

@@ -1,8 +1,12 @@
-# Keep the GitHub Actions in .github/workflows current. The workflows use major tags (actions/checkout@v4),
-# so Dependabot only opens a PR when a new major version is released.
+# Keep the GitHub Actions in .github/workflows and the Linux smoke base images current. The workflows use major
+# tags (actions/checkout@v4), so Dependabot only opens a PR when a new major version is released.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /scripts/linux-smoke
     schedule:
       interval: weekly

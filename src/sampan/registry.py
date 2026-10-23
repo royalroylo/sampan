@@ -163,6 +163,8 @@ def write_rows(path, rows, now, history_dir, keep=20):
         snaps = sorted(history_dir.glob("registry-*.json"), key=lambda p: (p.stat().st_mtime_ns, p.name))
         for old in snaps[:-keep]:
             old.unlink()
+        for kept in snaps[-keep:]:
+            private_file(kept)  # snapshots an older version left readable by others
     body = {"version": VERSION, "saved_at": now, "sessions": [asdict(r) for r in rows]}
     atomic_write(path, json.dumps(body, ensure_ascii=False, indent=2) + "\n", mode=PRIVATE_FILE)
 

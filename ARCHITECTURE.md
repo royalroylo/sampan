@@ -40,7 +40,8 @@ callable (`runner.py`). That is what makes the suite fast and safe: tests pass a
 - The registry never deletes a row by itself. A session whose tmux is gone becomes "stopped", not removed. If tmux itself
   cannot be read, the state is "unknown", never "stopped".
 - Every write is atomic, and the previous registry is copied to `history/` first. Everything written under the
-  state dir is private (files `600`, directories `700`, whatever the umask).
+  state dir is private (files `600`, directories `700`, whatever the umask; best-effort where chmod is refused), and the
+  launchd job runs with `Umask` `077` so its logs there are private too.
 - No telemetry; the only network use is the version-tag check and what the user confirms (`U`, `sampan update`).
 
 ## Data files

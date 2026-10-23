@@ -209,7 +209,7 @@ class StorageTest(unittest.TestCase):
         files = sorted(self.hist.iterdir())
         self.assertEqual(len(files), 3)
         self.assertEqual(json.loads(files[-1].read_text())["sessions"][0]["tmux"], "s3")
-        self.assertFalse(any(p.suffix == ".tmp" for p in self.path.parent.iterdir()))
+        self.assertFalse(any(".tmp" in p.name for p in self.path.parent.iterdir()))
 
     def test_history_pruning_ignores_name_order_across_timezone_change(self):
         """Old snapshots are named in local time (+8h), new ones in UTC: names then sort lower despite being newer."""

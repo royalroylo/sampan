@@ -159,6 +159,18 @@ class StopMoveTest(Base):
         self.assertEqual(sum("讀不到 tmux" in m for m in self.msgs), 1, self.msgs)
         self.assertIn("什麼都沒停", "\n".join(self.msgs))
 
+    def test_stop_keeps_save_warnings_when_only_stop_sees_tmux_unreadable(self):
+        from unittest import mock
+
+        def fake_save(cfg, run, out, **kw):
+            out("  ⚠ save 的警告")
+            return 0
+        with mock.patch("sampan.save.cmd_save", fake_save):
+            rc = cmd_stop(self.cfg, runner(), self.msgs.append, sleep=lambda _: None, proc_root=Path("/nonexistent"))
+        self.assertEqual(rc, 2)
+        self.assertEqual(self.msgs[0], "  ⚠ save 的警告")
+        self.assertEqual(sum("讀不到 tmux" in m for m in self.msgs), 1, self.msgs)
+
     def test_move_does_nothing(self):
         d = Path(tempfile.mkdtemp())
         r = runner()

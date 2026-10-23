@@ -40,8 +40,8 @@ def private_file(path):
 
 def atomic_write(path, text, *, mode=None, new_mode=None):
     """Write text atomically at write_target(path); the temp file never lingers.
-    mode: the file always ends with this mode. Otherwise an existing file keeps its mode, and a new file gets new_mode
-    (None: the umask default). The temp file is created 0600, so the text is never readable by others in between."""
+    mode: the file always ends with this mode (best-effort: a refused chmod is ignored). Otherwise an existing file keeps
+    its mode, and a new file gets new_mode (None: the umask default); that chmod is strict and a failure raises. The temp file is created 0600, so the text is never readable by others in between."""
     target = write_target(path)
     old = stat.S_IMODE(target.stat().st_mode) if target.exists() else None
     final = mode if mode is not None else (old if old is not None else new_mode)
@@ -51,8 +51,10 @@ def atomic_write(path, text, *, mode=None, new_mode=None):
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, PRIVATE_FILE if final is not None else 0o666)
         with os.fdopen(fd, "w") as fh:
             fh.write(text)
-        if final is not None:
-            try_chmod(tmp, final)
+        if mode is not None:
+            try_chmod(tmp, mode)  # tightening to a private mode is best-effort
+        elif final is not None:
+            os.chmod(tmp, final)  # keeping a user file's mode is strict: a failure aborts the write
         os.replace(tmp, target)
     finally:
         tmp.unlink(missing_ok=True)
