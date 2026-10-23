@@ -32,7 +32,7 @@ and runs, inside containers named `zz-sampan-linux-*`: the unit tests on Python 
 (`smoke.sh`: a real tmux with fake `claude`/`codex` in `scripts/linux-smoke/fake-bin/`: init, new, save, stop, restore, ui);
 and the installer test (`install-test.sh` on a bare Ubuntu 24.04 where `/bin/sh` is dash: `install.sh` has to bring uv, tmux,
 ps, lsof and git itself, plus shellcheck and the "claude missing" / rerun / no-terminal cases). The GitHub repo may be private,
-so the installer test points `SAMPAN_INSTALL_SPEC` at the local copy and feeds `sampan init` its answers from a file through
+so the installer test points `SAMPAN_INSTALL_SPEC` at the local copy and runs `sampan init --yes` (defaults) with a file standing in for the terminal through
 `SAMPAN_INSTALL_TTY`; because the copy has no `.git`, sampan reports version `0.0.0+unknown` there.
 
 Never run `smoke.sh` or `install-test.sh` directly: they refuse outside a container, because they start tmux servers and install packages.

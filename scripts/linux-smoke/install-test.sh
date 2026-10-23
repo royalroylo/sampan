@@ -1,8 +1,8 @@
 #!/bin/bash
 # Installer test, run INSIDE the container (see run.sh): install.sh on a bare Ubuntu 24.04 (/bin/sh is dash).
 # The GitHub repo may be private, so SAMPAN_INSTALL_SPEC points `uv tool install` at the local copy of the repo.
-# `sampan init` is interactive; install.sh reads its answers from SAMPAN_INSTALL_TTY (here: a file of newlines, i.e. the defaults)
-# instead of /dev/tty, which a container has no use for.
+# install.sh runs `sampan init --yes` (every default) when given --yes; SAMPAN_INSTALL_TTY (here: a file) stands in for /dev/tty
+# as init's stdin, which a container has no use for.
 # Version note: the copy has no .git, so hatch-vcs reports its fallback version (0.0.0+unknown) instead of 0.6.0.
 [ -f /.dockerenv ] || { echo "install-test.sh only runs inside the container: use scripts/linux-smoke/run.sh" >&2; exit 1; }
 set -uo pipefail
@@ -39,7 +39,7 @@ step "B: run it again (idempotent: upgrades in place, init re-run changes nothin
 cp ~/.config/sampan/config.toml /tmp/config.before
 out=$(sh "$SRC/install.sh" --yes --version v0.6.0 2>&1); rc=$?; echo "$out" | tail -8
 expect "exit 0" test "$rc" = 0
-expect "--yes was passed through to init" has "→ 預設（--yes）" "$out"
+expect "installer ran init with --yes" has "Running 'sampan init --yes'" "$out"
 expect "config unchanged" cmp -s /tmp/config.before ~/.config/sampan/config.toml
 expect "nothing to install the second time" bash -c '! grep -q "^Missing:" <<<"$0"' "$out"
 

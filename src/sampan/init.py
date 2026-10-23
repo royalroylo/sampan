@@ -446,7 +446,7 @@ def cmd_init(cfg_path, state_dir, run, out, ask, *, home, sampan_path, env=None,
     env = os.environ if env is None else env
     if yes:
         def ask(prompt):
-            out(f"{prompt} → 預設（--yes）")
+            out(f"{prompt.rstrip()} → 預設（--yes）")
             return ""
     deps = deps or (lambda out, ask: ensure_deps(out, ask, which=which, env=env, home=home, platform=platform))
     if not deps(out, ask):

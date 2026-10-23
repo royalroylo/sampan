@@ -8,6 +8,7 @@ All notable changes to this project are documented here. The format follows
 ### Changed
 - `sampan init` refuses to run when stdin is not a terminal (exit code 2, nothing written); `--yes` takes every default instead.
 - The SessionStart hook is asked about only with `sampan init --hook`; repairing a broken hook is still offered. `sampan doctor` no longer reports an absent hook.
+- `install.sh --yes` now runs `sampan init --yes`, and a failing `sampan init` no longer aborts the installer (it prints a note and carries on).
 - `~/.claude-profiles/*.retired.*` directories are skipped by `sampan init` and `sampan doctor`.
 
 ## [0.6.0] - 2026-10-23

@@ -306,6 +306,7 @@ class InitFirstRunTests(Base):
         questions = [line for line in self.lines if "[Y/n]" in line or "[y/N]" in line or "名稱" in line]
         self.assertTrue(questions)
         self.assertTrue(all(line.endswith(" → 預設（--yes）") for line in questions))
+        self.assertFalse(any("  → 預設" in line for line in questions))
 
     def test_init_does_not_offer_hook_without_flag(self):
         prompts = []

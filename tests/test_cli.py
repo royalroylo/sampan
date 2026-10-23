@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 from sampan import cli
+from tests.fakes import FakeRunner
 from tests.helpers import make_env
 
 
@@ -152,14 +153,15 @@ class CliTest(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp())
         env = {"SAMPAN_CONFIG": str(tmp / "none.toml"), "SAMPAN_STATE_DIR": str(tmp / "state")}
         buf = io.StringIO()
+        runner = FakeRunner(strict=True)
         with mock.patch.dict("os.environ", env), mock.patch("sampan.init.cmd_init") as init, \
-                mock.patch("sampan.init.ensure_deps") as deps, mock.patch("sys.stdin") as stdin, redirect_stdout(buf):
+                mock.patch("sampan.runner.run", runner), mock.patch("sys.stdin") as stdin, redirect_stdout(buf):
             stdin.isatty.return_value = False
             self.assertEqual(cli.main(["init"]), 2)
         self.assertIn("sampan init 會問幾個會寫入檔案的問題，請在終端機直接執行。腳本裡要全部用預設值，加 --yes。",
                       buf.getvalue())
         init.assert_not_called()
-        deps.assert_not_called()
+        self.assertEqual(runner.calls, [])
         self.assertFalse((tmp / "none.toml").exists())
 
     def test_init_yes_and_hook_parse_without_a_tty(self):
