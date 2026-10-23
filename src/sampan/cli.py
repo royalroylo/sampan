@@ -104,7 +104,7 @@ def _current_tmux_session(run):
 
 def _init(no_launchd, yes=False, hook=False):
     # stdin only: install.sh runs `init <"$TTY"` and its stdout may be a pipe
-    if not yes and not sys.stdin.isatty():
+    if not yes and not (sys.stdin and sys.stdin.isatty()):
         out("sampan init 會問幾個會寫入檔案的問題，請在終端機直接執行。腳本裡要全部用預設值，加 --yes。")
         return 2
     from .doctor import current_sampan

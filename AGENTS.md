@@ -17,12 +17,13 @@ which conversation each session runs, so sessions can be resumed after an agent 
 ## Installing for a user
 
 - Use the one-line installer in README.md, or `uv tool install git+https://github.com/royalroylo/sampan@<tag>`.
-- Never run `sampan init` yourself. It asks questions that write files, so ask the user to run it in their own terminal.
+- When you run the installer for a user, add `--no-init`: `curl -fsSL https://raw.githubusercontent.com/royalroylo/sampan/main/install.sh | sh -s -- --no-init`. Then ask the user to run `sampan init` in their own terminal.
+- Never run `sampan init` yourself. It asks questions that write files.
 - Do not pass `--yes` (to `install.sh` or `sampan init`) on the user's behalf.
 
 ## Using it on a user's machine
 
-- Safe, read-only: `sampan --version`, `sampan status`, `sampan doctor`, `sampan plugins status`.
+- Safe (do not change sessions or config): `sampan --version`, `sampan status`, `sampan doctor`, `sampan plugins status`. They need a config, so the user must have run `sampan init` first.
 - Never send keys to the user's tmux sessions, and never edit `~/.local/state/sampan/registry.json` by hand.
   Use the sampan commands instead (see docs/en/usage.md).
 
@@ -30,7 +31,7 @@ which conversation each session runs, so sessions can be resumed after an agent 
 
 - Python 3.11+, standard library only. No new dependencies.
 - Tests: `uv run python -m unittest discover -s tests -t .`
-- Lint: `uv run ruff check`
+- Lint: `uvx ruff check`
 - Tests must not touch the real tmux, HOME or launchd (see `tests/guard.py`). Use `FakeRunner(strict=True)` for anything
   that would run a command.
 - Live tests run only in Docker: `scripts/linux-smoke/run.sh`.

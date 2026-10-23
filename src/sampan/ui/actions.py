@@ -171,17 +171,21 @@ def _rename(cfg, run, out, ask, name, rename_fn):
     return rename_fn(cfg, run, out, name, new)
 
 
-def _plain_search(out, rows, query):
-    """/text: case-insensitive substring match on the name; one hit attaches, several are listed with their original numbers."""
+def _plain_search(ask, out, rows, query):
+    """/text: case-insensitive substring match on the name. One hit attaches; several are listed with their original numbers and one is asked for."""
     hits = [(i, r) for i, r in enumerate(rows, 1) if query and query.lower() in r.name.lower()]
     if not hits:
         out(f"沒有名稱含「{query}」的 session")
-    elif len(hits) == 1:
+        return ("invalid", [])
+    if len(hits) == 1:
         return ("attach", [hits[0][1].name])
-    else:
-        for i, r in hits:
-            out(f"  [{i:>2}] {row_text(r)}")
-    return ("invalid", [])
+    for i, r in hits:
+        out(f"  [{i:>2}] {row_text(r)}")
+    answer = _ask(ask, "要開哪一個？(編號，Enter 返回): ")
+    if not answer or answer.lower() == "q":
+        return ("invalid", [])
+    picked = _pick(lambda _p: answer, out, rows, "", many=False)
+    return ("attach", picked) if picked else ("invalid", [])
 
 
 def _plain_action(ask, out, rows, current):
@@ -199,7 +203,7 @@ def _plain_action(ask, out, rows, current):
     if choice == "U":
         return ("update", [])
     if choice.startswith("/"):
-        return _plain_search(out, rows, choice[1:].strip())
+        return _plain_search(ask, out, rows, choice[1:].strip())
     if choice.isdigit():
         picked = _pick(lambda _p: choice, out, rows, "", many=False)
         return ("attach", picked) if picked else ("invalid", [])

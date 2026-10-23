@@ -164,6 +164,16 @@ class CliTest(unittest.TestCase):
         self.assertEqual(runner.calls, [])
         self.assertFalse((tmp / "none.toml").exists())
 
+    def test_init_refuses_when_stdin_is_none(self):
+        tmp = Path(tempfile.mkdtemp())
+        env = {"SAMPAN_CONFIG": str(tmp / "none.toml"), "SAMPAN_STATE_DIR": str(tmp / "state")}
+        buf = io.StringIO()
+        with mock.patch.dict("os.environ", env), mock.patch("sampan.init.cmd_init") as init, \
+                mock.patch("sys.stdin", None), redirect_stdout(buf):
+            self.assertEqual(cli.main(["init"]), 2)
+        self.assertIn("請在終端機直接執行", buf.getvalue())
+        init.assert_not_called()
+
     def test_init_yes_and_hook_parse_without_a_tty(self):
         tmp = Path(tempfile.mkdtemp())
         env = {"SAMPAN_CONFIG": str(tmp / "none.toml"), "SAMPAN_STATE_DIR": str(tmp / "state")}

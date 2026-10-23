@@ -17,6 +17,7 @@ export SAMPAN_INSTALL_SPEC="$SRC" SAMPAN_INSTALL_TTY=/tmp/answers
 step "bare machine"
 expect "/bin/sh is dash" test "$(readlink -f /bin/sh)" = /usr/bin/dash
 for tool in uv tmux git lsof ps; do expect "$tool is not installed yet" bash -c "! command -v $tool"; done
+# Note: --version v0.6.0 below is only a label; SAMPAN_INSTALL_SPEC (exported above) overrides what is installed.
 mkdir -p ~/.claude  # what "run claude once and log in" leaves behind; sampan init refuses to run without it
 
 step "A: fresh machine, fake claude on PATH, --yes (installs uv, tmux, ps, lsof, git; sampan; runs init)"
