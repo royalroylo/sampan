@@ -5,7 +5,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends tmux git curl ca-certificates locales lsof procps util-linux \
  && locale-gen en_US.UTF-8 \
  && rm -rf /var/lib/apt/lists/*
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+COPY --from=ghcr.io/astral-sh/uv:0.11.3 /uv /uvx /usr/local/bin/
 COPY scripts/linux-smoke/fake-bin/ /usr/local/fake-bin/
 RUN useradd -m -s /bin/bash tester
 USER tester
