@@ -21,8 +21,8 @@ uv tool install --python "$PY" "$(dirname "$0")/../.." >/dev/null 2>&1 || { echo
 mkdir -p ~/.claude ~/work/proj
 sampan --version
 
-step "sampan init (non-interactive: accept the name, write the config, decline the hook)"
-out=$(printf '\n\n\n\n\n' | sampan init 2>&1); rc=$?; echo "$out" | tail -4
+step "sampan init --yes (every default, no hook)"
+out=$(sampan init --yes 2>&1 </dev/null); rc=$?; echo "$out" | tail -4
 expect "init exits 0" test "$rc" = 0
 expect "config written" test -s ~/.config/sampan/config.toml
 expect "init says there is no schedule on Linux" has "不是 macOS" "$out"

@@ -65,6 +65,8 @@ def build_parser():
     sub.add_parser("doctor", help="檢查已知的設定問題")
     it = sub.add_parser("init", help="偵測 profile、產生設定檔（已有設定時只提議新增的項目）、hook 與自動存檔排程")
     it.add_argument("--no-launchd", action="store_true", help="不安裝自動存檔排程")
+    it.add_argument("--yes", action="store_true", help="所有問題都用預設值，不讀 stdin（沒有終端機時用）")
+    it.add_argument("--hook", action="store_true", help="詢問是否安裝 SessionStart hook（預設不問）")
     pf = sub.add_parser("profile", help="profile 管理").add_subparsers(dest="action", required=True)
     pa = pf.add_parser("add", help="新增 profile：建立 ~/.claude-profiles/<名稱> 並登入；--dir 用既有目錄（不建、不登入）")
     pa.add_argument("name")
@@ -100,13 +102,17 @@ def _current_tmux_session(run):
     return r.stdout.strip() if r.returncode == 0 else None
 
 
-def _init(no_launchd):
+def _init(no_launchd, yes=False, hook=False):
+    # stdin only: install.sh runs `init <"$TTY"` and its stdout may be a pipe
+    if not yes and not sys.stdin.isatty():
+        out("sampan init 會問幾個會寫入檔案的問題，請在終端機直接執行。腳本裡要全部用預設值，加 --yes。")
+        return 2
     from .doctor import current_sampan
     from .init import cmd_init
     from .runner import run
     try:
         return cmd_init(paths.config_path(), paths.state_dir(), run, out, input, home=Path.home(),
-                        sampan_path=current_sampan(), no_launchd=no_launchd)
+                        sampan_path=current_sampan(), no_launchd=no_launchd, yes=yes, hook=hook)
     except KeyboardInterrupt:
         out("\n已取消")
         return 130
@@ -128,7 +134,7 @@ def main(argv=None):
     else:
         args = build_parser().parse_args(argv)
     if args.cmd == "init":
-        return _init(args.no_launchd)
+        return _init(args.no_launchd, args.yes, args.hook)
     try:
         cfg = load_config(paths.config_path(), state_dir=paths.state_dir())
     except ConfigError as e:

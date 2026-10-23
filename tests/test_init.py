@@ -131,6 +131,11 @@ class DetectTests(Base):
         envs = {c["env"].get("CLAUDE_CONFIG_DIR") for c in r.called(["claude", "auth", "status"])}
         self.assertEqual(envs, {None, str(self.work), str(other)})
 
+    def test_detect_profiles_skips_retired(self):
+        (self.home / ".claude-profiles" / "old.retired.20261018").mkdir()
+        found = detect_profiles(self.home, self.runner(), {}, proc_root=NO_PROC)
+        self.assertEqual([d.config_dir for d in found], [self.home / ".claude", self.work])
+
     def test_name_suggestions(self):
         found = detect_profiles(self.home, self.runner(), {}, proc_root=NO_PROC)
         self.assertEqual([(d.name, d.email) for d in found],
@@ -283,13 +288,35 @@ class InitFirstRunTests(Base):
 
     def test_hook_offer_default_no(self):
         prompts = []
-        self.init(self.runner(), asker({}, prompts))
+        self.init(self.runner(), asker({}, prompts), hook=True)
         cfg = load_config(self.cfg_path, home=self.home)
         self.assertEqual({hook_status(p) for p in cfg.profiles.values()}, {"absent"})
         self.assertTrue(any("hook" in p and "[y/N]" in p for p in prompts))
 
         self.cfg_path.unlink()
-        self.init(self.runner(), asker({"hook": "y"}))
+        self.init(self.runner(), asker({"hook": "y"}), hook=True)
+        cfg = load_config(self.cfg_path, home=self.home)
+        self.assertEqual({hook_status(p) for p in cfg.profiles.values()}, {"installed"})
+
+    def test_init_yes_takes_defaults_without_reading_stdin(self):
+        def ask(prompt):
+            raise AssertionError(f"asked: {prompt}")
+        self.assertEqual(self.init(self.runner(), ask, yes=True), 0)
+        self.assertEqual(sorted(load_config(self.cfg_path, home=self.home).profiles), ["alice", "work"])
+        questions = [line for line in self.lines if "[Y/n]" in line or "[y/N]" in line or "名稱" in line]
+        self.assertTrue(questions)
+        self.assertTrue(all(line.endswith(" → 預設（--yes）") for line in questions))
+
+    def test_init_does_not_offer_hook_without_flag(self):
+        prompts = []
+        self.init(self.runner(), asker({"hook": "y"}, prompts))
+        self.assertNotIn("SessionStart hook", self.text())
+        self.assertFalse(any("hook" in p for p in prompts))
+        for d in (self.home / ".claude", self.work):
+            self.assertFalse((d / "settings.json").exists())
+
+    def test_init_offers_hook_with_flag(self):
+        self.init(self.runner(), asker({"hook": "y"}), hook=True)
         cfg = load_config(self.cfg_path, home=self.home)
         self.assertEqual({hook_status(p) for p in cfg.profiles.values()}, {"installed"})
 
@@ -462,6 +489,18 @@ class InitRerunTests(Base):
         settings = json.loads((self.work / "settings.json").read_text())
         self.assertEqual([h["command"] for g in settings["hooks"]["SessionStart"] for h in g["hooks"]],
                          [f"{self.sampan} hook session-start"])
+
+    def test_init_still_repairs_broken_hook_without_flag(self):
+        old = self.tmp / "old" / "sampan"
+        old.parent.mkdir()
+        old.write_text("")
+        cfg = load_config(self.cfg_path, home=self.home)
+        install_hook(cfg.profiles["work"], old)
+        old.unlink()
+        prompts = []
+        self.init(self.runner(), asker({"修復": "n"}, prompts))
+        self.assertTrue(any("修復" in p for p in prompts))
+        self.assertFalse(any("安裝 SessionStart" in p for p in prompts))
 
     def test_broken_existing_config_is_not_touched(self):
         self.cfg_path.write_text("version = 2\n")

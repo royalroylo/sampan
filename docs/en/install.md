@@ -99,6 +99,8 @@ Like the macOS schedule, it only saves; it never restores, starts or moves anyth
 
 ## What sampan init does
 
+`sampan init` asks questions that write files, so it refuses to run (exit code 2, nothing written) when stdin is not a terminal. In a script, pass `--yes` to take every default (each question is still printed, followed by `→ 預設（--yes）`). **An agent must not run init for the user**; ask the user to run it in a terminal. Directories under `~/.claude-profiles/` whose name contains `.retired.` are treated as retired and skipped.
+
 `sampan init` first checks for Homebrew (macOS), tmux, claude, codex (optional) and your PATH. If tmux is missing and
 Homebrew exists it asks before running `brew install tmux`; for anything else it only prints the install command for you
 to run (the Homebrew installer asks for your password). It stops without writing anything if tmux or claude is missing.
@@ -108,7 +110,7 @@ It then detects `~/.claude`, `~/.claude-profiles/*/` and the `CLAUDE_CONFIG_DIR`
 profile names and writes `~/.config/sampan/config.toml` (showing it first). Running it again only proposes new items and
 never touches a config file it cannot read. `init` also:
 
-- optionally installs a SessionStart hook in each profile's `settings.json` (default no; sampan works without it);
+- optionally installs a SessionStart hook in each profile's `settings.json`. It is opt-in: init neither asks nor installs unless you run `sampan init --hook`. A hook that is installed but broken (it points to a sampan that no longer exists) is still offered for repair without `--hook`;
 - on macOS, offers an hourly auto-save schedule (default yes; `sampan init --no-launchd` skips it):
   `~/Library/LaunchAgents/io.github.royalroylo.sampan-save.plist` runs `sampan save --quiet` on the hour (a run missed
   during sleep is made up on wake). If `SAMPAN_CONFIG` / `SAMPAN_STATE_DIR` were set when you ran `init`, the schedule uses

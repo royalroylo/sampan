@@ -194,6 +194,13 @@ class DoctorTest(unittest.TestCase):
         with mock.patch("shutil.which", return_value=None), mock.patch("sys.argv", [str(link), "init"]):
             self.assertEqual(current_sampan(), str(link))
 
+    def test_doctor_ignores_retired_profile_dir(self):
+        (self.cfg.home / ".claude-profiles" / "old.retired.20261018").mkdir()
+        self.assertFalse(any("retired" in c.title for c in self.checks()))
+
+    def test_doctor_silent_about_absent_hook(self):
+        self.assertFalse(any("hook" in c.title for c in self.checks()))
+
     def test_doctor_hook_states(self):
         real = self.cfg.home / "bin" / "sampan"
         real.parent.mkdir()
@@ -205,10 +212,6 @@ class DoctorTest(unittest.TestCase):
         self.assertEqual(sorted(by.values()), ["ok", "warn"])
         self.assertEqual(by[next(t for t in by if t.startswith("alice"))], "ok")
         self.assertEqual(by[next(t for t in by if t.startswith("work"))], "warn")
-        shutil.rmtree(self.cfg.profiles["work"].config_dir / "plugins")
-        (self.cfg.profiles["work"].config_dir / "settings.json").write_text("{}")
-        absent = [c for c in self.checks() if c.title.startswith("work") and "hook" in c.title]
-        self.assertEqual([c.level for c in absent], ["info"])
 
     def test_doctor_codex_state_unreadable(self):
         self.assertTrue(any("Codex" in t for t in self.titles("warn")))  # no state_*.sqlite

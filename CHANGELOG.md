@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- `sampan init` refuses to run when stdin is not a terminal (exit code 2, nothing written); `--yes` takes every default instead.
+- The SessionStart hook is asked about only with `sampan init --hook`; repairing a broken hook is still offered. `sampan doctor` no longer reports an absent hook.
+- `~/.claude-profiles/*.retired.*` directories are skipped by `sampan init` and `sampan doctor`.
+
 ## [0.6.0] - 2026-10-23
 
 First public release. Versions up to 0.5.3 were released privately under the name "berth"; their entries below are kept as history.

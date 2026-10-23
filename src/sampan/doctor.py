@@ -46,7 +46,7 @@ def _profile_dirs(cfg):
     root = cfg.home / ".claude-profiles"
     known = {Path(p.config_dir) for p in cfg.profiles.values()}
     for d in sorted(root.iterdir()) if root.is_dir() else []:
-        if d.is_dir() and d not in known:
+        if d.is_dir() and d not in known and ".retired." not in d.name:
             out.append(Check("info", f"{d} 有 profile 目錄但不在設定裡",
                              f"要管理它：sampan profile add {d.name} --dir {d}"))
     return out
@@ -212,8 +212,6 @@ def _hooks(cfg):
         elif state == "stale":
             out.append(Check("warn", f"{p.name}：SessionStart hook 指向的 sampan 已不存在",
                              "重新安裝：sampan init；或從該 profile 的 settings.json 移除"))
-        else:
-            out.append(Check("info", f"{p.name}：沒有安裝 SessionStart hook（選用，沒有也能運作）"))
     return out
 
 

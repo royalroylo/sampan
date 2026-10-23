@@ -98,9 +98,9 @@ WantedBy=timers.target
 
 `sampan init` 一開始會檢查 Homebrew、tmux、claude、codex（選用）與 PATH：缺 tmux 而有 Homebrew 時，問過你才執行 `brew install tmux`；其他缺的只列出安裝指令，由你自己執行（Homebrew 的安裝程式要輸入密碼）。缺 tmux 或 claude 時 init 會停下，什麼都不寫。`sampan doctor` 也做同樣的檢查，但只回報。
 
-`sampan init` 會偵測 `~/.claude`、`~/.claude-profiles/*/`、執行中 claude 的 `CLAUDE_CONFIG_DIR`，詢問 profile 名稱後寫出 `~/.config/sampan/config.toml`（寫入前會先顯示內容）。再次執行只會提議新增的項目，不會改動讀不懂的設定檔。init 也會：
+`sampan init` 會問幾個會寫入檔案的問題，所以 stdin 不是終端機時會拒絕執行（結束碼 2，什麼都不寫）；腳本裡要全部用預設值，加 `--yes`（每個問題照樣印出，後面附 `→ 預設（--yes）`）。**agent 不要替使用者執行 init**，請使用者自己在終端機跑。init 會偵測 `~/.claude`、`~/.claude-profiles/*/`（名稱含 `.retired.` 的目錄視為已退役，略過）、執行中 claude 的 `CLAUDE_CONFIG_DIR`，詢問 profile 名稱後寫出 `~/.config/sampan/config.toml`（寫入前會先顯示內容）。再次執行只會提議新增的項目，不會改動讀不懂的設定檔。init 也會：
 
-- 選用：在各 profile 的 `settings.json` 安裝 SessionStart hook（預設不裝，沒有也能運作）。
+- 選用：在各 profile 的 `settings.json` 安裝 SessionStart hook。**預設不問也不裝**，要的話執行 `sampan init --hook`；已裝但壞掉（指向不存在的 sampan）的 hook，不加 `--hook` 也會問你要不要修復。
 - 安裝自動存檔排程（僅 macOS；先問，預設是；`sampan init --no-launchd` 略過）：`~/Library/LaunchAgents/io.github.royalroylo.sampan-save.plist`，每個整點跑 `sampan save --quiet`（電腦睡眠時錯過的那次，醒來時會補跑）。執行 init 時設了 `SAMPAN_CONFIG`／`SAMPAN_STATE_DIR` 的話，排程也用同樣的值。**排程只存檔，不會 restore、new 或 move。**
 
 範例設定見 [config.example.toml](../config.example.toml)；格式說明見 [reference.md](reference.md)。

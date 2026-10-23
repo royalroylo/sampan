@@ -76,7 +76,7 @@ def detect_profiles(home, run, procs, *, env=None, proc_root=PROC_ROOT):
         dirs.append((home / ".claude", True))
     root = home / ".claude-profiles"
     for d in sorted(root.iterdir()) if root.is_dir() else []:
-        if d.is_dir() and not d.name.startswith("."):
+        if d.is_dir() and not d.name.startswith(".") and ".retired." not in d.name:
             dirs.append((d, False))
     seen = {_key(d) for d, _ in dirs}
     running = set()
@@ -375,7 +375,7 @@ def _propose_additions(existing, text, detected, ask, out, home):
     return new
 
 
-def _offer_hooks(cfg, ask, out, sampan_path):
+def _offer_hooks(cfg, ask, out, sampan_path, *, offer_install=False):
     present = [p for p in cfg.profiles.values() if Path(p.config_dir).is_dir()]
     states = {p.name: hook_status(p) for p in present}
     for p in present:
@@ -384,7 +384,7 @@ def _offer_hooks(cfg, ask, out, sampan_path):
             ok = uninstall_hook(p) and install_hook(p, sampan_path)
             out(f"✔ {p.name}：hook 已修復" if ok else f"⚠ {p.name}：hook 修復失敗（settings.json 讀不到或寫不進去）")
     absent = [p for p in present if states[p.name] == "absent"]
-    if not absent:
+    if not offer_install or not absent:
         return
     out("SessionStart hook（選用）：每個 claude 啟動時回報它在哪段對話，save 不用靠推測；"
         "會加進各 profile 的 settings.json（先備份）。沒有也能運作。")
@@ -440,9 +440,14 @@ def _path_hint(out, home, env):
 
 
 def cmd_init(cfg_path, state_dir, run, out, ask, *, home, sampan_path, env=None, which=shutil.which,
-             procs=None, proc_root=PROC_ROOT, uid=None, no_launchd=False, deps=None, platform=sys.platform):
+             procs=None, proc_root=PROC_ROOT, uid=None, no_launchd=False, deps=None, platform=sys.platform,
+             yes=False, hook=False):
     home, cfg_path = Path(home), Path(cfg_path)
     env = os.environ if env is None else env
+    if yes:
+        def ask(prompt):
+            out(f"{prompt} → 預設（--yes）")
+            return ""
     deps = deps or (lambda out, ask: ensure_deps(out, ask, which=which, env=env, home=home, platform=platform))
     if not deps(out, ask):
         return 1
@@ -499,7 +504,7 @@ def cmd_init(cfg_path, state_dir, run, out, ask, *, home, sampan_path, env=None,
     except ConfigError as e:
         out(f"❌ {e}")
         return 2
-    _offer_hooks(cfg, ask, out, sampan_path)
+    _offer_hooks(cfg, ask, out, sampan_path, offer_install=hook)
     if platform != "darwin":
         out(NO_SCHEDULE_NOTE)
     elif no_launchd:

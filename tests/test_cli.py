@@ -136,14 +136,41 @@ class CliTest(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp())
         env = {"SAMPAN_CONFIG": str(tmp / "none.toml"), "SAMPAN_STATE_DIR": str(tmp / "state")}
         with mock.patch.dict("os.environ", env), mock.patch("sampan.cli.load_config", side_effect=AssertionError), \
-                mock.patch("sampan.init.cmd_init", return_value=0) as init:
+                mock.patch("sampan.init.cmd_init", return_value=0) as init, mock.patch("sys.stdin") as stdin:
+            stdin.isatty.return_value = True
             self.assertEqual(cli.main(["init"]), 0)
         self.assertEqual(init.call_args.args[:2], (tmp / "none.toml", tmp / "state"))
         self.assertIn("sampan_path", init.call_args.kwargs)
         self.assertFalse(init.call_args.kwargs["no_launchd"])
-        with mock.patch.dict("os.environ", env), mock.patch("sampan.init.cmd_init", return_value=0) as init:
+        with mock.patch.dict("os.environ", env), mock.patch("sampan.init.cmd_init", return_value=0) as init, \
+                mock.patch("sys.stdin") as stdin:
+            stdin.isatty.return_value = True
             cli.main(["init", "--no-launchd"])
         self.assertTrue(init.call_args.kwargs["no_launchd"])
+
+    def test_init_refuses_without_tty(self):
+        tmp = Path(tempfile.mkdtemp())
+        env = {"SAMPAN_CONFIG": str(tmp / "none.toml"), "SAMPAN_STATE_DIR": str(tmp / "state")}
+        buf = io.StringIO()
+        with mock.patch.dict("os.environ", env), mock.patch("sampan.init.cmd_init") as init, \
+                mock.patch("sampan.init.ensure_deps") as deps, mock.patch("sys.stdin") as stdin, redirect_stdout(buf):
+            stdin.isatty.return_value = False
+            self.assertEqual(cli.main(["init"]), 2)
+        self.assertIn("sampan init 會問幾個會寫入檔案的問題，請在終端機直接執行。腳本裡要全部用預設值，加 --yes。",
+                      buf.getvalue())
+        init.assert_not_called()
+        deps.assert_not_called()
+        self.assertFalse((tmp / "none.toml").exists())
+
+    def test_init_yes_and_hook_parse_without_a_tty(self):
+        tmp = Path(tempfile.mkdtemp())
+        env = {"SAMPAN_CONFIG": str(tmp / "none.toml"), "SAMPAN_STATE_DIR": str(tmp / "state")}
+        with mock.patch.dict("os.environ", env), mock.patch("sampan.init.cmd_init", return_value=0) as init, \
+                mock.patch("sys.stdin") as stdin:
+            stdin.isatty.return_value = False
+            self.assertEqual(cli.main(["init", "--yes", "--hook", "--no-launchd"]), 0)
+        kw = init.call_args.kwargs
+        self.assertTrue(kw["yes"] and kw["hook"] and kw["no_launchd"])
 
     def test_profile_add_parses_dir(self):
         with mock.patch("sampan.init.cmd_profile_add", return_value=0) as add:
