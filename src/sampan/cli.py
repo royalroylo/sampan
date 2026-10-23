@@ -154,7 +154,7 @@ def _update_cmd(yes, force, *, run=None, stream=None, which=None, ask=input, isa
             out("已取消")
             return 0
     ok = update.do_update(out, current=current, stream=stream, run=run, which=which, latest=latest,
-                          force=not is_newer)
+                          force=not is_newer, reopen=False)
     return 0 if ok else 1
 
 

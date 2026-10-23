@@ -254,7 +254,8 @@ class UpdateCmdTest(unittest.TestCase):
         self.assertEqual(self.msgs[0], "目前 0.6.0，最新 0.6.1")
         self.assertEqual(self.asked, [])
         self.assertEqual(self.streamed, [["uv", "tool", "upgrade", "sampan"]])
-        self.assertIn("✔ 已更新到 0.6.1，重新開啟 sampan…", self.msgs)
+        self.assertIn("✔ 已更新到 0.6.1", self.msgs)
+        self.assertFalse(any("重新開啟" in m for m in self.msgs), self.msgs)
 
     def test_newer_asks_on_a_terminal(self):
         self.assertEqual(self.call(answer="y"), 0)
@@ -278,6 +279,7 @@ class UpdateCmdTest(unittest.TestCase):
         with mock.patch("sampan.update.do_update", return_value=True) as du:
             self.assertEqual(self.call(latest="0.6.0", force=True, yes=True), 0)
         self.assertTrue(du.call_args.kwargs["force"])
+        self.assertFalse(du.call_args.kwargs["reopen"])
         self.assertEqual(du.call_args.kwargs["latest"], "0.6.0")
         self.assertEqual(du.call_args.kwargs["current"], "0.6.0")
         self.assertEqual(self.asked, [])
@@ -286,7 +288,8 @@ class UpdateCmdTest(unittest.TestCase):
         self.assertEqual(self.call(latest="0.6.0", force=True), 0)
         self.assertEqual(self.asked, ["要重新安裝 v0.6.0？(y/N): "])
         self.assertEqual(self.streamed, [["uv", "tool", "install", "--reinstall", "git+https://github.com/royalroylo/sampan@v0.6.0"]])
-        self.assertIn("✔ 已重新安裝 0.6.0，重新開啟 sampan…", self.msgs)
+        self.assertIn("✔ 已重新安裝 0.6.0", self.msgs)
+        self.assertFalse(any("重新開啟" in m for m in self.msgs), self.msgs)
 
     def test_force_with_unknown_latest_names_current(self):
         self.call(latest=None, force=True, answer="n")

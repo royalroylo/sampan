@@ -242,6 +242,14 @@ class DoUpdateTest(unittest.TestCase):
         self.assertEqual(self.streamed, [["uv", "tool", "install", "--reinstall", f"git+{update.REPO}@v0.6.1"]])
         self.assertEqual(self.msgs[-1], "✔ 已重新安裝 0.6.1，重新開啟 sampan…")
 
+    def test_reopen_false_success_lines_do_not_promise_a_restart(self):
+        do_update(self.msgs.append, current="0.6.0", stream=self.stream([(0, [])]), run=self.versions("0.6.1"),
+                  which=lambda n: "/x/uv", reopen=False)
+        self.assertEqual(self.msgs[-1], "✔ 已更新到 0.6.1")
+        do_update(self.msgs.append, current="0.6.1", stream=self.stream([(0, [])]), run=self.versions("0.6.1"),
+                  which=lambda n: "/x/uv", latest="0.6.1", force=True, reopen=False)
+        self.assertEqual(self.msgs[-1], "✔ 已重新安裝 0.6.1")
+
     def test_force_looks_up_the_tag_when_not_given(self):
         run = self.versions("0.6.1").on(["git", "ls-remote"], tags("v0.6.1"))
         self.assertTrue(do_update(self.msgs.append, current="0.6.1", stream=self.stream([(0, [])]), run=run,

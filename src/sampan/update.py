@@ -211,11 +211,13 @@ def installed_version(run=_run):
     return parts[1] if r.returncode == 0 and len(parts) >= 2 and parts[0] == "sampan" else None
 
 
-def do_update(out, *, current, stream=_stream, run=_run, which=shutil.which, latest=None, force=False):
+def do_update(out, *, current, stream=_stream, run=_run, which=shutil.which, latest=None, force=False,
+              reopen=True):
     """Update sampan; returns whether the version really changed (the caller restarts sampan on success). Output goes line by line to out.
     latest: the version to pin (e.g. "0.6.1"); if not given, look up the highest tag in the repo now, and reinstall unpinned if that fails.
     force=True: skip uv tool upgrade and reinstall right away; success = the reinstall exits 0 and the installed version is readable
-    (it may equal current)."""
+    (it may equal current).
+    reopen=False (sampan update): the success line does not say sampan reopens."""
     if which("uv") is None:
         out(f"❌ 找不到 uv；請在終端機手動更新：{' '.join(UPGRADE)}（不行再 {' '.join(reinstall_cmd(latest))}）")
         return False
@@ -228,7 +230,7 @@ def do_update(out, *, current, stream=_stream, run=_run, which=shutil.which, lat
         rc = stream(cmd, lambda line: out(f"  {line}"))
         after = installed_version(run)
         if rc == 0 and after:
-            out(f"✔ 已重新安裝 {after}，重新開啟 sampan…")
+            out(f"✔ 已重新安裝 {after}" + ("，重新開啟 sampan…" if reopen else ""))
             return True
         out(f"❌ 重新安裝沒有成功（exit {rc}，版本 {after or '讀不到'}）；可以在終端機手動執行：{' '.join(cmd)}")
         return False
@@ -241,7 +243,7 @@ def do_update(out, *, current, stream=_stream, run=_run, which=shutil.which, lat
         rc = stream(cmd, lambda line: (seen.append(line), out(f"  {line}")))
         after = installed_version(run)
         if after and after != current:
-            out(f"✔ 已更新到 {after}，重新開啟 sampan…")
+            out(f"✔ 已更新到 {after}" + ("，重新開啟 sampan…" if reopen else ""))
             return True
         out(f"⚠ 執行後版本仍是 {after or '（讀不到）'}" + (f"（exit {rc}）" if rc else ""))
     out(f"❌ 更新沒有成功，仍是 {current}；可以在終端機手動執行：{' '.join(reinstall_cmd(tag))}")
