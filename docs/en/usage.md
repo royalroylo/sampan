@@ -37,7 +37,7 @@ list. Press `q` to quit.
 | Change working directory | `m` | Directory chooser (starting at its current directory); after you confirm, the agent exits and resumes the same conversation in the new directory |
 | Mark as done | `r` | Retired; not offered for resuming |
 | Save the registry now | `w` | Normally saved on the hour |
-| Update sampan | `U` (a line "new version v… (current …), press U to update" appears above the key help when a newer one exists) | Confirms at the bottom of the screen, runs `uv tool upgrade sampan` (if the version does not change, `uv tool install --reinstall git+https://github.com/royalroylo/sampan@v<latest>`), shows the output in the message area; on success sampan reopens itself at the list, on failure it stays in the list |
+| Update sampan | `U` (a line "new version v… (current …), press U to update" appears above the key help when a newer one exists) | Confirms at the bottom of the screen, runs `uv tool upgrade sampan` (if the version does not change, `uv tool install --reinstall git+https://github.com/royalroylo/sampan@v<latest>`), shows the output in the message area; on success sampan reopens itself at the list, on failure it stays in the list. When no newer version is known, `U` first checks again right then (skipping the cache); if it is still up to date (or the check fails) it offers to reinstall the current version |
 
 **Directory chooser** (`n`, `m`): folders under the current directory on the left, recently used directories on the right
 (directories with more sessions in the registry first), and the sessions already in the directory under the cursor are
@@ -98,6 +98,7 @@ Every action also has a command, for scripts or when you prefer typing commands 
 | Situation | Command |
 |---|---|
 | Look around | `sampan status`, `sampan doctor` (its first line shows the sampan version and the newest one) |
+| Update sampan | `sampan update [--yes] [--force]`: checks the newest version right then (no cache) and asks before updating; `--force` reinstalls even when up to date; `--yes` skips the question. Needs no config file and just exits when done |
 | Interactive screen | `sampan` (same as `sampan ui`): see "Using it" above. In tmux, what you pick is switched to and sampan stays in its pane; outside tmux it attaches in the foreground and returns to the list after detach. `sampan ui --plain` is the numbered menu, same rules |
 | New session | `sampan new <name> <claude:profile｜profile｜codex> <dir>` (no `.` or `:` in the name) |
 | Open claude / codex with an account | `sampan claude [profile] [claude args…]` (without a profile it lists a menu; a first word that is neither a profile nor starts with `-` is an error, not sent as a prompt), `sampan codex` |

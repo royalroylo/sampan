@@ -27,9 +27,11 @@ curl -fsSL https://raw.githubusercontent.com/royalroylo/sampan/main/install.sh |
 Or by hand, two lines:
 
 ```
-uv tool install git+https://github.com/royalroylo/sampan@v0.6.1
+uv tool install git+https://github.com/royalroylo/sampan@v0.6.2
 sampan init
 ```
+
+`sampan init` asks questions — run it yourself in a terminal.
 
 For what the one-liner does, reading it first, Linux, a new machine, PATH and what `sampan init` does, see the [install guide](docs/en/install.md).
 
@@ -58,7 +60,7 @@ Type `sampan`. The session list is on the left, an info card for the row under t
 | `s` | Put it away (the agent exits normally, the conversation is kept) |
 | `R` | Resume several at once |
 | `m` | Change working directory |
-| `U` | Update sampan |
+| `U` | Update sampan (checks for the newest version right then; when already up to date it offers a reinstall) |
 | `q` | Quit |
 
 - Starting the day: `sampan`, then Enter on the one you want.

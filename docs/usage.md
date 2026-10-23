@@ -31,7 +31,7 @@
 | 換工作目錄 | `m` | 用選目錄畫面挑新目錄（從它現在的目錄開始），確認後 agent 結束、在新目錄接回同一段對話 |
 | 這件事做完了 | `r` | 標成 retired，之後不會出現在接回清單 |
 | 立刻存一次登記表 | `w` | 平常每個整點會自動存 |
-| 更新 sampan | `U`（有新版時按鍵說明上面會出現「有新版 v…（目前 …），按 U 更新」） | 在畫面底部問確定，跑 `uv tool upgrade sampan`（版本沒變再 `uv tool install --reinstall git+https://github.com/royalroylo/sampan@v<最新版>`），輸出顯示在訊息區；成功後自動重新開啟 sampan 回到清單，失敗就留在清單 |
+| 更新 sampan | `U`（有新版時按鍵說明上面會出現「有新版 v…（目前 …），按 U 更新」） | 在畫面底部問確定，跑 `uv tool upgrade sampan`（版本沒變再 `uv tool install --reinstall git+https://github.com/royalroylo/sampan@v<最新版>`），輸出顯示在訊息區；成功後自動重新開啟 sampan 回到清單，失敗就留在清單。不知道有新版時，`U` 會先當下重新查一次（不看快取）；仍是最新版（或查不到）就問要不要重新安裝目前版本 |
 
 **選目錄畫面**（`n`、`m`）：左邊是目前目錄底下的資料夾，右邊是「最近用過」的目錄（登記表裡用的 session 多的在前），游標那個目錄裡已經有 session 時會列出來；終端機不到 100 欄時只顯示左邊。
 
@@ -74,6 +74,7 @@
 | 情境 | 指令 |
 |---|---|
 | 看狀況 | `sampan status`、`sampan doctor`（第一行是 sampan 版本與最新版） |
+| 更新 sampan | `sampan update [--yes] [--force]`：當下查最新版（不看快取），有新版就問要不要更新；`--force` 已是最新也重新安裝；`--yes` 不問。不需要設定檔，更新完直接結束 |
 | 互動畫面 | `sampan`（等於 `sampan ui`）：見上面「怎麼用」。tmux 裡選了會切過去、sampan 留在原 pane；tmux 外會在前景 attach，detach 後回到清單。`sampan ui --plain` 改用輸入編號，規則相同 |
 | 開新的工作視窗 | `sampan new <名稱> <claude:profile｜profile｜codex> <目錄>`（名稱不要用 `.` 或 `:`） |
 | 以某個帳號開 claude／開 codex | `sampan claude [profile] [claude 參數…]`（不帶 profile 會列選單；第一個字不是 profile 也不是 `-` 開頭會報錯，不會當成提示詞送出）、`sampan codex` |

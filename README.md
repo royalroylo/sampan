@@ -26,9 +26,11 @@ curl -fsSL https://raw.githubusercontent.com/royalroylo/sampan/main/install.sh |
 或手動兩行：
 
 ```
-uv tool install git+https://github.com/royalroylo/sampan@v0.6.1
+uv tool install git+https://github.com/royalroylo/sampan@v0.6.2
 sampan init
 ```
+
+`sampan init` 會問問題，請自己在終端機執行。
 
 一鍵安裝做了什麼、看過再跑、Linux、新機器、PATH、`sampan init` 做了什麼，見[安裝說明](docs/install.md)。
 
@@ -57,7 +59,7 @@ sampan init
 | `s` | 收起來（agent 正常結束，對話保留） |
 | `R` | 一次接回好幾個 |
 | `m` | 換工作目錄 |
-| `U` | 更新 sampan |
+| `U` | 更新 sampan（當下重新查最新版；已是最新時可選擇重新安裝） |
 | `q` | 離開 |
 
 - 每天開工：`sampan`，Enter 進到要做的那個。

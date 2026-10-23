@@ -5,6 +5,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-10-23
+
+### Fixed
+- `U` in the ui no longer trusts a stale update cache: when no newer version is known it checks again right then, and if it is
+  still up to date (or the check fails) it offers to reinstall the current version.
+
+### Added
+- `sampan update [--yes] [--force]`: checks the newest version right then (no cache) and updates after asking; `--force` reinstalls
+  even when up to date, `--yes` skips the question. It needs no config file.
+
+### Changed
+- Documentation: README notes that `sampan init` asks questions and should be run by you in a terminal; release pins move to v0.6.2.
+
 ## [0.6.1] - 2026-10-23
 
 ### Changed
@@ -147,6 +160,7 @@ First public release. Versions up to 0.5.3 were released privately under the nam
 ### Security
 - Credentials in git URLs are no longer shown in output.
 
-[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/royalroylo/sampan/releases/tag/v0.6.2
 [0.6.1]: https://github.com/royalroylo/sampan/releases/tag/v0.6.1
 [0.6.0]: https://github.com/royalroylo/sampan/releases/tag/v0.6.0
