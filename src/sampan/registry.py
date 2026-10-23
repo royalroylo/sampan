@@ -109,9 +109,8 @@ def id_problem(session_id):
 @contextmanager
 def lock(state_dir):
     state_dir = private_dir(state_dir)
-    fd = os.open(state_dir / "registry.lock", os.O_WRONLY | os.O_CREAT, PRIVATE_FILE)
-    os.fchmod(fd, PRIVATE_FILE)
-    with os.fdopen(fd, "w") as fh:
+    with os.fdopen(os.open(state_dir / "registry.lock", os.O_WRONLY | os.O_CREAT, PRIVATE_FILE), "w") as fh:
+        os.fchmod(fh.fileno(), PRIVATE_FILE)
         fcntl.flock(fh, fcntl.LOCK_EX)
         try:
             yield
