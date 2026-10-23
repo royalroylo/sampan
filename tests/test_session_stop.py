@@ -80,6 +80,21 @@ class StopTest(unittest.TestCase):
         self.assertEqual(self.killed_sessions(r), [["-t", "=a"]])
         self.assertIn("tmux session 已關閉", "\n".join(self.msgs))
 
+    def test_agent_as_pane_root_session_gone_counts_as_closed(self):
+        # `tmux new-session -s a claude`: /exit ends the pane's own process and tmux closes the session itself
+        self.panes[0] = pane_line("a", "%1", 200, "claude", "/c")
+        r = self.runner()
+        r.on(["ps", "-A"], lambda a: cp(out=self.ps(a).stdout.replace(ps_line(200, 100, "claude", "claude"),
+                                                                      ps_line(200, 1, "claude", "claude"))))
+        r.on(["tmux", "-u", "list-panes"],
+             lambda a: cp(out="\n".join(p for p in self.panes if 200 in self.alive or not p.startswith("a\t")) + "\n"))
+        self.stop(r, names=("a",))
+        self.assertEqual(self.sent(r), [["%1", "C-u"], ["%1", "/exit", "Enter"]])
+        self.assertEqual(self.killed_sessions(r), [])  # nothing left to kill
+        text = "\n".join(self.msgs)
+        self.assertIn("a：已結束，tmux session 已關閉", text)
+        self.assertNotIn("保留 session", text)
+
     def test_closed_session_stays_in_registry_for_restore(self):
         # Regression: since v0.3.2 stop closes tmux, and the next save treated it as closed by the user and deleted that row
         from sampan.registry import load_rows, merge

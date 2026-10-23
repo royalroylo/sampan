@@ -9,6 +9,9 @@ All notable changes to this project are documented here. The format follows
 - A Claude or Codex started as the pane's own command (`tmux new-session -s x claude`, no shell in between) is now
   seen: before, the session showed "沒有 agent", `save` warned `session 檔指向 … 不在那個 pane 裡` and never
   recorded its conversation, and `stop` could not stop it.
+  `stop` reports such a session as closed (it closes with its agent), and `move` refuses it with a hint
+  (`sampan stop` + `sampan restore` first), because no shell is left in the pane to relaunch in. `move` also checks that the pane it
+  types the relaunch into is the one that went back to the shell.
 
 ### Changed
 - AGENTS.md: agents open sessions with `sampan new` rather than raw `tmux new-session`.

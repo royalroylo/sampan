@@ -315,7 +315,8 @@ def _close_sessions(tmux, sessions):
         return [], list(sessions)
     closed, kept = [], []
     for s in sessions:
-        if sum(p.session == s for p in panes) == 1 and tmux.kill_session(s):
+        left = sum(p.session == s for p in panes)
+        if left == 0 or (left == 1 and tmux.kill_session(s)):  # 0: the agent was the pane's own process, the session closed with it
             closed.append(s)
         else:
             kept.append(s)
@@ -351,8 +352,10 @@ def _stuck_message(name, agent, p, target, pressed=False):
     return f"❌ {name} 停在 {agent} 的提示（{what}），sampan 不替你回答，{'信任之後沒有再按任何鍵' if pressed else '沒有按任何鍵'}，請進去處理：tmux attach -t {name}"
 
 
-def _shell_pane(tmux, name):
-    return next((p for p in tmux.panes() or [] if p.session == name and p.command in SHELLS), None)  # unreadable → None: the caller treats it as not back at the shell, stops and sends no keys
+def _shell_pane(tmux, name, pane_id):
+    """pane_id, if it is still in session name and back at a shell; else None."""
+    return next((p for p in tmux.panes() or [] if p.session == name and p.pane_id == pane_id and p.command in SHELLS),
+                None)  # unreadable → None: the caller treats it as not back at the shell, stops and sends no keys
 
 
 def cmd_move(cfg, run, out, name, dest, *, dry_run=False, sleep=time.sleep, timeout=60,
@@ -414,6 +417,12 @@ def cmd_move(cfg, run, out, name, dest, *, dry_run=False, sleep=time.sleep, time
             return 1
     if own_pane and pane.pane_id == own_pane:
         out(f"❌ {name} 是執行 sampan 的 pane（自己），請在別的視窗執行")
+        return 1
+    root = procs.get(pane.pane_pid)
+    if root is not None and (root.comm == "claude" or _is_codex(root)):
+        # started as `tmux new-session … claude`: no shell behind the agent, so the pane closes when it exits
+        out(f"❌ {name}：agent 是這個 pane 直接啟動的（後面沒有 shell），結束後 pane 就關了，沒辦法在原地換目錄；"
+            f"先 sampan stop {name}、sampan restore {name}（會開一個有 shell 的 session），再搬")
         return 1
     lc = found.get(pane.pane_id)
     proc = descendant_claude(procs, pane.pane_pid)
@@ -484,7 +493,7 @@ def cmd_move(cfg, run, out, name, dest, *, dry_run=False, sleep=time.sleep, time
                 return 1
             sleep(1)
             waited += 1
-    if _shell_pane(tmux, name) is None:
+    if _shell_pane(tmux, name, pane.pane_id) is None:
         out(f"❌ {name}：{agent} 結束後找不到 shell pane，沒有在新目錄啟動")
         return 1
     tmux.send_keys(pane.pane_id, "C-u")

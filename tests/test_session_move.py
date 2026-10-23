@@ -58,6 +58,8 @@ class MoveTest(unittest.TestCase):
             write_session(self.cfg, "alice", self.claude, sid=A, cwd=self.cwd, status=self.status, tmux="994-monitor:@1.%1")
 
     def ps(self, _a):
+        if self.claude == 100:  # claude is the pane's own process (`tmux new-session … claude`), no shell
+            return cp(out=ps_line(100, 1, "claude", f"claude --resume {A}") + "\n")
         lines = [ps_line(100, 1, "-zsh", "-zsh")]
         if self.claude:
             lines.append(ps_line(self.claude, 100, "claude", f"claude --resume {A}"))
@@ -320,6 +322,17 @@ class MoveTest(unittest.TestCase):
     def test_own_pane_is_refused(self):
         self.assertEqual(self.move(own_pane="%1"), 1)
         self.assertEqual(self.keys, [])
+
+    def test_agent_as_pane_root_is_refused_untouched(self):
+        # the pane closes when that agent exits, so there is no shell to relaunch in
+        self.claude = 100
+        self.sync_files()
+        self.assertEqual(self.move(), 1)
+        self.assertEqual(self.keys, [])
+        self.assertFalse(self.dest.exists())
+        text = "\n".join(self.msgs)
+        self.assertIn("後面沒有 shell", text)
+        self.assertIn("sampan stop 994-monitor、sampan restore 994-monitor", text)
 
     def test_stuck_at_old_trust_prompt_is_escaped(self):
         self.has_file, self.screen = False, TRUST.format(path=self.old)
