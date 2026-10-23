@@ -53,12 +53,13 @@ class Picker:
             return f"將停掉：{'、'.join(self._stop)}　確定？(y/N)"
         if self.query is not None:
             return f"/{self.query}▏（{len(self.visible)} 筆，Enter 進入，Esc 取消）"
-        if self.jump and not self._jump_expired():
-            return f"跳到第 {self.jump} 列"
-        return None
+        self._expire()
+        return f"跳到第 {self.jump} 列" if self.jump else None
 
-    def _jump_expired(self):
-        return self._jump_at is None or self.clock() - self._jump_at > JUMP_S
+    def _expire(self):
+        """Drop a digit buffer older than JUMP_S."""
+        if self.jump and (self._jump_at is None or self.clock() - self._jump_at > JUMP_S):
+            self.jump = ""
 
     def _filter(self):
         q = (self.query or "").lower()
@@ -76,12 +77,19 @@ class Picker:
         return self._here() if self.visible else None
 
     def reload(self, rows):
-        """New rows from the periodic refresh: keep query, jump and checkmarks, and the cursor on the same session if it is still visible."""
+        """New rows from the periodic refresh: keep query, jump and checkmarks, and the cursor on the same session if it is still visible.
+        When that session is gone: while searching the cursor goes to the first match, otherwise it keeps its index (clamped)."""
         here = self._here_or_none()
         self.rows = rows
         self.marked &= {r.name for r in rows}
         self._filter()
-        self._goto(here)
+        names = [r.name for r in self.visible]
+        if here in names:
+            self.cursor = names.index(here)
+        elif self.query is not None:
+            self.cursor = 0
+        else:
+            self.cursor = max(0, min(self.cursor, len(self.visible) - 1))
 
     def _end_search(self):
         here = self._here_or_none()
@@ -116,8 +124,6 @@ class Picker:
         return None
 
     def _digit(self, k):
-        if self._jump_expired():
-            self.jump = ""
         self._jump_at = self.clock()
         for buf in (self.jump + k, k):
             n = int(buf)
@@ -131,6 +137,7 @@ class Picker:
         if self._stop is not None:
             names, self._stop = self._stop, None
             return ("stop!", names) if k in ("y", "Y") else None
+        self._expire()
         if self.query is not None:
             return self._search_key(k)
         if len(k) == 1 and k in "0123456789":

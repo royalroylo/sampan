@@ -243,10 +243,13 @@ class CursesScreen:
                         if name not in built:
                             built[name] = card_lines(self.cfg, r, info, now)
                         card = built[name]
-                num = {r.name: i for i, r in enumerate(rows, 1)}  # row numbers follow the unfiltered list
-                left = [_list_cells(r, picker.marked, current, num[r.name], len(rows)) for r in picker.visible]
+                # row numbers and the name column width follow the unfiltered list
+                cells = {r.name: _list_cells(r, picker.marked, current, i, len(rows)) for i, r in enumerate(rows, 1)}
+                left = [cells[r.name] for r in picker.visible]
+                name_w = max((text_width(c[0]) for c in cells.values()), default=None)
                 self.view = dict(title=self.title, left=left, cursor=picker.cursor, card=card, preview=preview,
                                  help=KEYS_HELP, cols=list_cols(rows), empty=list_empty(rows, picker.query),
+                                 name_w=name_w,
                                  notice=self.warning or (self.updater.hint() if self.updater is not None else None))
                 self.prompt = picker.prompt
                 self.draw()

@@ -421,6 +421,29 @@ class ListSearchScreenTest(unittest.TestCase):
         self.assertIn("/foo▏（3 筆，Enter 進入，Esc 取消）", shown)
         self.assertIn("0new-foo", shown)
 
+    def test_reload_outside_search_keeps_index_when_session_vanishes(self):
+        rows = [row("a"), row("b"), row("c"), row("d")]
+        self.rows_now = [row("a"), row("b"), row("d")]
+        s = self.screen(["KEY_DOWN", "KEY_DOWN"] + [TICK] * 6 + ["\n"])
+        self.assertEqual(s.pick(rows, None), ("attach", ["d"]))
+
+    def test_narrow_layout_shows_row_numbers(self):
+        rows = [row(f"s{i}") for i in range(1, 13)]
+        s = self.screen(["q"], w=80)
+        s.pick(rows, None)
+        shown = self.scr.screens[0]
+        self.assertTrue(shown[1].startswith("  1   s1 "), shown[1])
+        self.assertNotIn("│", shown[1])  # info card is underneath, not to the right
+
+    def test_filtering_keeps_name_column_width(self):
+        s = self.screen(["/", "a", "\x1b", "\x1b"])
+        s.pick([row("a"), row("zzzz-very-long-item")], None)
+        full = self.scr.screens[0][1]
+        just_a = self.scr.screens[2][1]  # after "/a": only row a is visible
+        self.assertIn(" 1   a", just_a)
+        self.assertNotIn("zzzz", "\n".join(self.scr.screens[2][1:3]))
+        self.assertEqual(full.index("claude"), just_a.index("claude"))
+
     def test_help_mentions_jump_and_search(self):
         s = self.screen(["q"])
         s.pick([row("a")], None)

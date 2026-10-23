@@ -53,14 +53,16 @@ def _cells(cells, cols, width, cap=None):
     return _fit(segs, width)
 
 
-def _list_rows(left, cursor, cols, width, height, empty):
+def _list_rows(left, cursor, cols, width, height, empty, name_w=None):
     if height <= 0:
         return []
     if not left:
         return [[(pad(" " + (empty or ""), width), "")]] + [[(pad("", width), "")]] * (height - 1)
     top = max(0, min(cursor - height // 2, len(left) - height))
     # with other columns present, the name column extends only NAME_GAP cells past the longest name and the other columns follow right after it (not pushed to the far right)
-    cap = max(text_width(_cell(c[0])[0]) for c in left) + NAME_GAP if cols and left else None
+    # name_w (the widest name cell of the whole list) keeps the columns still while the list is filtered
+    widest = name_w if name_w is not None else max(text_width(_cell(c[0])[0]) for c in left)
+    cap = widest + NAME_GAP if cols and left else None
     rows = []
     for i, cells in enumerate(left[top:top + height]):
         segs = _cells(cells, cols, width, cap)
@@ -120,12 +122,13 @@ def screen_title(updater=None):
 
 
 def render(*, title, left, cursor, card, preview=None, messages=(), prompt=None, help="", width, height,
-           cols=LIST_COLS, empty=None, notice=None, extra=()):
+           cols=LIST_COLS, empty=None, notice=None, extra=(), name_w=None):
     """Turn one screen into [(text, style), …] lines that fit within height lines, each with display width at most width (styles: title / sel / dim / prompt / "").
     At width >= WIDE the info card sits to the right of the list, otherwise under it; when too small, lines are dropped from the top, keeping the message area and key help to the end.
     When preview (lines already through clean_capture) is not None, card is a compact header, followed by a separator line and the last lines of the pane screen.
     notice (e.g. the new-version hint) is a fixed line above the key help, kept to the end like the key help.
-    extra ([(text, style)], e.g. the question and options of an agent startup prompt) goes under the message area and is also kept to the end."""
+    extra ([(text, style)], e.g. the question and options of an agent startup prompt) goes under the message area and is also kept to the end.
+    name_w, when given, is the name column width to cap at instead of the widest name in left (a filtered list keeps the full list's columns)."""
     if width <= 0 or height <= 0:
         return []
     messages = list(messages)
@@ -142,7 +145,7 @@ def render(*, title, left, cursor, card, preview=None, messages=(), prompt=None,
     if width >= WIDE:
         cw = max(36, min(64, width // 2))
         lw = width - cw - 3
-        lrows = _list_rows(left, cursor, cols, lw, body_h, empty)
+        lrows = _list_rows(left, cursor, cols, lw, body_h, empty, name_w)
         crows = _panel(_card_rows(card, cw), preview, cw, body_h)
         crows += [[(pad("", cw), "")]] * (body_h - len(crows))
         body = [segs + [(" │ ", "dim")] + c for segs, c in zip(lrows, crows)]
@@ -154,7 +157,7 @@ def render(*, title, left, cursor, card, preview=None, messages=(), prompt=None,
         want = len(crows) + (1 + PREVIEW_MIN if preview is not None else 0)
         list_h = min(need, max(avail - want, (avail + 1) // 2)) if avail > 0 else body_h
         card_h = (min(len(crows), avail - list_h) if preview is None else avail - list_h) if avail > 0 else 0
-        body = _list_rows(left, cursor, cols, width, body_h - card_h - (1 if card_h else 0), empty)
+        body = _list_rows(left, cursor, cols, width, body_h - card_h - (1 if card_h else 0), empty, name_w)
         if card_h:
             shown = _panel(crows, preview, width, card_h)
             shown += [[(pad("", width), "")]] * (card_h - len(shown))

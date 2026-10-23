@@ -678,9 +678,47 @@ class PickerJumpSearchTest(unittest.TestCase):
         self.assertEqual(p.cursor, 11)
 
     def test_stop_prompt_has_priority(self):
-        p = Picker(ROWS, clock=Clock())
+        clock = Clock()
+        rows = many(32)
+        p = Picker(rows, clock=clock)
+        p.key("1")
+        self.assertEqual(p.prompt, "跳到第 1 列")
         p.key("s")
-        self.assertEqual(p.prompt, "將停掉：a　確定？(y/N)")
+        self.assertEqual(p.prompt, "將停掉：s01　確定？(y/N)")
+        # s already clears the digit buffer: set both states directly to prove the property's order
+        p.jump, p._jump_at, p._stop = "1", clock(), ["s01"]
+        self.assertEqual(p.prompt, "將停掉：s01　確定？(y/N)")
+        p.query = ""
+        self.assertEqual(p.prompt, "將停掉：s01　確定？(y/N)")
+        p._stop = None
+        self.assertEqual(p.prompt, "/▏（32 筆，Enter 進入，Esc 取消）")
+        p.query = None
+        self.assertEqual(p.prompt, "跳到第 1 列")
+
+    def test_expired_jump_is_cleared_on_prompt_read_and_on_any_key(self):
+        clock = Clock()
+        p = Picker(many(32), clock=clock)
+        p.key("1")
+        clock.advance(1.5)
+        self.assertIsNone(p.prompt)
+        self.assertEqual(p.jump, "")
+        p.key("1")
+        clock.advance(1.5)
+        p.key("KEY_LEFT")  # an ignored key still drops the stale buffer
+        self.assertEqual(p.jump, "")
+        p.key("1")
+        clock.advance(1.5)
+        p.key("/")
+        self.assertEqual(p.jump, "")
+
+    def test_reload_outside_search_keeps_index_when_session_vanishes(self):
+        p = Picker([row("a"), row("b"), row("c"), row("d")], current="c")
+        self.assertEqual(p.cursor, 2)
+        p.reload([row("a"), row("b"), row("d")])
+        self.assertEqual(p.cursor, 2)
+        self.assertEqual(p.visible[p.cursor].name, "d")
+        p.reload([row("a")])
+        self.assertEqual(p.cursor, 0)  # clamped
 
 
 class InteractiveUiTest(UiTest):
