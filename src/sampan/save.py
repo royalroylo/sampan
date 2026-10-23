@@ -1,4 +1,7 @@
+import os
+
 from .clock import now_iso
+from .fsutil import PRIVATE_FILE, private_dir
 from .observe import PROC_ROOT, agent_sessions, observe
 from .procs import list_procs
 from .registry import RegistryError, load_rows, lock, merge, write_rows
@@ -6,8 +9,10 @@ from .tmux import Tmux, unreadable_message
 
 
 def append_log(cfg, msg):
-    cfg.save_log.parent.mkdir(parents=True, exist_ok=True)
-    with cfg.save_log.open("a") as fh:
+    private_dir(cfg.save_log.parent)
+    fd = os.open(cfg.save_log, os.O_WRONLY | os.O_APPEND | os.O_CREAT, PRIVATE_FILE)
+    os.fchmod(fd, PRIVATE_FILE)
+    with os.fdopen(fd, "a") as fh:
         fh.write(f"{now_iso()} {msg}\n")
 
 

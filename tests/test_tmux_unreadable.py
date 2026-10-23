@@ -153,6 +153,12 @@ class StopMoveTest(Base):
         self.assertEqual(tmux_actions(r), [])
         self.assertEqual(self.registry(), before)
 
+    def test_stop_warns_once(self):
+        # save (run first by stop) and stop both noticed the unreadable tmux; the user sees one line
+        cmd_stop(self.cfg, runner(), self.msgs.append, sleep=lambda _: None, proc_root=Path("/nonexistent"))
+        self.assertEqual(sum("讀不到 tmux" in m for m in self.msgs), 1, self.msgs)
+        self.assertIn("什麼都沒停", "\n".join(self.msgs))
+
     def test_move_does_nothing(self):
         d = Path(tempfile.mkdtemp())
         r = runner()

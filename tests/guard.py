@@ -8,6 +8,10 @@ since those go through them) and os.exec* -- and raises RealCommandBlocked for:
   * git: only network / mutating subcommands (ls-remote, fetch, clone, push, pull).
     Read-only local git (e.g. `git ls-files` in test_scrub) stays allowed.
 
+Shell strings (shell=True, or the argument after `sh -c` / `bash -c` / `zsh -c` ...) are split into simple commands on
+; & | newline ( ) and backticks, and every word is checked, so `sh -c 'cd x && tmux kill-server'` and
+`sh -c 'git ls-remote ...'` are blocked too.
+
 The executable is matched on its basename, so /usr/sbin/lsof is caught like lsof.
 
 RealCommandBlocked derives from BaseException on purpose: sampan code wraps subprocess calls in
@@ -33,6 +37,7 @@ BLOCKED_GIT_SUBCOMMANDS = frozenset({"ls-remote", "fetch", "clone", "push", "pul
 
 SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
 _WORD = re.compile(r"[^\s;&|()<>`$'\"]+")  # command-string words, splitting on shell separators and quotes
+_SEPARATORS = re.compile(r"[;&|()`\n]")  # what ends one simple command in a shell string
 
 blocked_calls = []
 _allowed = set()
@@ -58,15 +63,33 @@ def _argv(args):
     return [os.fsdecode(a) for a in args]
 
 
-def _shell_words(argv, is_string):
-    """Words of the command string a shell would run: a string command (shell=True), or the argument after -c of sh/bash/zsh/dash."""
+def _shell_text(argv, is_string):
+    """The command string a shell would run: a string command (shell=True), or the argument after -c of sh/bash/zsh/dash; None otherwise."""
     if is_string:
-        text = " ".join(argv)
-    elif os.path.basename(argv[0]) in SHELLS and any(a.startswith("-") and "c" in a[1:] and not a.startswith("--") for a in argv[1:]):
-        text = " ".join(argv[1:])
-    else:
-        return []
-    return [os.path.basename(w) for w in _WORD.findall(text)]
+        return " ".join(argv)
+    if os.path.basename(argv[0]) in SHELLS and any(a.startswith("-") and "c" in a[1:] and not a.startswith("--") for a in argv[1:]):
+        return " ".join(argv[1:])
+    return None
+
+
+def _shell_commands(text):
+    """The simple commands of a shell string, each as its list of words (basename of the first one), split on ; & | newline ( ) `."""
+    for part in _SEPARATORS.split(text):
+        words = _WORD.findall(part)
+        if words:
+            yield [os.path.basename(words[0]), *words[1:]]
+
+
+def _blocked_in_shell(text):
+    """The first forbidden word in a shell string: any word naming a blocked command, or a network / mutating git subcommand."""
+    for words in _shell_commands(text):
+        for i, w in enumerate(words):
+            name = os.path.basename(w)
+            if name in BLOCKED and name not in _allowed:
+                return name
+            if name == "git" and "git" not in _allowed and _git_subcommand(words[i:]) in BLOCKED_GIT_SUBCOMMANDS:
+                return f"git {_git_subcommand(words[i:])}"
+    return None
 
 
 def check(args):
@@ -77,10 +100,11 @@ def check(args):
     name = os.path.basename(argv[0])
     if name in _allowed:
         return
-    for word in _shell_words(argv, isinstance(args, (str, bytes, os.PathLike))):
-        if word in BLOCKED and word not in _allowed:
-            blocked_calls.append(argv)
-            raise RealCommandBlocked(f"tests must not run the real command {word!r} through a shell: {argv!r}")
+    text = _shell_text(argv, isinstance(args, (str, bytes, os.PathLike)))
+    word = _blocked_in_shell(text) if text is not None else None
+    if word is not None:
+        blocked_calls.append(argv)
+        raise RealCommandBlocked(f"tests must not run the real command {word!r} through a shell: {argv!r}")
     if name in BLOCKED or (name == "git" and _git_subcommand(argv) in BLOCKED_GIT_SUBCOMMANDS):
         blocked_calls.append(argv)
         raise RealCommandBlocked(

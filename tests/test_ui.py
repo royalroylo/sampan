@@ -139,6 +139,17 @@ class UiTest(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("已中斷", self.text())
 
+    def test_loop_action_error_is_shown_and_the_list_stays(self):
+        actions = iter([("save", []), ("bogus", ["a"]), ("quit", [])])
+
+        def boom(*a, **kw):
+            raise RuntimeError("壞掉了")
+        rc = cmd_ui(self.cfg, self.r, self.msgs.append, lambda _p: "", loop=True, rows_fn=lambda c, r: ROWS,
+                    picker_fn=lambda rows, cur: next(actions), save_fn=boom)
+        self.assertEqual(rc, 0)
+        self.assertIn("❌ save 失敗：壞掉了", self.text())
+        self.assertIn("❌ bogus 失敗：未知的 ui action：'bogus'", self.text())
+
     def test_loop_attach_without_tmux_stays_in_list(self):
         self.r.on(["tmux", "-u", "has-session"], cp(rc=1))
         actions = iter([("attach", ["old"]), ("quit", [])])

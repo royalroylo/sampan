@@ -17,7 +17,7 @@ from . import launchd, paths
 from .config import SOURCE_RULE, ConfigError, load_config, same_source, valid_source
 from .deps import PATH_LINE
 from .deps import ensure as ensure_deps
-from .fsutil import atomic_write
+from .fsutil import PRIVATE_FILE, atomic_write
 from .hook import hook_status, install_hook, uninstall_hook
 from .observe import PROC_ROOT
 from .plugins import read_state
@@ -479,7 +479,7 @@ def cmd_init(cfg_path, state_dir, run, out, ask, *, home, sampan_path, env=None,
         if not _yes(ask, f"寫入 {cfg_path}？[Y/n] ", True):
             out("未寫入，結束")
             return 1
-        atomic_write(cfg_path, text)
+        atomic_write(cfg_path, text, new_mode=PRIVATE_FILE)  # a new config is private; an existing one keeps its mode
         out(f"✔ 已寫入 {cfg_path}")
     else:
         old = cfg_path.read_text()

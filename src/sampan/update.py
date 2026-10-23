@@ -22,6 +22,8 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as metadata_version
 from pathlib import Path
 
+from .fsutil import PRIVATE_FILE, atomic_write, private_dir
+
 REPO = "https://github.com/royalroylo/sampan"
 PACKAGE = "sampan"
 TTL = timedelta(hours=6)
@@ -135,10 +137,8 @@ def read_cache(state_dir):
 def write_cache(state_dir, latest, at):
     path = Path(state_dir) / CACHE
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps({"checked_at": at.isoformat(), "latest": latest}) + "\n")
-        os.replace(tmp, path)
+        private_dir(path.parent)
+        atomic_write(path, json.dumps({"checked_at": at.isoformat(), "latest": latest}) + "\n", mode=PRIVATE_FILE)
     except OSError:
         pass
 
@@ -249,8 +249,7 @@ def do_update(out, *, current, stream=_stream, run=_run, which=shutil.which, lat
             tag = latest_tag(run)
         cmd = UPGRADE if step == "upgrade" else reinstall_cmd(tag)
         out(f"▶ {' '.join(cmd)}")
-        seen = []
-        rc = stream(cmd, lambda line: (seen.append(line), out(f"  {line}")))
+        rc = stream(cmd, lambda line: out(f"  {line}"))
         after = installed_version(run)
         if after and after != current:
             out(f"✔ 已更新到 {after}" + ("，重新開啟 sampan…" if reopen else ""))

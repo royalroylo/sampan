@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .clock import now_stamp
+from .fsutil import PRIVATE_FILE, atomic_write, private_dir, private_file
 from .procs import is_uuid
 
 STATES = ("active", "retired")
@@ -107,9 +108,10 @@ def id_problem(session_id):
 
 @contextmanager
 def lock(state_dir):
-    state_dir = Path(state_dir)
-    state_dir.mkdir(parents=True, exist_ok=True)
-    with open(state_dir / "registry.lock", "w") as fh:
+    state_dir = private_dir(state_dir)
+    fd = os.open(state_dir / "registry.lock", os.O_WRONLY | os.O_CREAT, PRIVATE_FILE)
+    os.fchmod(fd, PRIVATE_FILE)
+    with os.fdopen(fd, "w") as fh:
         fcntl.flock(fh, fcntl.LOCK_EX)
         try:
             yield
@@ -144,19 +146,19 @@ def load_rows(path):
 def write_rows(path, rows, now, history_dir, keep=20):
     path = Path(path)
     history_dir = Path(history_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    private_dir(path.parent)
     if path.exists():
-        history_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(path, history_dir / f"registry-{now_stamp()}.json")
+        private_dir(history_dir)
+        snap = history_dir / f"registry-{now_stamp()}.json"
+        shutil.copy2(path, snap)
+        private_file(snap)
         # By mtime, not by name: older snapshots are named in local time (Taipei), newer ones in UTC, so names
         # from before and after an upgrade do not sort in time order.
         snaps = sorted(history_dir.glob("registry-*.json"), key=lambda p: (p.stat().st_mtime_ns, p.name))
         for old in snaps[:-keep]:
             old.unlink()
     body = {"version": VERSION, "saved_at": now, "sessions": [asdict(r) for r in rows]}
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(body, ensure_ascii=False, indent=2) + "\n")
-    os.replace(tmp, path)
+    atomic_write(path, json.dumps(body, ensure_ascii=False, indent=2) + "\n", mode=PRIVATE_FILE)
 
 
 def set_state(rows, name, state):

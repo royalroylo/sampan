@@ -54,10 +54,12 @@ no account. The complete list of what it changes or touches:
 ## Trust model
 
 The registry holds working directories and conversation ids, and sampan acts on it: anyone who can write
-`registry.json` can make sampan type resume commands into your tmux panes. Keep the state directory and the registry
-readable and writable only by you (`chmod 700 ~/.local/state/sampan && chmod 600 ~/.local/state/sampan/registry.json`);
-sampan does not change the permissions of an existing file. The same goes for `config.toml` (it names the marketplaces
-`plugins sync` installs from) and the profile `settings.json` files.
+`registry.json` can make sampan type resume commands into your tmux panes. sampan keeps the state directory private
+itself: whenever it writes there, the directory (and `history/`, `hooks/`) is set to `700` and the files it writes
+(`registry.json`, the history snapshots, `save.log`, the lock, the update-check cache, the hook records) to `600`,
+whatever your umask, also fixing files an older version left readable by others. A new `config.toml` written by
+`sampan init` is created `600`; sampan never changes the permissions of an existing config file, so keep `config.toml`
+(it names the marketplaces `plugins sync` installs from) and the profile `settings.json` files writable only by you.
 
 Safety rules the code keeps (see `ARCHITECTURE.md`): one agent per tmux session; resume never opens a new conversation
 in its place; `save` never restores; the registry never deletes a row on its own.

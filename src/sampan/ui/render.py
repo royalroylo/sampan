@@ -116,7 +116,7 @@ def _panel(crows, preview, width, height):
 
 
 def screen_title(updater=None):
-    """Title of the list screen: sampan plus the running version (e.g. sampan 0.5.1), so it is obvious at a glance whether it is an old process that has not been restarted."""
+    """Title of the list screen: sampan plus the running version (e.g. sampan 0.6.3), so it is obvious at a glance whether it is an old process that has not been restarted."""
     ver = updater.current if updater is not None else update_mod.current_version()
     return f"sampan {ver}" if ver and ver != "unknown" else "sampan"
 

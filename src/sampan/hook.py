@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .clock import now_stamp
-from .fsutil import atomic_write, write_target
+from .fsutil import PRIVATE_FILE, atomic_write, private_dir, write_target
 
 HOOK_MARK = "sampan hook session-start"
 _SUFFIX = " hook session-start"
@@ -39,7 +39,6 @@ def _claude_ancestor(procs, start_pid):
 
 def run_session_start(stdin, env, *, state_dir, procs_fn, now, start_pid=None):
     """Write state_dir/hooks/<claude pid>.json. Never raises and never prints (stdout becomes model context)."""
-    tmp = None
     try:
         data = json.loads(stdin.read())
         if not isinstance(data, dict) or not isinstance(data.get("session_id"), str) or not data["session_id"]:
@@ -50,20 +49,11 @@ def run_session_start(stdin, env, *, state_dir, procs_fn, now, start_pid=None):
         rec = {"pid": pid, "session_id": data["session_id"], "cwd": data.get("cwd", ""),
                "pane": env.get("TMUX_PANE"), "config_dir": env.get("CLAUDE_CONFIG_DIR", ""),
                "source": data.get("source", ""), "at": now()}
-        d = Path(state_dir) / "hooks"
-        d.mkdir(parents=True, exist_ok=True)
-        tmp = d / f".{pid}.json.tmp-{os.getpid()}"
-        tmp.write_text(json.dumps(rec, ensure_ascii=False))
-        os.replace(tmp, d / f"{pid}.json")
-        tmp = None
+        private_dir(state_dir)
+        d = private_dir(Path(state_dir) / "hooks")
+        atomic_write(d / f"{pid}.json", json.dumps(rec, ensure_ascii=False), mode=PRIVATE_FILE)
     except BaseException:
         pass
-    finally:
-        if tmp is not None:
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
 
 
 def read_hook_records(state_dir, alive):

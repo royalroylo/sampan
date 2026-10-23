@@ -293,6 +293,7 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
     """picker_fn(rows, current) returns (action, list of names); when None, use the plain-text menu where a number is typed.
     restore_picker_fn / adopt_picker_fn are the checklist interfaces for R / A; when None, restore / adopt ask in text themselves.
     loop=True: after an action return to the list, leaving only on q / Esc (or when an opened session is attached); False does just one action.
+    With loop and picker_fn (curses), an action that raises is shown as "❌ <action> 失敗：<error>" and the list stays (Ctrl-C still interrupts).
     choose_dir_fn(start, allow_missing=…) is the directory chooser screen for n / m (returns a path or None); when None, the directory is typed.
     U (updater = update.Checker) updates after confirmation, re-checking first when no newer version is known and offering a reinstall when there is none;
     on success sampan is re-executed with the same arguments (argv).
@@ -395,6 +396,11 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
                 out("")
                 out("已中斷")
                 rc, go = 130, None
+            except Exception as e:  # noqa: BLE001  the curses loop must outlive a failed action
+                if not (loop and picker_fn is not None):
+                    raise
+                out(f"❌ {action} 失敗：{e}")
+                rc, go = 1, None
         if isinstance(go, tuple) and go[0] is RESUME_HERE:
             # in curses exec_fn only records it, and the exec happens after curses is closed: sampan is replaced by the reattach command
             exec_fn("/bin/sh", ["/bin/sh", "-c", go[1]])

@@ -166,7 +166,7 @@ latest_version() {
         [ -z "$tag" ] || tag="v$tag"
         if [ -n "$tag" ]; then echo "$tag"; return 0; fi
     fi
-    return 0  # prints nothing when the lookup failed; the caller falls back and remembers it
+    return 0  # prints nothing when the lookup failed; the caller then uses FALLBACK_VERSION
 }
 
 path_hint() {

@@ -9,16 +9,38 @@ def write_target(path):
     return path.resolve() if path.is_symlink() else path
 
 
-def atomic_write(path, text):
-    """Write text atomically at write_target(path); an existing file keeps its mode; the temp file never lingers."""
+PRIVATE_FILE = 0o600  # files under the state dir: only the user may read or write them
+PRIVATE_DIR = 0o700
+
+
+def private_dir(path):
+    """mkdir -p path and make it PRIVATE_DIR, also when it already existed with looser bits."""
+    path = Path(path)
+    path.mkdir(parents=True, exist_ok=True)
+    os.chmod(path, PRIVATE_DIR)
+    return path
+
+
+def private_file(path):
+    """Set path to PRIVATE_FILE (fixes a file an older version left with looser bits)."""
+    os.chmod(path, PRIVATE_FILE)
+
+
+def atomic_write(path, text, *, mode=None, new_mode=None):
+    """Write text atomically at write_target(path); the temp file never lingers.
+    mode: the file always ends with this mode. Otherwise an existing file keeps its mode, and a new file gets new_mode
+    (None: the umask default). The temp file is created 0600, so the text is never readable by others in between."""
     target = write_target(path)
-    mode = stat.S_IMODE(target.stat().st_mode) if target.exists() else None
+    old = stat.S_IMODE(target.stat().st_mode) if target.exists() else None
+    final = mode if mode is not None else (old if old is not None else new_mode)
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(f".{target.name}.tmp-{os.getpid()}")
     try:
-        tmp.write_text(text)
-        if mode is not None:
-            os.chmod(tmp, mode)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, PRIVATE_FILE if final is not None else 0o666)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(text)
+        if final is not None:
+            os.chmod(tmp, final)
         os.replace(tmp, target)
     finally:
         tmp.unlink(missing_ok=True)

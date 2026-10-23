@@ -22,7 +22,7 @@ from .render import (
     screen_title,
 )
 from .state import Checklist, Picker, _row_key
-from .text import BACKSPACE, ENTER, clean_capture, text_width
+from .text import BACKSPACE, ENTER, MOVES, clean_capture, text_width
 
 KEYS_HELP = "↑↓ 移動　1-9 跳列　/ 搜尋　空白 勾選　Enter 接上　s 停掉　R 接回　A 接手　n 開新　w 存檔　q 離開"
 RESTORE_HELP = "↑↓ 移動　空白 勾選　Enter 確認接回　q 取消"
@@ -174,8 +174,8 @@ class CursesScreen:
                 k = self.key()
                 if k is None:
                     continue
-                if k in Picker.MOVES:
-                    cur = max(0, min(len(choices) - 1, cur + Picker.MOVES[k]))
+                if k in MOVES:
+                    cur = max(0, min(len(choices) - 1, cur + MOVES[k]))
                 elif k in ENTER:
                     choice = choices[cur][1]
                 elif k == "\x1b":

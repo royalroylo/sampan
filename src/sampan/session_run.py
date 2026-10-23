@@ -211,7 +211,12 @@ def cmd_stop(cfg, run, out, *, names=(), profile=None, force=False, dry_run=Fals
              sleep=time.sleep, timeout=90, own_pane=None, kill=os.kill, proc_root=Path("/proc")):
     from .save import cmd_save
 
-    if not dry_run and cmd_save(cfg, run, out, quiet=True, proc_root=proc_root) == 2:
+    # save's lines are held back until we know tmux is readable: when it is not, save has said so already and
+    # the stop message below says it again, so only that one is shown
+    save_lines = []
+    if not dry_run and cmd_save(cfg, run, save_lines.append, quiet=True, proc_root=proc_root) == 2:
+        for line in save_lines:
+            out(line)
         return 2
     tmux = Tmux(run)
     try:
@@ -219,6 +224,8 @@ def cmd_stop(cfg, run, out, *, names=(), profile=None, force=False, dry_run=Fals
     except TmuxUnreadable as e:
         out(f"❌ {e}；不知道哪些 session 在跑，什麼都沒停")
         return 2
+    for line in save_lines:
+        out(line)
     procs = list_procs(run)
     found, multi = _agents(cfg, run, panes, procs, proc_root)
 

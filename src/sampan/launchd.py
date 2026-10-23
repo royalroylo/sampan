@@ -3,7 +3,7 @@ import os
 import plistlib
 from pathlib import Path
 
-from .fsutil import atomic_write
+from .fsutil import atomic_write, private_dir
 
 LABEL = "io.github.royalroylo.sampan-save"
 # Every hour on the hour. StartInterval is not used: its timer pauses during sleep, so a laptop with the lid closed might not save for hours;
@@ -79,7 +79,7 @@ def check(home, sampan_path, run=None, *, uid=None, env=None):
 
 
 def write_plist(sampan_path, state_dir, home, env=None):
-    Path(state_dir).mkdir(parents=True, exist_ok=True)
+    private_dir(state_dir)
     return atomic_write(plist_path(home), plist_text(sampan_path, state_dir, default_path_env(home), env))
 
 

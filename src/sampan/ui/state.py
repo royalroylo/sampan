@@ -33,8 +33,6 @@ class Picker:
     searching) and every key is text until Esc, Enter or Backspace on an empty query. visible is the list shown (filtered while
     query is non-empty) and cursor indexes it."""
 
-    MOVES = MOVES
-
     def __init__(self, rows, current=None, *, clock=time.monotonic):
         self.rows = rows
         self.marked = set()
@@ -113,7 +111,7 @@ class Picker:
                 return None
             self.query = self.query[:-1]
         elif k in ("KEY_UP", "KEY_DOWN"):
-            self.cursor = max(0, min(len(self.visible) - 1, self.cursor + self.MOVES[k]))
+            self.cursor = max(0, min(len(self.visible) - 1, self.cursor + MOVES[k]))
             return None
         elif len(k) == 1 and k.isprintable():
             self.query += k
@@ -162,8 +160,8 @@ class Picker:
             return None
         if not self.visible:
             return None
-        if k in self.MOVES:
-            self.cursor = max(0, min(len(self.visible) - 1, self.cursor + self.MOVES[k]))
+        if k in MOVES:
+            self.cursor = max(0, min(len(self.visible) - 1, self.cursor + MOVES[k]))
             return None
         if k == " ":
             self.marked ^= {self._here()}
@@ -191,8 +189,6 @@ class Checklist:
     """State of the restore/adopt checklist: default checkmarks equal candidates; a row with skip cannot be checked. key() returns (action, list of ids) or None.
     The id is ident(c): restore uses the tmux name, adopt uses Outside.key."""
 
-    MOVES = Picker.MOVES
-
     def __init__(self, cands, ident=_row_key):
         self.cands = cands
         self.ident = ident
@@ -206,8 +202,8 @@ class Checklist:
             return ("done", [self.ident(c) for c in self.cands if self.ident(c) in self.marked])
         if not self.cands:
             return None
-        if k in self.MOVES:
-            self.cursor = max(0, min(len(self.cands) - 1, self.cursor + self.MOVES[k]))
+        if k in MOVES:
+            self.cursor = max(0, min(len(self.cands) - 1, self.cursor + MOVES[k]))
         elif k == " ":
             c = self.cands[self.cursor]
             if not c.skip:

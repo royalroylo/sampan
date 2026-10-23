@@ -55,6 +55,21 @@ class GuardTest(unittest.TestCase):
         check(["bash", "script.sh", "tmux"])  # a script argument is not a -c command string
         check("echo ok")
 
+    def test_shell_string_forms_of_the_brief(self):
+        # shell=True string and an argv list: every command word after sh -c and after ; && | is checked
+        self._expect_blocked(lambda: check("sh -c 'tmux kill-server'"))
+        self._expect_blocked(lambda: check(["sh", "-c", "tmux kill-server"]))
+        self._expect_blocked(lambda: check(["bash", "-c", "true; tmux kill-server"]))
+        self._expect_blocked(lambda: check("echo a | sampan save"))
+
+    def test_git_network_subcommand_hidden_in_a_shell_string(self):
+        self._expect_blocked(lambda: check(["sh", "-c", "git ls-remote https://example.invalid/x"]))
+        self._expect_blocked(lambda: check("cd /tmp && git -C repo fetch"))
+        self._expect_blocked(lambda: check(["bash", "-c", "echo hi; git push origin main"]))
+        self._expect_blocked(lambda: check("true | git clone x"))
+        check(["sh", "-c", "git ls-files && echo fetch"])  # local git; "fetch" is another command's argument
+        check("git status; echo push")
+
     def test_opt_out_allows_one_command(self):
         with allow_real_commands("uv"):
             check(["/opt/homebrew/bin/uv", "--version"])  # no raise; nothing is executed
