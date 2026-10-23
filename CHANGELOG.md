@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-10-23
+
 ### Fixed
 - A Claude or Codex started as the pane's own command (`tmux new-session -s x claude`, no shell in between) is now
   seen: before, the session showed "沒有 agent", `save` warned `session 檔指向 … 不在那個 pane 裡` and never
@@ -15,6 +17,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 - AGENTS.md: agents open sessions with `sampan new` rather than raw `tmux new-session`.
+- Documentation: release pins move to v0.6.4.
 
 ## [0.6.3] - 2026-10-23
 
@@ -193,7 +196,8 @@ First public release. Versions up to 0.5.3 were released privately under the nam
 ### Security
 - Credentials in git URLs are no longer shown in output.
 
-[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.6.3...HEAD
+[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.6.4...HEAD
+[0.6.4]: https://github.com/royalroylo/sampan/releases/tag/v0.6.4
 [0.6.3]: https://github.com/royalroylo/sampan/releases/tag/v0.6.3
 [0.6.2]: https://github.com/royalroylo/sampan/releases/tag/v0.6.2
 [0.6.1]: https://github.com/royalroylo/sampan/releases/tag/v0.6.1
