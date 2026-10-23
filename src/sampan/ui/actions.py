@@ -15,7 +15,7 @@ from .dirpick import recent_dirs, sessions_by_dir
 from .state import row_text
 
 HELP = ("編號 = 接上／切過去（已停止的先接回）；s 停掉　m 搬目錄　e 改名　R 接回　A 接手 tmux 外的　r retire　a activate"
-        "　n 開新 session　w 立即存檔　q 離開")
+        "　n 開新 session　w 立即存檔　/文字 搜尋　q 離開")
 
 
 def _ask(ask, prompt):
@@ -171,6 +171,19 @@ def _rename(cfg, run, out, ask, name, rename_fn):
     return rename_fn(cfg, run, out, name, new)
 
 
+def _plain_search(out, rows, query):
+    """/text: case-insensitive substring match on the name; one hit attaches, several are listed with their original numbers."""
+    hits = [(i, r) for i, r in enumerate(rows, 1) if query and query.lower() in r.name.lower()]
+    if not hits:
+        out(f"沒有名稱含「{query}」的 session")
+    elif len(hits) == 1:
+        return ("attach", [hits[0][1].name])
+    else:
+        for i, r in hits:
+            out(f"  [{i:>2}] {row_text(r)}")
+    return ("invalid", [])
+
+
 def _plain_action(ask, out, rows, current):
     _show(out, rows, current)
     choice = _ask(ask, "選擇: ")
@@ -185,6 +198,8 @@ def _plain_action(ask, out, rows, current):
         return ("save", [])
     if choice == "U":
         return ("update", [])
+    if choice.startswith("/"):
+        return _plain_search(out, rows, choice[1:].strip())
     if choice.isdigit():
         picked = _pick(lambda _p: choice, out, rows, "", many=False)
         return ("attach", picked) if picked else ("invalid", [])

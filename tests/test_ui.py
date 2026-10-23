@@ -394,6 +394,34 @@ class UiTest(unittest.TestCase):
                                     new_fn=lambda *a: self.calls.append(a) or 0), 0)
         self.assertEqual(self.calls, [])
 
+    def plain_choice(self, choice, rows=ROWS):
+        from sampan.ui.actions import HELP, _plain_action
+        result = _plain_action(lambda _p: choice, self.msgs.append, rows, None)
+        self.after_menu = self.msgs[self.msgs.index(HELP) + 1:]  # what was printed after the menu itself
+        return result
+
+    def test_plain_slash_one_match_attaches(self):
+        self.assertEqual(self.plain_choice("/OLD"), ("attach", ["old"]))
+
+    def test_plain_slash_several_matches_listed_with_original_numbers(self):
+        rows = [row("web-a"), row("db"), row("web-b")]
+        self.assertEqual(self.plain_choice("/web", rows), ("invalid", []))
+        text = "\n".join(self.after_menu)
+        self.assertIn("[ 1] web-a", text)
+        self.assertIn("[ 3] web-b", text)
+        self.assertNotIn("db", text)
+
+    def test_plain_slash_no_match_or_empty_filter(self):
+        for choice, query in (("/zzz", "zzz"), ("/", "")):
+            with self.subTest(choice=choice):
+                self.assertEqual(self.plain_choice(choice), ("invalid", []))
+                self.assertEqual(self.after_menu, [f"沒有名稱含「{query}」的 session"])
+                self.msgs.clear()
+
+    def test_plain_help_mentions_slash_search(self):
+        self.ui(["q"])
+        self.assertIn("/文字 搜尋", self.text())
+
     def test_plain_rename(self):
         self.ui(["e", "2", "fresh"])
         self.assertEqual(self.calls, [("rename", "b", "fresh")])
