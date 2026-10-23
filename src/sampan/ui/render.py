@@ -219,16 +219,23 @@ def _profile_cell(r):
     return "-" if r.agent == "codex" else (r.profile or "-")
 
 
+def list_empty(rows, query):
+    """Message for an empty session list: no sessions at all, or no name matching the search."""
+    return f"沒有名稱含「{query}」的 session" if rows and query else "目前沒有任何 session（n 開新的）"
+
+
 def list_cols(rows):
     """Widths of the session list columns other than the name: agent, profile (the longest profile, at most PROFILE_MAX cells), state, claude status."""
     pw = max([text_width(_profile_cell(r)) for r in rows] + [1])
     return (6, min(PROFILE_MAX, pw), 10, 7)
 
 
-def _list_cells(r, marked, current):
+def _list_cells(r, marked, current, num=None, total=0):
+    """One session list row. With num, the row starts with its 1-based position in the unfiltered list, right-aligned to the width of total."""
     mark = "●" if r.name in marked else " "
     here = " ←" if r.name == current else ""
-    return (f"{mark} {r.name}{here}", r.agent, _profile_cell(r),
+    lead = f"{num:>{len(str(total))}} " if num is not None else ""
+    return (f"{lead}{mark} {r.name}{here}", r.agent, _profile_cell(r),
             (list_state(r), state_style(r.state)), (r.agent_status, agent_style(r.agent_status)))
 
 

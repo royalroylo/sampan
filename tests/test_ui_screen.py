@@ -317,7 +317,7 @@ class CursesScreenTest(unittest.TestCase):
         self.assertIn("│ m", shown)  # info card for the cursor row
         self.assertEqual(s.messages, [])  # new action starts: message area is cleared
         first = self.scr.screens[-1][1]
-        self.assertRegex(first, r"^ +a +claude alice +執行中 +idle +│")  # profile column follows agent, fields sit right against the name
+        self.assertRegex(first, r"^ +1 +a +claude alice +執行中 +idle +│")  # profile column follows agent, fields sit right against the name
 
     def test_cursor_stays_on_same_session_after_an_action(self):
         rows = [row("a"), row("b"), row("c")]
@@ -355,6 +355,76 @@ class CursesScreenTest(unittest.TestCase):
     def test_tiny_terminal_does_not_crash(self):
         s = self.screen(["q"], h=2, w=4)
         self.assertEqual(s.pick([row("a")], None), ("quit", []))
+
+
+class ListSearchScreenTest(unittest.TestCase):
+    def setUp(self):
+        self.cfg = make_env(Path(tempfile.mkdtemp()))
+        self.r = FakeRunner(strict=True).on(["tmux", "-u", "list-panes"], cp()).on(["tmux", "-u", "list-windows"], cp())
+        self.t = [0.0]
+        self.rows_now = []
+
+    def tick(self):
+        self.t[0] += 1.0
+
+    def screen(self, keys, h=30, w=120):
+        self.scr = FakeScr(keys, h=h, w=w, on_tick=self.tick)
+        return CursesScreen(self.scr, self.cfg, self.r, now_fn=lambda: NOW, clock=lambda: self.t[0],
+                            rows_fn=lambda cfg, run: self.rows_now)
+
+    def test_render_row_numbers_right_aligned(self):
+        from sampan.ui import _list_cells
+        rows = [row(f"s{i}") for i in range(1, 13)]
+        cells = [_list_cells(r, set(), None, i, len(rows))[0] for i, r in enumerate(rows, 1)]
+        self.assertTrue(cells[0].startswith(" 1 "), cells[0])
+        self.assertEqual(cells[0], " 1   s1")
+        self.assertTrue(cells[11].startswith("12 "), cells[11])
+        s = self.screen(["q"])
+        s.pick(rows, None)
+        shown = self.scr.screens[0]
+        self.assertTrue(shown[1].startswith("  1   s1 "), shown[1])
+        self.assertTrue(shown[12].startswith(" 12   s12 "), shown[12])
+
+    def test_row_numbers_stay_while_filtering(self):
+        rows = [row(f"s{i}") for i in range(1, 13)]
+        s = self.screen(["/", "1", "2", "\x1b", "q"])
+        s.pick(rows, None)
+        shown = self.scr.screens[3]
+        self.assertTrue(shown[1].startswith(" 12   s12 "), shown[1])
+        self.assertIn("/12▏（1 筆，Enter 進入，Esc 取消）", "\n".join(shown))
+
+    def test_search_no_match_enter_is_noop(self):
+        s = self.screen(["/", "z", "z", "z", "\n", "\x1b", "q"])
+        self.assertEqual(s.pick([row("a"), row("b")], None), ("quit", []))
+        shown = "\n".join(self.scr.screens[4])  # after Enter
+        self.assertIn("沒有名稱含「zzz」的 session", shown)
+        self.assertIn("/zzz▏（0 筆，Enter 進入，Esc 取消）", shown)
+
+    def test_search_digits_go_to_query_and_attach(self):
+        rows = [row("001-a"), row("003-foo"), row("010-bar")]
+        s = self.screen(["/", "0", "0", "3", "\n"])
+        self.assertEqual(s.pick(rows, None), ("attach", ["003-foo"]))
+
+    def test_digit_jump_attaches(self):
+        rows = [row(f"s{i:02d}") for i in range(1, 33)]
+        s = self.screen(["1", "2", "\n"])
+        self.assertEqual(s.pick(rows, None), ("attach", ["s12"]))
+        self.assertIn("跳到第 1 列", "\n".join(self.scr.screens[1]))
+
+    def test_reload_keeps_query_and_cursor(self):
+        rows = [row("a"), row("foo-1"), row("foo-2")]
+        self.rows_now = [row("0new-foo"), row("a"), row("foo-1"), row("foo-2")]
+        s = self.screen(["/", "f", "o", "o", "KEY_DOWN"] + [TICK] * 6 + ["\n"])
+        self.assertEqual(s.pick(rows, None), ("attach", ["foo-2"]))
+        self.assertEqual([r.name for r in rows], ["0new-foo", "a", "foo-1", "foo-2"])
+        shown = "\n".join(self.scr.screens[-1])
+        self.assertIn("/foo▏（3 筆，Enter 進入，Esc 取消）", shown)
+        self.assertIn("0new-foo", shown)
+
+    def test_help_mentions_jump_and_search(self):
+        s = self.screen(["q"])
+        s.pick([row("a")], None)
+        self.assertIn("↑↓ 移動　1-9 跳列　/ 搜尋　空白 勾選", self.scr.screens[0][-1])
 
 
 class CursesUiTest(unittest.TestCase):

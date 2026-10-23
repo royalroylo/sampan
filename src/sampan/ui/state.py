@@ -1,6 +1,8 @@
 """Pure state machines of the ui: Picker (arrow-key menu), Checklist (the restore/adopt checklist), and the display conversion of state labels. Never touches curses."""
+import time
+
 from ..status import State, _fmt_tokens
-from .text import ENTER, MOVES, pad
+from .text import BACKSPACE, ENTER, MOVES, pad
 
 
 def show_state(row):
@@ -21,27 +23,121 @@ def row_text(r):
             f"{pad(r.agent_status, 7)} {_fmt_tokens(r.tokens)}")
 
 
+JUMP_S = 1.0  # digit jump: a digit typed more than this many seconds after the previous one starts a new number
+
+
 class Picker:
     """State of the arrow-key menu; key() returns (action, list of names) or None (keep choosing).
-    s does not return immediately: it first sets prompt to a confirmation question, and on the next key y/Y returns ("stop!", name) (confirmed), any other key cancels."""
+    s does not return immediately: it first sets prompt to a confirmation question, and on the next key y/Y returns ("stop!", name) (confirmed), any other key cancels.
+    Digits jump to that row number (jump holds the digits typed so far); / starts a search (query is the text, None when not
+    searching) and every key is text until Esc, Enter or Backspace on an empty query. visible is the list shown (filtered while
+    query is non-empty) and cursor indexes it."""
 
     MOVES = MOVES
 
-    def __init__(self, rows, current=None):
+    def __init__(self, rows, current=None, *, clock=time.monotonic):
         self.rows = rows
         self.marked = set()
-        self.prompt = None
+        self.clock = clock
         self._stop = None
-        names = [r.name for r in rows]
+        self.query = None
+        self.jump = ""
+        self._jump_at = None
+        self._filter()
+        names = [r.name for r in self.visible]
         self.cursor = names.index(current) if current in names else 0
 
+    @property
+    def prompt(self):
+        if self._stop is not None:
+            return f"將停掉：{'、'.join(self._stop)}　確定？(y/N)"
+        if self.query is not None:
+            return f"/{self.query}▏（{len(self.visible)} 筆，Enter 進入，Esc 取消）"
+        if self.jump and not self._jump_expired():
+            return f"跳到第 {self.jump} 列"
+        return None
+
+    def _jump_expired(self):
+        return self._jump_at is None or self.clock() - self._jump_at > JUMP_S
+
+    def _filter(self):
+        q = (self.query or "").lower()
+        self.visible = [r for r in self.rows if q in r.name.lower()]
+
+    def _goto(self, name):
+        """Put the cursor on the row called name in visible, or on the first row when it is not there."""
+        names = [r.name for r in self.visible]
+        self.cursor = names.index(name) if name in names else 0
+
     def _here(self):
-        return self.rows[self.cursor].name
+        return self.visible[self.cursor].name
+
+    def _here_or_none(self):
+        return self._here() if self.visible else None
+
+    def reload(self, rows):
+        """New rows from the periodic refresh: keep query, jump and checkmarks, and the cursor on the same session if it is still visible."""
+        here = self._here_or_none()
+        self.rows = rows
+        self.marked &= {r.name for r in rows}
+        self._filter()
+        self._goto(here)
+
+    def _end_search(self):
+        here = self._here_or_none()
+        self.query = None
+        self._filter()
+        self._goto(here)
+
+    def _search_key(self, k):
+        if k == "\x1b":
+            self._end_search()
+            return None
+        if k in ENTER:
+            if not self.visible:
+                return None
+            name = self._here()
+            self._end_search()
+            return ("attach", [name])
+        if k in BACKSPACE:
+            if not self.query:
+                self._end_search()
+                return None
+            self.query = self.query[:-1]
+        elif k in ("KEY_UP", "KEY_DOWN"):
+            self.cursor = max(0, min(len(self.visible) - 1, self.cursor + self.MOVES[k]))
+            return None
+        elif len(k) == 1 and k.isprintable():
+            self.query += k
+        else:
+            return None
+        self._filter()
+        self.cursor = 0
+        return None
+
+    def _digit(self, k):
+        if self._jump_expired():
+            self.jump = ""
+        self._jump_at = self.clock()
+        for buf in (self.jump + k, k):
+            n = int(buf)
+            if 1 <= n <= len(self.rows):
+                self.jump = "" if n * 10 > len(self.rows) else buf
+                self.cursor = n - 1
+                return
+        self.jump = ""
 
     def key(self, k):
         if self._stop is not None:
-            names, self._stop, self.prompt = self._stop, None, None
+            names, self._stop = self._stop, None
             return ("stop!", names) if k in ("y", "Y") else None
+        if self.query is not None:
+            return self._search_key(k)
+        if len(k) == 1 and k in "0123456789":
+            if self.rows:
+                self._digit(k)
+            return None
+        self.jump = ""
         if k in ("q", "\x1b"):
             return ("quit", [])
         if k == "n":
@@ -54,20 +150,22 @@ class Picker:
             return ("save", [])
         if k == "U":
             return ("update", [])
-        if not self.rows:
+        if k == "/":
+            self.query = ""
+            return None
+        if not self.visible:
             return None
         if k in self.MOVES:
-            self.cursor = max(0, min(len(self.rows) - 1, self.cursor + self.MOVES[k]))
+            self.cursor = max(0, min(len(self.visible) - 1, self.cursor + self.MOVES[k]))
             return None
         if k == " ":
             self.marked ^= {self._here()}
-            self.cursor = min(len(self.rows) - 1, self.cursor + 1)
+            self.cursor = min(len(self.visible) - 1, self.cursor + 1)
             return None
         if k in ENTER:
             return ("attach", [self._here()])
         if k == "s":
             self._stop = [r.name for r in self.rows if r.name in self.marked] or [self._here()]
-            self.prompt = f"將停掉：{'、'.join(self._stop)}　確定？(y/N)"
             return None
         if k == "m":
             return ("move", [self._here()])

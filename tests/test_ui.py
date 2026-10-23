@@ -528,6 +528,161 @@ class PickerTest(unittest.TestCase):
         self.assertEqual(p.key("n"), ("new", []))
 
 
+class Clock:
+    """Fake monotonic clock: advance() moves time forward."""
+
+    def __init__(self):
+        self.t = 100.0
+
+    def __call__(self):
+        return self.t
+
+    def advance(self, s):
+        self.t += s
+
+
+def many(n):
+    return [row(f"s{i:02d}") for i in range(1, n + 1)]
+
+
+class PickerJumpSearchTest(unittest.TestCase):
+    def press(self, p, *keys):
+        out = None
+        for k in keys:
+            out = p.key(k)
+        return out
+
+    def test_slash_search_enter_attaches(self):
+        p = Picker([row("001-a"), row("003-foo"), row("010-bar")])
+        self.assertEqual(self.press(p, "/", "0", "0", "3", "\n"), ("attach", ["003-foo"]))
+        self.assertIsNone(p.query)
+
+    def test_digit_jump_two_digits(self):
+        rows = many(32)
+        p = Picker(rows, clock=Clock())
+        self.press(p, "1", "2")
+        self.assertEqual(p.cursor, 11)
+        self.assertEqual(p.jump, "")
+        self.assertEqual(p.key("\n"), ("attach", [rows[11].name]))
+
+    def test_digit_jump_shows_prompt_and_enter_after_one_digit_attaches(self):
+        rows = many(32)
+        p = Picker(rows, clock=Clock())
+        p.key("1")
+        self.assertEqual(p.prompt, "跳到第 1 列")
+        self.assertEqual(p.key("\n"), ("attach", [rows[0].name]))
+        self.assertEqual(p.jump, "")
+        self.assertIsNone(p.prompt)
+
+    def test_digit_jump_single_when_no_longer_possible(self):
+        p = Picker(many(32), clock=Clock())
+        p.key("4")
+        self.assertEqual(p.cursor, 3)
+        self.assertEqual(p.jump, "")
+
+    def test_digit_jump_timeout(self):
+        clock = Clock()
+        p = Picker(many(32), clock=clock)
+        p.key("1")
+        self.assertEqual(p.cursor, 0)
+        clock.advance(1.5)
+        self.assertIsNone(p.prompt)  # the buffer has expired
+        p.key("5")
+        self.assertEqual(p.cursor, 4)
+
+    def test_digit_jump_out_of_range_restarts_and_zero_clears(self):
+        p = Picker(many(32), clock=Clock())
+        self.press(p, "3", "5")  # 35 > 32: restart with 5
+        self.assertEqual(p.cursor, 4)
+        self.assertEqual(p.jump, "")
+        p.key("0")
+        self.assertEqual(p.jump, "")
+        self.assertEqual(p.cursor, 4)
+
+    def test_nine_rows_every_digit_jumps(self):
+        p = Picker(many(9), clock=Clock())
+        self.press(p, "1", "2")
+        self.assertEqual(p.cursor, 1)
+        self.assertEqual(p.jump, "")
+
+    def test_search_no_match_enter_is_noop(self):
+        p = Picker(ROWS)
+        self.assertIsNone(self.press(p, "/", "z", "z", "z", "\n"))
+        self.assertEqual(p.visible, [])
+        self.assertEqual(p.query, "zzz")
+
+    def test_search_keys_are_text(self):
+        p = Picker(ROWS)
+        self.assertIsNone(self.press(p, "/", "q", "j"))
+        self.assertEqual(p.query, "qj")
+        self.assertEqual(p.cursor, 0)
+        self.assertIsNone(self.press(p, "s", " ", "n"))  # no stop prompt, no mark, no new
+        self.assertEqual(p.marked, set())
+        self.assertEqual(p.prompt, "/qjs n▏（0 筆，Enter 進入，Esc 取消）")
+
+    def test_search_filters_case_insensitively_and_prompt_counts(self):
+        p = Picker([row("Alpha"), row("beta"), row("ALPS")])
+        self.press(p, "/", "a", "l", "P")
+        self.assertEqual([r.name for r in p.visible], ["Alpha", "ALPS"])
+        self.assertEqual(p.prompt, "/alP▏（2 筆，Enter 進入，Esc 取消）")
+        p.key("KEY_DOWN")
+        self.assertEqual(p.key("\n"), ("attach", ["ALPS"]))
+
+    def test_search_esc_keeps_cursor_session(self):
+        p = Picker([row("a"), row("foo-1"), row("b"), row("foo-2")])
+        self.press(p, "/", "f", "o", "o", "KEY_DOWN")
+        self.assertEqual(p.visible[p.cursor].name, "foo-2")
+        self.assertIsNone(p.key("\x1b"))  # Esc leaves search, does not quit
+        self.assertIsNone(p.query)
+        self.assertEqual(len(p.visible), 4)
+        self.assertEqual(p.visible[p.cursor].name, "foo-2")
+        self.assertIsNone(p.prompt)
+        self.assertEqual(p.key("\x1b"), ("quit", []))  # back in normal mode
+
+    def test_search_backspace_and_leave_on_empty(self):
+        p = Picker([row("a"), row("b")])
+        self.press(p, "/", "b")
+        self.assertEqual(p.query, "b")
+        p.key("KEY_BACKSPACE")
+        self.assertEqual(p.query, "")
+        self.assertEqual(len(p.visible), 2)
+        p.key("\x7f")
+        self.assertIsNone(p.query)
+        self.assertEqual(p.cursor, 0)
+
+    def test_search_ignores_other_keys(self):
+        p = Picker([row("a"), row("b")])
+        self.press(p, "/", "KEY_LEFT", "\t")
+        self.assertEqual(p.query, "")
+
+    def test_reload_keeps_query_and_cursor(self):
+        clock = Clock()
+        p = Picker([row("a"), row("foo-1"), row("foo-2")], clock=clock)
+        self.press(p, "/", "f", "o", "o", "KEY_DOWN")
+        p.reload([row("0new-foo"), row("a"), row("foo-1"), row("foo-2")])
+        self.assertEqual(p.query, "foo")
+        self.assertEqual([r.name for r in p.visible], ["0new-foo", "foo-1", "foo-2"])
+        self.assertEqual(p.visible[p.cursor].name, "foo-2")
+        p.reload([row("a"), row("foo-1")])  # foo-2 is gone: cursor goes to the first row
+        self.assertEqual(p.cursor, 0)
+        self.assertEqual(p.visible[p.cursor].name, "foo-1")
+
+    def test_reload_keeps_jump_buffer(self):
+        clock = Clock()
+        rows = many(32)
+        p = Picker(rows, clock=clock)
+        p.key("1")
+        p.reload(many(32))
+        self.assertEqual(p.jump, "1")
+        p.key("2")
+        self.assertEqual(p.cursor, 11)
+
+    def test_stop_prompt_has_priority(self):
+        p = Picker(ROWS, clock=Clock())
+        p.key("s")
+        self.assertEqual(p.prompt, "將停掉：a　確定？(y/N)")
+
+
 class InteractiveUiTest(UiTest):
     def ui_keys(self, action, answers=(), current=None):
         answers = iter(answers)

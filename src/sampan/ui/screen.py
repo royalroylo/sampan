@@ -15,6 +15,7 @@ from .render import (
     _list_cells,
     _restore_cells,
     list_cols,
+    list_empty,
     prompt_frame,
     render,
     render_dirpick,
@@ -23,7 +24,7 @@ from .render import (
 from .state import Checklist, Picker, _row_key
 from .text import BACKSPACE, ENTER, clean_capture, text_width
 
-KEYS_HELP = "↑↓ 移動　空白 勾選　Enter 接上　s 停掉　R 接回　A 接手　n 開新　w 存檔　q 離開"
+KEYS_HELP = "↑↓ 移動　1-9 跳列　/ 搜尋　空白 勾選　Enter 接上　s 停掉　R 接回　A 接手　n 開新　w 存檔　q 離開"
 RESTORE_HELP = "↑↓ 移動　空白 勾選　Enter 確認接回　q 取消"
 ADOPT_HELP = "↑↓ 移動　空白 勾選　Enter 確認接手　q 取消"
 PROMPT_HELP = "↑↓ 選擇　Enter 送出　Esc 先不管"
@@ -206,18 +207,14 @@ class CursesScreen:
         return clean_capture(res.stdout) if res.returncode == 0 else [NO_SCREEN]
 
     def _reload(self, rows, picker):
-        """Re-read the list (every REFRESH_S seconds while waiting for a key): replace rows in place (what cmd_ui holds is new too), the cursor stays on the same name, checkmarks are kept."""
+        """Re-read the list (every REFRESH_S seconds while waiting for a key): replace rows in place (what cmd_ui holds is new too), the cursor stays on the same name (else the first row), checkmarks, search and digit buffer are kept."""
         try:
             new = self.rows_fn(self.cfg, self.run)
         except Exception:  # noqa: BLE001  a failed background refresh must not crash the screen: keep the old list
             return False
-        here = rows[picker.cursor].name if rows else None
         self.warning = getattr(new, "warning", None)
         rows[:] = new
-        names = [r.name for r in rows]
-        picker.rows = rows
-        picker.marked &= set(names)
-        picker.cursor = names.index(here) if here in names else max(0, min(picker.cursor, len(rows) - 1))
+        picker.reload(rows)  # keeps the search, the digit buffer and the cursor session
         return True
 
     def pick(self, rows, current):
@@ -227,14 +224,14 @@ class CursesScreen:
         cards, now, built = load()
         self.warning = getattr(rows, "warning", None)
         names = [r.name for r in rows]
-        picker = Picker(rows, self.last_name if self.last_name in names else current)
+        picker = Picker(rows, self.last_name if self.last_name in names else current, clock=self.clock)
         shot, tick, refreshed = (None, None), False, self.clock()
         self._timeout(TICK_MS)
         try:
             while True:
                 card, preview = [], None
-                if rows:
-                    r = rows[picker.cursor]
+                if picker.visible:
+                    r = picker.visible[picker.cursor]
                     name = self.last_name = r.name
                     info = cards.get(name)
                     if (info or {}).get("panes", 0) > 0 and self.run is not None:
@@ -246,9 +243,10 @@ class CursesScreen:
                         if name not in built:
                             built[name] = card_lines(self.cfg, r, info, now)
                         card = built[name]
-                self.view = dict(title=self.title, left=[_list_cells(r, picker.marked, current) for r in rows],
-                                 cursor=picker.cursor, card=card, preview=preview, help=KEYS_HELP, cols=list_cols(rows),
-                                 empty="目前沒有任何 session（n 開新的）",
+                num = {r.name: i for i, r in enumerate(rows, 1)}  # row numbers follow the unfiltered list
+                left = [_list_cells(r, picker.marked, current, num[r.name], len(rows)) for r in picker.visible]
+                self.view = dict(title=self.title, left=left, cursor=picker.cursor, card=card, preview=preview,
+                                 help=KEYS_HELP, cols=list_cols(rows), empty=list_empty(rows, picker.query),
                                  notice=self.warning or (self.updater.hint() if self.updater is not None else None))
                 self.prompt = picker.prompt
                 self.draw()
