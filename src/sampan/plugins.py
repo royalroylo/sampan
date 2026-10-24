@@ -166,6 +166,7 @@ def cmd_sync(cfg, run, out, *, profile=None, dry_run=False, prune=False):
     failures, changed = [], False
     for p in targets:
         out(f"== {p.name}")
+        failed_before = len(failures)
         if not Path(p.config_dir).is_dir():
             out(missing_dir_message(p))
             continue
@@ -183,12 +184,18 @@ def cmd_sync(cfg, run, out, *, profile=None, dry_run=False, prune=False):
             if r.returncode != 0:
                 failures.append(f"{p.name}：{shlex.join(c)} 失敗：{redact((r.stderr or r.stdout).strip())[:300]}")
         if not dry_run:
-            after = read_state(p).installed
-            diffs = [(pid, before.installed.get(pid), after.get(pid)) for pid in p.plugins]
-            diffs = [(pid, b, a) for pid, b, a in diffs if b != a]
-            for pid, b, a in diffs:
-                out(f"  {pid}：{b or '未裝'} → {a or '未裝'}")
-            if not diffs:
+            after = read_state(p)
+            diffs = []
+            for pid in p.plugins:
+                b, a = before.installed.get(pid), after.installed.get(pid)
+                bc, ac = before.commits.get(pid), after.commits.get(pid)
+                if b != a:
+                    diffs.append(f"  {pid}：{b or '未裝'} → {a or '未裝'}")
+                elif bc != ac:  # same version string, new commit (a GitHub plugin that did not bump its version)
+                    diffs.append(f"  {pid}：{a}（{(bc or '?')[:7]} → {(ac or '?')[:7]}）")
+            for line in diffs:
+                out(line)
+            if not diffs and len(failures) == failed_before:
                 out("  沒有變動")
             changed = changed or bool(diffs)
         if prune:

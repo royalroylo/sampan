@@ -127,6 +127,7 @@ class SyncCmdTest(unittest.TestCase):
         self.assertEqual(cmd_sync(self.cfg, r, self.msgs.append), 1)
         self.assertTrue(r.called(["claude", "plugin", "marketplace"]))
         self.assertTrue(any("boom" in m for m in self.msgs))
+        self.assertNotIn("  沒有變動", self.msgs)
 
     def test_sync_skips_missing_profile_dir(self):
         shutil.rmtree(self.cfg.profiles["work"].config_dir)
@@ -166,6 +167,20 @@ class SyncCmdTest(unittest.TestCase):
         cmd_sync(self.cfg, FakeRunner().on(["claude", "plugin"], bump), self.msgs.append, profile="alice")
         self.assertIn(f"  {pids[0]}：1.0.0 → 2.0.0", self.msgs)
         self.assertFalse([m for m in self.msgs if "1.0.0 → 1.0.0" in m])
+        self.assertNotIn("  沒有變動", self.msgs)
+        self.assertTrue([m for m in self.msgs if "要生效需整個重開" in m])
+
+    def test_commit_only_update_counts_as_change(self):
+        pid = list(self.cfg.profiles["alice"].plugins)[0]
+        ip = self.cfg.profiles["alice"].config_dir / "plugins" / "installed_plugins.json"
+
+        def put(sha):
+            ip.write_text(json.dumps({"version": 2, "plugins": {
+                pid: [{"scope": "user", "version": "1.0.0", "gitCommitSha": sha}]}}))
+        put("abc1234ffff")
+        cmd_sync(self.cfg, FakeRunner().on(["claude", "plugin"], lambda _a: put("def5678eeee") or cp()),
+                 self.msgs.append, profile="alice")
+        self.assertIn(f"  {pid}：1.0.0（abc1234 → def5678）", self.msgs)
         self.assertNotIn("  沒有變動", self.msgs)
         self.assertTrue([m for m in self.msgs if "要生效需整個重開" in m])
 
