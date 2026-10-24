@@ -211,6 +211,14 @@ class CliTest(unittest.TestCase):
         self.assertEqual(add.call_args_list[0].kwargs["dir"], Path("/Users/u/x"))
         self.assertIsNone(add.call_args_list[1].kwargs["dir"])
 
+    def test_profile_list_and_rename_parse(self):
+        with mock.patch("sampan.profile_ops.cmd_profile_list", return_value=0) as ls, \
+                mock.patch("sampan.profile_ops.cmd_profile_rename", return_value=0) as rn:
+            cli.main(["profile", "list"])
+            cli.main(["profile", "rename", "side", "other"])
+        ls.assert_called_once()
+        self.assertEqual(rn.call_args.args[3:], ("side", "other"))
+
 
 class EntryPointTest(unittest.TestCase):
     def test_pyproject_declares_only_the_sampan_entry_point(self):

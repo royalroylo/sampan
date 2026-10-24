@@ -83,6 +83,10 @@ def build_parser():
     pa = pf.add_parser("add", help="新增 profile：建立 ~/.claude-profiles/<名稱> 並登入；--dir 用既有目錄（不建、不登入）")
     pa.add_argument("name")
     pa.add_argument("--dir", type=Path, help="既有的 Claude 設定目錄")
+    pf.add_parser("list", help="列出每個 profile：類型、目錄、帳號、使用中／停用、執行中 session 數")
+    pr = pf.add_parser("rename", help="改名（目錄不動；有 session 在跑時拒絕）")
+    pr.add_argument("old")
+    pr.add_argument("new")
 
     hk = sub.add_parser("hook")  # called by Claude Code's SessionStart hook, not listed in the help
     hk.add_argument("event", choices=["session-start"])
@@ -329,6 +333,11 @@ def _dispatch(cfg, args):
             return plugins.cmd_plugins_status(cfg, out)
         return plugins.cmd_sync(cfg, run, out, profile=args.profile, dry_run=args.dry_run, prune=args.prune)
     if cmd == "profile":
+        from . import profile_ops
+        if args.action == "list":
+            return profile_ops.cmd_profile_list(cfg, run, out)
+        if args.action == "rename":
+            return profile_ops.cmd_profile_rename(cfg, run, out, args.old, args.new)
         from .init import cmd_profile_add
         return cmd_profile_add(cfg, run, out, args.name, dir=args.dir, home=cfg.home)
     if cmd == "doctor":
