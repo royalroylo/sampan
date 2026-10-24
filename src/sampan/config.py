@@ -61,6 +61,8 @@ class Profile:
     plugins: tuple
     default: bool
     claude_json: Path
+    agent: str = "claude"  # "claude" or "codex"; for Codex, config_dir is CODEX_HOME
+    disabled: bool = False
 
     @property
     def projects_dir(self):
@@ -79,19 +81,27 @@ class Profile:
 class CodexConfig:
     enabled: bool
     home: Path
+    profile: str = ""  # name of the Codex profile in effect; "" when there is none
 
 
 @dataclass(frozen=True)
 class Config:
     version: int
     marketplaces: dict
-    profiles: dict
+    profiles: dict  # enabled Claude profiles only
     codex: CodexConfig
     recent_days: int
     start_dir_setting: Path | None  # [ui] start_dir as written, None when absent
     home: Path
     state_dir: Path
     path: Path
+    all_profiles: dict  # every profile in config-file order, disabled and Codex ones included
+    implicit_codex: bool  # the Codex profile was filled in from [codex] / defaults, not written in the file
+
+    @property
+    def codex_profiles(self):
+        """Enabled Codex profiles, in config-file order."""
+        return {n: p for n, p in self.all_profiles.items() if p.agent == "codex" and not p.disabled}
 
     @property
     def start_dir(self):
@@ -152,11 +162,25 @@ def load_config(path, *, home=None, state_dir=None):
             raise ConfigError(f"marketplace {name}：網址裡有帳號或 token，請改成 {strip_credentials(src)}"
                               "（認證交給 git 的 credential helper，不要寫在設定檔）")
 
-    profiles = {}
+    all_profiles = {}
     for name, p in table(data.get("profiles", {}), "[profiles]").items():
         p = table(p, f"[profiles.{name}]")
         if not isinstance(p.get("config_dir"), str) or not p["config_dir"]:
             raise ConfigError(f"profile {name}：缺少 config_dir（要寫成字串路徑）")
+        agent = p.get("agent", "claude")
+        if agent not in ("claude", "codex"):
+            raise ConfigError(f"profile {name}：agent 要是 \"claude\" 或 \"codex\"，目前是 {agent!r}")
+        disabled = p.get("disabled", False)
+        if not isinstance(disabled, bool):
+            raise ConfigError(f"profile {name}：disabled 要是 true 或 false，目前是 {disabled!r}")
+        config_dir = expand(p["config_dir"])
+        label = p.get("label", "")
+        if agent == "codex":
+            for key in ("default", "plugins"):
+                if key in p:
+                    raise ConfigError(f"profile {name}：Codex profile 不能設 {key}")
+            all_profiles[name] = Profile(name, config_dir, label, (), False, config_dir / ".claude.json", "codex", disabled)
+            continue
         raw_plugins = p.get("plugins", [])
         if not isinstance(raw_plugins, list) or not all(isinstance(x, str) for x in raw_plugins):
             raise ConfigError(f"profile {name}：plugins 要是字串清單")
@@ -165,17 +189,33 @@ def load_config(path, *, home=None, state_dir=None):
             if "@" not in pid or pid.split("@", 1)[1] not in marketplaces:
                 raise ConfigError(f"profile {name}：{pid} 的 marketplace 不在 [marketplaces]")
         default = bool(p.get("default", False))
-        config_dir = expand(p["config_dir"])
+        if default and disabled:
+            raise ConfigError(f"profile {name}：default 的 profile 不能停用（先把別的 profile 設成 default）")
         claude_json = home / ".claude.json" if default else config_dir / ".claude.json"
-        profiles[name] = Profile(name, config_dir, p.get("label", ""), plugins, default, claude_json)
+        all_profiles[name] = Profile(name, config_dir, label, plugins, default, claude_json, "claude", disabled)
 
-    if sum(p.default for p in profiles.values()) != 1:
-        raise ConfigError("profiles 裡要剛好一個設 default = true")
+    if sum(p.default for p in all_profiles.values() if p.agent == "claude") != 1:
+        raise ConfigError("Claude 的 profiles 裡要剛好一個設 default = true")
 
     codex = table(data.get("codex", {}), "[codex]")
     codex_home = codex.get("home") or os.environ.get("CODEX_HOME") or "~/.codex"
     if not isinstance(codex_home, str):
         raise ConfigError(f"[codex] home 要是字串路徑，目前是 {codex_home!r}")
+    codex_home = expand(codex_home)
+    # Old configs have no Codex profile: fill one in from [codex] (no table at all = on, as before),
+    # unless [codex] enabled = false. Once a Codex profile is written in the file, [codex] is ignored.
+    implicit_codex = (not any(p.agent == "codex" for p in all_profiles.values())
+                      and bool(codex.get("enabled", True)))
+    if implicit_codex:
+        cname, n = "codex", 0
+        while cname in all_profiles:
+            n += 1
+            cname = f"codex-{n}"
+        all_profiles[cname] = Profile(cname, codex_home, "", (), False, codex_home / ".claude.json", "codex")
+    profiles = {n: p for n, p in all_profiles.items() if p.agent == "claude" and not p.disabled}
+    active_codex = next((p for p in all_profiles.values() if p.agent == "codex" and not p.disabled), None)
+    codex_cfg = (CodexConfig(True, active_codex.config_dir, active_codex.name) if active_codex
+                 else CodexConfig(False, codex_home))
     restore = table(data.get("restore", {}), "[restore]")
     recent_days = restore.get("recent_days", 7)
     if isinstance(recent_days, bool) or not isinstance(recent_days, int) or recent_days < 0:
@@ -192,10 +232,12 @@ def load_config(path, *, home=None, state_dir=None):
         version=1,
         marketplaces=marketplaces,
         profiles=profiles,
-        codex=CodexConfig(bool(codex.get("enabled", True)), expand(codex_home)),
+        codex=codex_cfg,
         recent_days=recent_days,
         start_dir_setting=start,
         home=home,
         state_dir=Path(state_dir) if state_dir else path.parent / "state",
         path=path,
+        all_profiles=all_profiles,
+        implicit_codex=implicit_codex,
     )

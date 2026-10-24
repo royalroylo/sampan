@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -6,10 +7,80 @@ from unittest import mock
 from sampan.config import ConfigError, load_config, same_source
 from tests.helpers import TOML, make_env
 
+BASE = 'version = 1\n[profiles.alice]\nconfig_dir = "~/.claude"\ndefault = true\n'
+
 
 class ConfigTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
+
+    def load(self, toml):
+        with mock.patch.dict("os.environ"):
+            os.environ.pop("CODEX_HOME", None)
+            return make_env(self.tmp, toml)
+
+    def test_codex_profile_section(self):
+        cfg = self.load(BASE + '[profiles.cx]\nagent = "codex"\nconfig_dir = "~/cx"\nlabel = "c"\n')
+        self.assertNotIn("cx", cfg.profiles)
+        self.assertEqual(cfg.all_profiles["cx"].agent, "codex")
+        self.assertEqual((cfg.codex.enabled, cfg.codex.home, cfg.codex.profile), (True, cfg.home / "cx", "cx"))
+        self.assertFalse(cfg.implicit_codex)
+        self.assertEqual(list(cfg.codex_profiles), ["cx"])
+        self.assertEqual(list(cfg.all_profiles), ["alice", "cx"])
+
+    def test_no_codex_table_keeps_codex_on(self):
+        cfg = self.load(BASE)
+        self.assertEqual((cfg.codex.enabled, cfg.codex.profile), (True, "codex"))
+        self.assertTrue(cfg.implicit_codex)
+        self.assertEqual(cfg.all_profiles["codex"].config_dir, cfg.home / ".codex")
+        self.assertEqual(cfg.all_profiles["codex"].label, "")
+        self.assertEqual(list(cfg.codex_profiles), ["codex"])
+
+    def test_old_codex_table_becomes_implicit_profile(self):
+        cfg = self.load(BASE + '[codex]\nhome = "~/cxh"\n')
+        self.assertEqual((cfg.codex.home, cfg.codex.profile, cfg.implicit_codex), (cfg.home / "cxh", "codex", True))
+        off = self.load(BASE + "[codex]\nenabled = false\n")
+        self.assertFalse(off.codex.enabled)
+        self.assertNotIn("codex", off.all_profiles)
+        self.assertEqual((off.codex.profile, off.codex.home, off.implicit_codex), ("", off.home / ".codex", False))
+
+    def test_implicit_codex_name_avoids_claude_profile_names(self):
+        cfg = self.load(BASE + '[profiles.codex]\nconfig_dir = "~/c0"\n[profiles.codex-1]\nconfig_dir = "~/c1"\n')
+        self.assertEqual(cfg.codex.profile, "codex-2")
+        self.assertEqual(cfg.all_profiles["codex"].agent, "claude")
+        self.assertIn("codex", cfg.profiles)
+
+    def test_explicit_codex_profile_ignores_old_codex_table(self):
+        cfg = self.load(BASE + '[codex]\nhome = "~/old"\n[profiles.cx]\nagent = "codex"\nconfig_dir = "~/cx"\n')
+        self.assertEqual((cfg.codex.home, cfg.codex.profile, cfg.implicit_codex), (cfg.home / "cx", "cx", False))
+        self.assertNotIn("codex", cfg.all_profiles)
+
+    def test_first_enabled_codex_profile_is_active(self):
+        cfg = self.load(BASE + '[profiles.a]\nagent = "codex"\nconfig_dir = "~/a"\ndisabled = true\n'
+                        '[profiles.b]\nagent = "codex"\nconfig_dir = "~/b"\n')
+        self.assertEqual((cfg.codex.profile, cfg.codex.home), ("b", cfg.home / "b"))
+        self.assertEqual(list(cfg.codex_profiles), ["b"])
+        off = self.load(BASE + '[profiles.a]\nagent = "codex"\nconfig_dir = "~/a"\ndisabled = true\n')
+        self.assertEqual((off.codex.enabled, off.codex.profile, off.codex.home), (False, "", off.home / ".codex"))
+        self.assertFalse(off.implicit_codex)
+
+    def test_disabled_profile_hidden_from_profiles(self):
+        cfg = self.load(BASE + '[profiles.work]\nconfig_dir = "~/w"\ndisabled = true\n')
+        self.assertNotIn("work", cfg.profiles)
+        self.assertTrue(cfg.all_profiles["work"].disabled)
+        self.assertEqual(cfg.profiles["alice"].agent, "claude")
+        self.assertFalse(cfg.profiles["alice"].disabled)
+
+    def test_invalid_profile_keys(self):
+        for extra, msg in (('agent = "gemini"', "agent"), ("disabled = 1", "disabled"),
+                           ('agent = "codex"\ndefault = true', "default"),
+                           ('agent = "codex"\nplugins = []', "plugins")):
+            with self.assertRaisesRegex(ConfigError, msg):
+                self.load(BASE + f'[profiles.x]\nconfig_dir = "~/x"\n{extra}\n')
+        with self.assertRaisesRegex(ConfigError, "default"):   # the default profile cannot be disabled
+            self.load(BASE.replace("default = true", "default = true\ndisabled = true"))
+        with self.assertRaisesRegex(ConfigError, "default"):   # a Codex default does not count as the Claude default
+            self.load('version = 1\n[profiles.cx]\nagent = "codex"\nconfig_dir = "~/cx"\n')
 
     def test_load_profiles_and_paths(self):
         cfg = make_env(self.tmp)
