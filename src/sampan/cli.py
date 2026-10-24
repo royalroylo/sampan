@@ -80,9 +80,10 @@ def build_parser():
     up.add_argument("--yes", action="store_true", help="不問，直接更新（或 --force 時直接重新安裝）")
     up.add_argument("--force", action="store_true", help="已是最新版也重新安裝")
     pf = sub.add_parser("profile", help="profile 管理").add_subparsers(dest="action", required=True)
-    pa = pf.add_parser("add", help="新增 profile：建立 ~/.claude-profiles/<名稱> 並登入；--dir 用既有目錄（不建、不登入）")
+    pa = pf.add_parser("add", help="新增 profile：建立 ~/.claude-profiles/<名稱>（--codex 則是 ~/.codex-profiles/<名稱>）並登入；--dir 用既有目錄（不建、不登入）")
     pa.add_argument("name")
-    pa.add_argument("--dir", type=Path, help="既有的 Claude 設定目錄")
+    pa.add_argument("--dir", type=Path, help="既有的設定目錄（Claude 或 Codex）")
+    pa.add_argument("--codex", action="store_true", help="新增 Codex profile（用 codex login 登入）")
     pf.add_parser("list", help="列出每個 profile：類型、目錄、帳號、使用中／停用、執行中 session 數")
     pr = pf.add_parser("rename", help="改名（目錄不動；有 session 在跑時拒絕）")
     pr.add_argument("old")
@@ -354,7 +355,7 @@ def _dispatch(cfg, args):
         if args.action == "forget":
             return profile_ops.cmd_profile_forget(cfg, run, out, input, args.name)
         from .init import cmd_profile_add
-        return cmd_profile_add(cfg, run, out, args.name, dir=args.dir, home=cfg.home)
+        return cmd_profile_add(cfg, run, out, args.name, dir=args.dir, home=cfg.home, codex=args.codex)
     if cmd == "doctor":
         from .doctor import cmd_doctor
         return cmd_doctor(cfg, run, out)

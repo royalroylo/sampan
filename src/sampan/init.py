@@ -441,18 +441,44 @@ def _login_command(run, base):
     return None
 
 
-def cmd_profile_add(cfg, run, out, name, *, dir, home, env=None, interactive=None):
+def _add_codex_profile(cfg, out, name, target, disp, *, create, base, interactive, which):
+    """The Codex half of profile add: optional login, then the section through profile_ops.edit_config."""
+    from .config_edit import append_section
+    from .profile_ops import edit_config
+    later = f"之後再登入：CODEX_HOME={shlex.quote(str(target))} codex login"
+    if create:
+        target.mkdir(parents=True)
+        out(f"▶ 已建立 {target}")
+        if which("codex") is None:
+            out(f"⚠ 找不到 codex 指令，先不登入；{later}")
+        else:
+            out("▶ 登入新的 profile：codex login")
+            if interactive(["codex", "login"], {**base, "CODEX_HOME": str(target)}) != 0:
+                out("⚠ 登入沒有完成")
+                out(later)
+    section = f"[profiles.{_k(name)}]\nagent = \"codex\"\nconfig_dir = {_s(disp)}\nlabel = \"\"\n"
+    new_cfg = edit_config(cfg, out, lambda text: append_section(text, section))
+    if new_cfg is None:
+        return 1
+    out(f"✔ 已把 Codex profile {name}（{disp}）寫進 {cfg.path}")
+    out(f"目前 sampan 開 Codex 只用第一個使用中的 Codex profile（{new_cfg.codex.profile}）；多帳號切換之後的版本才支援")
+    return 0
+
+
+def cmd_profile_add(cfg, run, out, name, *, dir, home, codex=False, env=None, interactive=None, which=shutil.which):
+    from . import actionlog
+    out = actionlog.tee(cfg, f"profile add {name}", out)
     home = Path(home)
     base = os.environ if env is None else env
     interactive = interactive or (lambda args, env: subprocess.call(args, env=env))
     if not NAME_RE.match(name):
         out(f"❌ profile {NAME_RULE}")
         return 1
-    if name in cfg.profiles:
+    if name in cfg.all_profiles:
         out(f"❌ 已經有 profile {name}")
         return 1
     if dir is None:
-        target = home / ".claude-profiles" / name
+        target = home / (".codex-profiles" if codex else ".claude-profiles") / name
         if target.exists():
             out(f"❌ {target} 已存在；要管理這個既有目錄：sampan profile add {name} --dir {shlex.quote(str(target))}")
             return 1
@@ -461,10 +487,14 @@ def cmd_profile_add(cfg, run, out, name, *, dir, home, env=None, interactive=Non
         if not target.is_dir():
             out(f"❌ 目錄 {target} 不存在（--dir 只接受既有的目錄，不會建立）")
             return 1
-    known = {_key(p.config_dir): p.name for p in cfg.profiles.values()}
+    known = {_key(p.config_dir): p.name for p in cfg.all_profiles.values()}
     if _key(target) in known:
         out(f"❌ {target} 已經是 profile {known[_key(target)]}")
         return 1
+
+    if codex:
+        return _add_codex_profile(cfg, out, name, target, _disp(target, home), create=dir is None, base=base,
+                                  interactive=interactive, which=which)
 
     need_login = False
     if dir is None:

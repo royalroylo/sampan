@@ -577,6 +577,62 @@ class ProfileAddTests(Base):
         self.assertFalse((self.home / ".claude-profiles" / "a.b").exists())
 
 
+class ProfileAddCodexTests(Base):
+    def setUp(self):
+        super().setUp()
+        self.cfg_path.parent.mkdir(parents=True)
+        self.cfg_path.write_text(EXISTING + '\n[profiles.old]\nconfig_dir = "~/.claude-profiles/old"\ndisabled = true\n')
+        self.cfg = load_config(self.cfg_path, home=self.home, state_dir=self.state)
+        self.logins = []
+        self.rc = 0
+
+    def interactive(self, args, env):
+        self.logins.append((list(args), env.get("CODEX_HOME")))
+        return self.rc
+
+    def add(self, name, dir=None, which=lambda n: "/usr/bin/codex"):
+        return cmd_profile_add(self.cfg, self.runner(), self.lines.append, name, dir=dir, home=self.home, codex=True,
+                               env={"PATH": "/usr/bin"}, interactive=self.interactive, which=which)
+
+    def test_add_codex_profile_creates_dir_logs_in_and_writes_section(self):
+        self.assertEqual(self.add("cx"), 0)
+        target = self.home / ".codex-profiles" / "cx"
+        self.assertTrue(target.is_dir())
+        self.assertEqual(self.logins, [(["codex", "login"], str(target))])
+        text = self.cfg_path.read_text()
+        self.assertIn('[profiles.cx]\nagent = "codex"\nconfig_dir = "~/.codex-profiles/cx"\nlabel = ""', text)
+        cfg = load_config(self.cfg_path, home=self.home)
+        self.assertEqual(cfg.all_profiles["cx"].agent, "codex")
+        self.assertEqual(cfg.codex.profile, "cx")
+        self.assertIn("# 自己寫的註解", text)
+        self.assertIn("只用第一個使用中的 Codex profile（cx）", self.text())
+
+    def test_add_codex_name_clash_with_disabled_profile(self):
+        before = self.cfg_path.read_bytes()
+        self.assertEqual(self.add("old"), 1)
+        self.assertEqual(self.cfg_path.read_bytes(), before)
+        self.assertEqual(self.logins, [])
+
+    def test_add_codex_without_codex_or_failed_login_prints_hint_and_still_writes(self):
+        self.assertEqual(self.add("nocli", which=lambda n: None), 0)
+        self.assertEqual(self.logins, [])
+        self.assertIn("CODEX_HOME=", self.text())
+        self.assertIn("codex login", self.text())
+        self.rc = 1
+        self.cfg = load_config(self.cfg_path, home=self.home, state_dir=self.state)
+        self.assertEqual(self.add("bad"), 0)
+        self.assertIn("登入沒有完成", self.text())
+        self.assertEqual(load_config(self.cfg_path, home=self.home).all_profiles["bad"].agent, "codex")
+
+    def test_add_codex_with_dir_does_not_create_or_login(self):
+        given = self.tmp / "cxdir"
+        given.mkdir()
+        self.assertEqual(self.add("given", dir=given), 0)
+        self.assertEqual(self.logins, [])
+        self.assertEqual(load_config(self.cfg_path, home=self.home).all_profiles["given"].config_dir, given)
+        self.assertEqual(self.add("missing", dir=self.tmp / "nope"), 1)
+
+
 class AppendPluginsTests(unittest.TestCase):
     def test_append_plugins_keeps_array_style(self):
         from sampan.init import _append_plugins
