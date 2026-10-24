@@ -58,14 +58,14 @@
 
 在清單按 `p` 進來（`--plain` 也有，用輸入編號）。這裡管的是各 profile 的 plugin 與 marketplace 來源；改的內容會一起寫回 `config.toml`，所以設定檔與實際安裝不會分家。**打開畫面不會連網**；只有按 `r`、`u`、`U`，或確認儲存時才會執行 `claude` 指令（連到 GitHub 等來源）。
 
-**兩層**：第一層是 plugin 清單（名稱、狀態：最新／有新版／未裝／不一致），右邊（窄螢幕在下面）是資訊卡，列出來源、各 profile 目前的版本與狀態。游標那個 profile 不能改時，資訊卡會寫原因（例如「目錄不存在」、「來源不同：…」）。按 Enter 進到第二層：每個 profile 一個勾選框，空白勾選或取消，勾完按 `s` 儲存，`Esc` 返回（有改動時會問「放棄變更？(y/N)」）。
+**兩層**：第一層是 plugin 清單（名稱、狀態：最新／有新版／未裝／不一致），右邊（窄螢幕在下面）是資訊卡，列出來源、各 profile 目前的版本與狀態。游標那個 profile 不能改時，資訊卡會寫原因（例如「目錄不存在」、「來源不同：…」）。按 Enter 進到第二層：每個 profile 一個勾選框，空白勾選或取消，勾完按 `s` 儲存，`q` 或 `Esc` 返回（有改動時會問「放棄變更？(y/N)」）。
 
 | 鍵 | 作用 |
 |---|---|
 | ↑↓、`1`–`9`、`/` | 移動、跳到那一列、依名稱搜尋 |
 | Enter | 進到第二層，選要裝在哪些 profile |
 | `r` | 檢查新版：查各來源最新的版本（會連網），之後狀態會標「有新版」 |
-| `u` | 更新游標那個 plugin，不另外問 |
+| `u` | 更新游標那個 plugin，不另外問：先更新它的 marketplace，再在每個有裝它的 profile 更新；不會新裝或移除任何東西 |
 | `U` | 全部 plugin、全部 profile 都更新；因為會動到每個 profile，先問「全部 plugin、全部 profile 都更新？(y/N)」 |
 | `a` | 新增 plugin：從已下載的 marketplace 目錄挑，或按 `i` 自己輸入 `plugin@marketplace` |
 | Tab | 在「plugin」與「來源」兩個分頁間切換（`--plain` 用 `t`） |
@@ -75,7 +75,7 @@
 
 - **設定檔備份**：只有設定檔真的被改寫時，才先備份成 `config.toml.bak-<時間>`（同一次儲存最多一份）；全部失敗就沒有備份。設定檔其他部分（註解、排版）一個位元組都不動。儲存時會重新讀磁碟上的設定檔，所以你在畫面開著時手動改的內容不會被蓋掉。
 - **部分失敗**：某個 profile 的指令失敗，其他 profile 照常完成；設定檔只改指令成功的那幾個 profile，失敗的會列出來（「… 沒有改（設定檔也沒動那幾個 profile）」）。
-- **重開才生效**：安裝或移除成功後，畫面會說哪些 profile 有幾個 session 要重開（「要生效需重開 …：按 R 立刻重開，其他鍵稍後」）。按 `R` 才會重開（stop 後 restore）；不按就不會動。sampan 自己所在的 pane、忙碌中的 session 絕不重開，會列在「這些還在跑舊版，閒下來後再重開：…」，稍後用 `sampan stop --profile <p>` 加 `sampan restore`。只更新設定檔清單、沒有真的安裝或移除時，不需要重開。
+- **重開才生效**：安裝或移除成功後（在來源分頁移除來源而順便解除安裝了 plugin，也一樣），畫面會說哪些 profile 有幾個 session 要重開（「要生效需重開 …：按 R 立刻重開，其他鍵稍後」）。按 `R` 才會重開（stop 後 restore）；不按就不會動，畫面會提醒「稍後要生效：sampan stop --profile <p> 後 sampan restore」。sampan 自己所在的 pane、忙碌中的 session 絕不重開，會列在「這些還在跑舊版，閒下來後再重開：…」，稍後用 `sampan stop --profile <p>` 加 `sampan restore`。只更新設定檔清單、沒有真的安裝或移除時，不需要重開。
 
 **來源分頁**（Tab）：列出 marketplace 來源，每個來源有一個狀態：
 
@@ -86,7 +86,7 @@
 | 清單外 | profile 裡有，但設定檔 `[marketplaces]` 沒有；只能移除 |
 | 沒用到 | 設定檔有，但沒有 plugin 用它 |
 
-在這個分頁按 `a` 新增來源（問 `owner/repo` 或 git 網址），第二層勾選要加到哪些 profile，儲存時一併寫進 `[marketplaces]`。`u` 更新游標那個來源，`U` 全部來源（先問）。從某個 profile 移除來源時，如果那個 profile 的設定檔清單還列著用它的 plugin，會被拒絕（資訊卡寫「清單還有 N 個 plugin 用它（先在 plugin 頁移掉）」），要先到 plugin 頁移掉那些 plugin，否則一次儲存會悄悄把它們解除安裝。
+在這個分頁按 `a` 新增來源（問 `owner/repo` 或 git 網址），第二層勾選要加到哪些 profile，儲存時一併寫進 `[marketplaces]`。`u` 對游標那個來源，在每個有它的 profile 跑 `marketplace update`；`U` 對全部來源（先問）。從某個 profile 移除來源時，如果那個 profile 的設定檔清單還列著用它的 plugin，會被拒絕（資訊卡寫「清單還有 N 個 plugin 用它（先在 plugin 頁移掉）」），要先到 plugin 頁移掉那些 plugin，否則一次儲存會悄悄把它們解除安裝。
 
 **為什麼網址裡不能放 token**：sampan 會把來源寫進設定檔，也會原樣傳給 `claude`（指令列與日誌都看得到）。帶帳號或 token 的網址會被拒絕（「網址裡不要放帳號或 token，認證交給 git 的 credential helper」）。私有的 repo 請先設好 git 的 credential helper，來源寫乾淨的網址即可。
 
