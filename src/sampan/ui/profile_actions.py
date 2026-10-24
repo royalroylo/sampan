@@ -8,7 +8,7 @@ from ..status import State, status_rows
 from ..usage import usage_text
 from .actions import _ask
 from .plugin_actions import reload_config
-from .text import pad
+from .text import pad, text_width
 
 TITLE = "sampan · 帳號"
 MENU = "編號＝選 profile　a 新增　q 返回: "
@@ -53,6 +53,12 @@ def statusline_state(p):
 
 def _name_cell(pr):
     return pr.name + ("（停用）" if pr.disabled else "")
+
+
+def profile_cols(rows):
+    """PROFILE_COLS, with the running column widened to fit its widest cell (e.g. 「12 個執行中」)."""
+    agent_w, run_w = PROFILE_COLS
+    return agent_w, max([run_w] + [text_width(f"{r.running} 個執行中") for r in rows])
 
 
 def profile_cells(pr):

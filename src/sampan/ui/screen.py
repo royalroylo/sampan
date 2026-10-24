@@ -27,8 +27,8 @@ from .plugin_actions import (
     update_flow,
 )
 from .plugin_state import CatalogPicker, PluginPicker, ProfileToggles
-from .profile_actions import PROFILE_COLS, account_lines, load_rows, profile_action, profile_cells, profile_usage
 from .profile_actions import TITLE as PROFILES_TITLE
+from .profile_actions import account_lines, load_rows, profile_action, profile_cells, profile_cols, profile_usage
 from .profile_actions import card_lines as profile_card
 from .render import (
     LIST_COLS,
@@ -505,7 +505,7 @@ class CursesScreen:
                     cards[here.name] = profile_card(cfg, here, self.now_fn(), usage_fn)
                 self.view = dict(title=PROFILES_TITLE, left=[profile_cells(r) for r in picker.visible],
                                  cursor=picker.cursor, card=cards.get(here.name, []) if here else [], preview=None,
-                                 help=PROFILES_HELP, cols=PROFILE_COLS, empty="目前沒有任何 profile（a 新增）",
+                                 help=PROFILES_HELP, cols=profile_cols(picker.visible), empty="目前沒有任何 profile（a 新增）",
                                  notice=None, name_w=None)
                 self.draw()
                 k = self.key()

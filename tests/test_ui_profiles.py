@@ -71,6 +71,14 @@ class AccountLinesTest(unittest.TestCase):
 
 
 class ProfilePickerTest(unittest.TestCase):
+    def test_running_column_fits_two_digit_counts(self):
+        rows = [profile_ops.ProfileRow(n, "claude", Path("/x"), "", False, False, k, 1, "a")
+                for n, k in (("alice", 12), ("bob", 4))]
+        lines = frame_text(render(title="t", left=[pa.profile_cells(r) for r in rows], cursor=0, card=[],
+                                  cols=pa.profile_cols(rows), width=80, height=10))
+        self.assertTrue(any("12 個執行中" in line for line in lines), lines)
+        self.assertEqual(pa.profile_cols([]), pa.PROFILE_COLS)
+
     def test_keys(self):
         p = ProfilePicker([profile_ops.ProfileRow(n, "claude", Path("/x"), "", False, False, 0, 0, "")
                            for n in ("alice", "work")])
