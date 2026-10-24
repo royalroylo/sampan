@@ -1,4 +1,7 @@
-"""Apply the plugin screen's plan: run `claude plugin ...` per profile, then write config.toml once, only for the profiles that succeeded."""
+"""Apply the plugin screen's plan: run `claude plugin ...` per profile, then write config.toml once, only for the profiles that succeeded.
+
+Plugins (apply_changes) and marketplaces (apply_market) share the same rules: env/cwd per profile, one result line per
+profile, and one config write through _write_config."""
 import os
 import shlex
 import shutil
@@ -8,7 +11,7 @@ from pathlib import Path
 
 from . import config_edit
 from .clock import now_stamp
-from .config import strip_credentials, valid_source
+from .config import SOURCE_RULE, same_source, strip_credentials, valid_source
 from .fsutil import atomic_write
 from .plugin_view import _mkt, newest, snapshot
 from .plugins import read_state
@@ -59,13 +62,27 @@ def _build(text, pid, changes, mkt, source):
     return new
 
 
-def _write_config(cfg, original, final, stamp):
-    """Back up the file as it is on disk (mode kept), then write final atomically; the backup path, or None if unchanged."""
-    if final == original:
+def _write_config(cfg, out, original, final, stamp, rebuild):
+    """Write final once, after a backup of the file as it is on disk (mode kept). Returns the backup path, or None.
+
+    The file is re-read first: if it changed since `original` was read, final = rebuild(fresh text), so a hand edit made
+    while the commands ran survives. A None final, or an OSError on backup or write, is reported and nothing is written."""
+    try:
+        fresh = cfg.path.read_text()
+        if fresh != original:
+            original, final = fresh, rebuild(fresh)
+        if final is None:
+            out(f"❌ 設定檔無法自動修改（{cfg.path}），指令已執行；請手動改後跑 sampan plugins sync")
+            return None
+        if final == original:
+            return None
+        backup = cfg.path.with_name(f"{cfg.path.name}.bak-{stamp()}")
+        shutil.copy2(cfg.path, backup)
+        atomic_write(cfg.path, final)
+    except OSError as e:
+        out(f"❌ 設定檔寫入失敗（{e}），指令已執行；請手動改後跑 sampan plugins sync")
         return None
-    backup = cfg.path.with_name(f"{cfg.path.name}.bak-{stamp()}")
-    shutil.copy2(cfg.path, backup)
-    atomic_write(cfg.path, final)
+    out(f"✔ 設定檔已更新（備份 {backup.name}）")
     return backup
 
 
@@ -120,16 +137,128 @@ def apply_changes(cfg, run, out, pid, changes, *, new_source=None, stamp=now_sta
 
     backup = None
     if ok:
-        final = _build(text, pid, ok, mkt, new_source)
-        if final is None:
-            out(f"❌ 設定檔無法自動修改（{cfg.path}），指令已執行；請手動改後跑 sampan plugins sync")
-        else:
-            backup = _write_config(cfg, text, final, stamp)
-            if backup:
-                out(f"✔ 設定檔已更新（備份 {backup.name}）")
+        def rebuild(t):
+            return _build(t, pid, ok, mkt, new_source)
+        backup = _write_config(cfg, out, text, rebuild(text), stamp, rebuild)
     if failed:
         out(f"⚠ {', '.join(failed)} 沒有改（設定檔也沒動那幾個 profile）")
     return Applied(changed, failed, backup)
+
+
+def refuse_credentials(source):
+    """The refusal line for a marketplace source sampan must not pass to claude or write, or None when it is fine."""
+    if strip_credentials(source) != source:
+        return "❌ 網址裡不要放帳號或 token，認證交給 git 的 credential helper"
+    if not valid_source(source):
+        return f"❌ 來源要寫成 {SOURCE_RULE}"
+    return None
+
+
+def _ask(ask, prompt):
+    try:
+        raw = ask(prompt)
+    except (EOFError, KeyboardInterrupt):  # end of input or Ctrl-C both count as no
+        return None
+    return None if raw is None else raw.strip().lower()
+
+
+def _markets(text):
+    try:
+        return tomllib.loads(text).get("marketplaces", {})
+    except tomllib.TOMLDecodeError:
+        return None
+
+
+def _market_edit(text, name, source):
+    """text with [marketplaces] name = source (source None: the line removed); unchanged when already so; None when
+    it can't be done safely (parse error, the name points elsewhere, or the edit didn't give the expected table)."""
+    before = _markets(text)
+    if before is None:
+        return None
+    if source is None:
+        if name not in before:
+            return text
+        new = config_edit.remove_marketplace(text, name)
+    else:
+        if name in before:
+            return text if same_source(before[name], source) else None
+        new = config_edit.add_marketplace(text, name, source)
+    after = None if new is None else _markets(new)
+    want = {k: v for k, v in before.items() if k != name} | ({} if source is None else {name: source})
+    return new if after == want and config_edit.plugin_lists(new) == config_edit.plugin_lists(text) else None
+
+
+def apply_market(cfg, run, out, ask, name, changes, *, source, stamp=now_stamp):
+    """Add or remove one marketplace per profile (`claude plugin marketplace add/remove`), then update [marketplaces] once.
+
+    name is None when adding a new source: it is learned from the first profile that added it. source is the source
+    to add (None for a marketplace outside the config; such a one can only be removed)."""
+    text = cfg.path.read_text()
+    if any(ch.add for ch in changes):
+        refusal = refuse_credentials(source)
+        if refusal:
+            out(refusal)
+            return Applied([], {}, None)
+
+    changed, failed, added = [], {}, []
+    lost = False  # an add worked but its name could not be found
+    for ch in changes:
+        prof = cfg.profiles[ch.profile]
+        c = ["claude", "plugin", "marketplace", "add", source] if ch.add else ["claude", "plugin", "marketplace", "remove", name]
+        r = run(c, env=prof.env(os.environ), cwd=str(cfg.home))
+        if r.returncode != 0:
+            failed[ch.profile] = f"{shlex.join(c)} 失敗：{(r.stderr or r.stdout).strip()[:300]}"
+            out(f"❌ {ch.profile}：{failed[ch.profile]}")
+            continue
+        changed.append(ch.profile)
+        if not ch.add:
+            out(f"✔ {ch.profile}：已移除 {name}")
+            continue
+        added.append(ch.profile)
+        if name is None and not lost:
+            name = next((n for n, s in read_state(prof).marketplaces.items() if same_source(s, source)), None)
+            if name is None:
+                lost = True
+                out("❌ 加入後找不到這個來源的名稱，設定檔沒改")
+        out(f"✔ {ch.profile}：已加入 {name or source}")
+
+    target = False  # False: no config edit; else the [marketplaces] value to set (None removes the line)
+    listed = _markets(text) or {}
+    if added and name and not lost:
+        theirs = listed.get(name)
+        if theirs is None:
+            target = source
+        elif not same_source(theirs, source):
+            out(f"❌ {name} 在設定檔已經指向 {theirs}，設定檔沒改（{'、'.join(added)} 已加入的保留，"
+                f"可用 claude plugin marketplace remove {name} 移除）")
+    elif name in listed and any(not ch.add and ch.profile in changed for ch in changes) \
+            and not any(name in read_state(p).marketplaces for p in cfg.profiles.values()) \
+            and _ask(ask, f"也從設定檔 [marketplaces] 拿掉 {name}？(y/N): ") == "y":
+        target = None
+
+    backup = None
+    if target is not False:
+        def rebuild(t):
+            return _market_edit(t, name, target)
+        backup = _write_config(cfg, out, text, rebuild(text), stamp, rebuild)
+    if failed:
+        out(f"⚠ {', '.join(failed)} 沒有改（設定檔也沒動那幾個 profile）")
+    return Applied(changed, failed, backup)
+
+
+def update_markets(cfg, run, out, names=None):
+    """`claude plugin marketplace update <name>` in each profile that has the marketplace (names None: all of them)."""
+    for prof in cfg.profiles.values():
+        env = prof.env(os.environ)
+        for m in sorted(read_state(prof).marketplaces):
+            if names is not None and m not in names:
+                continue
+            c = ["claude", "plugin", "marketplace", "update", m]
+            r = run(c, env=env, cwd=str(cfg.home))
+            if r.returncode != 0:
+                out(f"❌ {prof.name}：{shlex.join(c)} 失敗：{(r.stderr or r.stdout).strip()[:300]}")
+            else:
+                out(f"✔ {prof.name}：{m} 已更新")
 
 
 def plan_update(snap, pids=None):

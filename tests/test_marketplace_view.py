@@ -144,6 +144,19 @@ class MarketTest(unittest.TestCase):
         self.assertEqual(market_preview(cfg, "m", changes[:1], new=False)[-2:],
                          ["  + 加入到 alice（alice@example.com）", f"設定檔 {cfg.path} 會一起更新（先備份）"])
 
+    def test_market_choices_outside_config_accepts_any_registered_source(self):
+        # R7: a marketplace not in [marketplaces] (source None) stays removable whatever source the profile has
+        set_plugins(self.cfg, "alice", [])
+        write_known(self.cfg, "alice", {"stray": ("other/fork", None, None)})
+        write_known(self.cfg, "work", {"stray": (None, None, None)})
+        ch = {c.profile: c for c in market_choices(self.cfg, snapshot(self.cfg), "stray", None)}
+        self.assertIsNone(ch["alice"].disabled)
+        self.assertIsNone(ch["work"].disabled)
+        self.assertEqual(ch["alice"].installed, "other/fork")
+        snap = snapshot(self.cfg)
+        self.assertEqual(plan_market(snap, list(ch.values()), {"alice": False, "work": False}, "stray"),
+                         [MarketChange("alice", False, ()), MarketChange("work", False, ())])
+
 
 if __name__ == "__main__":
     unittest.main()

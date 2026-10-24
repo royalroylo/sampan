@@ -183,9 +183,6 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(self.cfg.path.stat().st_mode & 0o777, 0o600)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 # ---- Task 5: update-only planner, latest check, restart helpers ----
 from sampan import plugin_apply as pa  # noqa: E402
@@ -318,3 +315,298 @@ class RestartTest(unittest.TestCase):
                                  ("stop", "work", "%3", 90)])
         self.assertEqual(rc, 1)
         self.assertEqual(out, ["⚠ 這些還在跑舊版，閒下來後再重開：busy1、me"])
+
+
+# ---- Task 10: marketplace apply ----
+from unittest import mock  # noqa: E402
+
+from sampan.config_edit import remove_marketplace  # noqa: E402
+from sampan.marketplace_view import MarketChange  # noqa: E402
+from tests.helpers import km_source  # noqa: E402
+
+CRED = "❌ 網址裡不要放帳號或 token，認證交給 git 的 credential helper"
+
+
+def profile_of(run, cfg):
+    env = run.calls[-1]["env"]
+    return next(p for p in cfg.profiles.values() if p.env({}).get("CLAUDE_CONFIG_DIR") == env.get("CLAUDE_CONFIG_DIR"))
+
+
+def known(cfg, profile):
+    f = cfg.profiles[profile].config_dir / "plugins" / "known_marketplaces.json"
+    return json.loads(f.read_text()) if f.exists() else {}
+
+
+def write_known(cfg, profile, data):
+    pd = cfg.profiles[profile].config_dir / "plugins"
+    pd.mkdir(parents=True, exist_ok=True)
+    (pd / "known_marketplaces.json").write_text(json.dumps(data))
+
+
+def market_fake(run, cfg, *, name_for=lambda s: s.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git"), fail=(),
+                during=None):
+    """`marketplace add/remove` rule: edits known_marketplaces.json of the profile it ran for; fails for `fail`."""
+    def rule(args):
+        prof = profile_of(run, cfg)
+        if during:
+            during()
+        if prof.name in fail:
+            return cp(1, "", "boom")
+        data = known(cfg, prof.name)
+        if args[3] == "add":
+            name = name_for(args[4])
+            if name:
+                data[name] = {"source": km_source(args[4])}
+        else:
+            data.pop(args[4], None)
+        write_known(cfg, prof.name, data)
+        return cp()
+    return rule
+
+
+def no_ask(prompt):
+    raise AssertionError(f"unexpected question: {prompt}")
+
+
+class MarketApplyTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.cfg = make_env(self.tmp)
+        self.out = []
+
+    def backups(self):
+        return sorted(self.tmp.glob("config.toml.bak-*"))
+
+    def runner(self, **kw):
+        run = FakeRunner(strict=True)
+        rule = market_fake(run, self.cfg, **kw)
+        run.on(["claude", "plugin", "marketplace", "add"], rule)
+        run.on(["claude", "plugin", "marketplace", "remove"], rule)
+        return run
+
+    def apply(self, run, name, changes, source, ask=no_ask):
+        return pa.apply_market(self.cfg, run, self.out.append, ask, name, changes, source=source, stamp=lambda: "S")
+
+    def markets(self):
+        return tomllib.loads(self.cfg.path.read_text()).get("marketplaces", {})
+
+    def test_add_new_source_learns_name_and_writes_config(self):
+        original = self.cfg.path.read_bytes()
+        run = self.runner(name_for=lambda s: "fancy")
+        res = self.apply(run, None, [MarketChange("alice", True, ()), MarketChange("work", True, ())], "owner/new-mkt")
+        self.assertEqual([c["args"] for c in run.calls],
+                         [["claude", "plugin", "marketplace", "add", "owner/new-mkt"]] * 2)
+        self.assertEqual(self.markets()["fancy"], "owner/new-mkt")
+        self.assertEqual(lists(self.cfg), {"alice": ["tools@my-plugins", "superpowers@claude-plugins-official"],
+                                           "work": ["tools@my-plugins"]})
+        self.assertEqual(res.changed, ["alice", "work"])
+        self.assertEqual(res.failed, {})
+        self.assertEqual(self.backups(), [res.backup])
+        self.assertEqual(res.backup.read_bytes(), original)
+        self.assertEqual(self.out, ["✔ alice：已加入 fancy", "✔ work：已加入 fancy", f"✔ 設定檔已更新（備份 {res.backup.name}）"])
+        alice, work = run.calls
+        self.assertNotIn("CLAUDE_CONFIG_DIR", alice["env"])
+        self.assertEqual(work["env"]["CLAUDE_CONFIG_DIR"], str(self.cfg.profiles["work"].config_dir))
+        self.assertEqual({alice["cwd"], work["cwd"]}, {str(self.cfg.home)})
+
+    def test_add_name_not_found_keeps_config(self):
+        original = self.cfg.path.read_bytes()
+        res = self.apply(self.runner(name_for=lambda s: None), None, [MarketChange("alice", True, ())], "owner/new-mkt")
+        self.assertIn("❌ 加入後找不到這個來源的名稱，設定檔沒改", self.out)
+        self.assertEqual(self.cfg.path.read_bytes(), original)
+        self.assertEqual(self.backups(), [])
+        self.assertEqual(res.changed, ["alice"])
+
+    def test_add_name_clash_reports_and_keeps_config(self):
+        original = self.cfg.path.read_bytes()
+        res = self.apply(self.runner(name_for=lambda s: "my-plugins"), None,
+                         [MarketChange("alice", True, ()), MarketChange("work", True, ())], "other/fork")
+        self.assertIn("❌ my-plugins 在設定檔已經指向 owner/my-plugins，設定檔沒改"
+                      "（alice、work 已加入的保留，可用 claude plugin marketplace remove my-plugins 移除）", self.out)
+        self.assertEqual(self.cfg.path.read_bytes(), original)
+        self.assertEqual(self.backups(), [])
+        self.assertIsNone(res.backup)
+        self.assertEqual(known(self.cfg, "alice")["my-plugins"], {"source": km_source("other/fork")})
+
+    def test_add_known_name_same_source_leaves_config(self):
+        original = self.cfg.path.read_bytes()
+        res = self.apply(self.runner(), "my-plugins", [MarketChange("work", True, ())], "owner/my-plugins")
+        self.assertEqual(self.out, ["✔ work：已加入 my-plugins"])
+        self.assertEqual(self.cfg.path.read_bytes(), original)
+        self.assertEqual(res.changed, ["work"])
+
+    def seed_both(self, name="my-plugins", source="owner/my-plugins"):
+        for p in ("alice", "work"):
+            write_known(self.cfg, p, {name: {"source": km_source(source)}})
+
+    def test_remove_runs_remove_and_asks_before_dropping_from_config(self):
+        original = self.cfg.path.read_text()
+        for answer, dropped in (("n", False), ("y", True)):
+            self.out.clear()
+            self.seed_both()
+            asked = []
+            run = self.runner()
+            res = self.apply(run, "my-plugins", [MarketChange("alice", False, ("tools@my-plugins",)),
+                                                 MarketChange("work", False, ())], None,
+                             ask=lambda q: asked.append(q) or answer)
+            self.assertEqual([c["args"] for c in run.calls],
+                             [["claude", "plugin", "marketplace", "remove", "my-plugins"]] * 2)
+            self.assertEqual(asked, ["也從設定檔 [marketplaces] 拿掉 my-plugins？(y/N): "])
+            self.assertEqual(res.changed, ["alice", "work"])
+            self.assertEqual(self.out[:2], ["✔ alice：已移除 my-plugins", "✔ work：已移除 my-plugins"])
+            if dropped:
+                self.assertEqual(self.cfg.path.read_text(), remove_marketplace(original, "my-plugins"))
+                self.assertNotIn("my-plugins", self.markets())
+                self.assertEqual(res.backup.read_text(), original)
+            else:
+                self.assertEqual(self.cfg.path.read_text(), original)
+                self.assertIsNone(res.backup)
+
+    def test_remove_not_asked_while_a_profile_still_has_it(self):
+        original = self.cfg.path.read_bytes()
+        self.seed_both()
+        res = self.apply(self.runner(), "my-plugins", [MarketChange("alice", False, ())], None)
+        self.assertEqual(res.changed, ["alice"])
+        self.assertEqual(self.cfg.path.read_bytes(), original)
+
+    def test_remove_outside_config_never_asks_or_touches_config(self):
+        original = self.cfg.path.read_bytes()
+        write_known(self.cfg, "alice", {"stray": {"source": km_source(None)}})
+        res = self.apply(self.runner(), "stray", [MarketChange("alice", False, ())], None)
+        self.assertEqual(self.out, ["✔ alice：已移除 stray"])
+        self.assertEqual(res.changed, ["alice"])
+        self.assertEqual(self.cfg.path.read_bytes(), original)
+        self.assertEqual(self.backups(), [])
+
+    def test_partial_failure_only_successful_profiles_counted(self):
+        run = self.runner(fail=("work",))
+        res = self.apply(run, None, [MarketChange("alice", True, ()), MarketChange("work", True, ())], "owner/new-mkt")
+        self.assertEqual(res.changed, ["alice"])
+        self.assertEqual(list(res.failed), ["work"])
+        self.assertIn("❌ work：claude plugin marketplace add owner/new-mkt 失敗：boom", self.out)
+        self.assertIn("⚠ work 沒有改（設定檔也沒動那幾個 profile）", self.out)
+        self.assertEqual(self.markets()["new-mkt"], "owner/new-mkt")
+        # every add fails: nothing written
+        original = self.cfg.path.read_bytes()
+        res = self.apply(self.runner(fail=("alice", "work")), None, [MarketChange("alice", True, ())], "owner/other")
+        self.assertEqual((res.changed, list(res.failed), res.backup), ([], ["alice"], None))
+        self.assertEqual(self.cfg.path.read_bytes(), original)
+        # a failed removal leaves the profile registered: no question
+        self.seed_both()
+        res = self.apply(self.runner(fail=("work",)), "my-plugins",
+                         [MarketChange("alice", False, ()), MarketChange("work", False, ())], None)
+        self.assertEqual(res.changed, ["alice"])
+        self.assertEqual(self.cfg.path.read_bytes(), original)
+
+    def test_credentialed_or_invalid_source_runs_nothing(self):
+        original = self.cfg.path.read_bytes()
+        run = FakeRunner(strict=True)
+        res = self.apply(run, None, [MarketChange("alice", True, ())], "https://bot:tok@git.example.com/o/r.git")
+        self.assertEqual((run.calls, res.changed, res.failed, res.backup), ([], [], {}, None))
+        self.assertEqual(self.out, [CRED])
+        self.out.clear()
+        res = self.apply(run, "stray", [MarketChange("alice", True, ())], None)
+        self.assertEqual(run.calls, [])
+        self.assertEqual(len(self.out), 1)
+        self.assertTrue(self.out[0].startswith("❌ 來源要寫成 "))
+        self.assertEqual(self.cfg.path.read_bytes(), original)
+
+    def test_refuse_credentials(self):
+        from sampan.config import SOURCE_RULE
+        self.assertEqual(pa.refuse_credentials("https://u:t@host/r.git"), CRED)
+        self.assertEqual(pa.refuse_credentials("not a source"), f"❌ 來源要寫成 {SOURCE_RULE}")
+        self.assertIsNone(pa.refuse_credentials("owner/repo"))
+        self.assertIsNone(pa.refuse_credentials("https://host/r.git"))
+
+    def test_update_markets_only_registered_profiles(self):
+        write_known(self.cfg, "alice", {"my-plugins": {"source": km_source("owner/my-plugins")},
+                                        "x": {"source": km_source("owner/x")}})
+        write_known(self.cfg, "work", {"x": {"source": km_source("owner/x")}})
+        run = FakeRunner(strict=True).on(mkt_update("x"), cp()).on(mkt_update("my-plugins"), cp())
+        pa.update_markets(self.cfg, run, self.out.append)
+        self.assertEqual([c["args"] for c in run.calls], [mkt_update("my-plugins"), mkt_update("x"), mkt_update("x")])
+        self.assertEqual(self.out, ["✔ alice：my-plugins 已更新", "✔ alice：x 已更新", "✔ work：x 已更新"])
+        self.assertEqual(run.calls[2]["env"]["CLAUDE_CONFIG_DIR"], str(self.cfg.profiles["work"].config_dir))
+        self.assertEqual(run.calls[0]["cwd"], str(self.cfg.home))
+        self.out.clear()
+        run = FakeRunner(strict=True).on(mkt_update("my-plugins"), cp(1, "", "offline"))
+        pa.update_markets(self.cfg, run, self.out.append, ["my-plugins"])
+        self.assertEqual([c["args"] for c in run.calls], [mkt_update("my-plugins")])
+        self.assertEqual(self.out, ["❌ alice：claude plugin marketplace update my-plugins 失敗：offline"])
+
+    def test_edit_while_commands_run_survives(self):
+        cfg = self.cfg = make_env(self.tmp, TOML + "\n[restore]\nrecent_days = 7\n")
+        hand = "# edited by hand while the commands ran\n"
+
+        def edit():
+            if hand not in cfg.path.read_text():
+                cfg.path.write_text(cfg.path.read_text().replace("recent_days = 7", "recent_days = 3") + hand)
+        res = self.apply(self.runner(during=edit), None, [MarketChange("alice", True, ())], "owner/new-mkt")
+        text = cfg.path.read_text()
+        self.assertIn(hand, text)
+        data = tomllib.loads(text)
+        self.assertEqual(data["restore"]["recent_days"], 3)
+        self.assertEqual(data["marketplaces"]["new-mkt"], "owner/new-mkt")
+        self.assertIn(hand, res.backup.read_text())  # the backup holds the fresh on-disk bytes
+
+    def test_write_error_reported_and_applied_returned(self):
+        with mock.patch("sampan.plugin_apply.atomic_write", side_effect=OSError("disk full")):
+            res = self.apply(self.runner(), None, [MarketChange("alice", True, ())], "owner/new-mkt")
+        self.assertEqual(res.changed, ["alice"])
+        self.assertIsNone(res.backup)
+        self.assertIn("❌ 設定檔寫入失敗（disk full），指令已執行；請手動改後跑 sampan plugins sync", self.out)
+
+
+class WriteConfigTest(unittest.TestCase):
+    """R5: apply_changes re-reads the file before writing and survives write errors."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.out = []
+
+    def test_edit_while_install_runs_survives(self):
+        cfg = make_env(self.tmp, TOML + "\n[restore]\nrecent_days = 7\n")
+        hand = "# edited by hand while the commands ran\n"
+        run = FakeRunner(strict=True)
+        inst = installer(run, cfg)
+
+        def rule(args):
+            cfg.path.write_text(cfg.path.read_text().replace("recent_days = 7", "recent_days = 3") + hand)
+            return inst(args)
+        run.on(INSTALL, rule)
+        res = apply_changes(cfg, run, self.out.append, PID, [Change("work", True, True, False)], stamp=lambda: "S")
+        text = cfg.path.read_text()
+        self.assertIn(hand, text)
+        self.assertEqual(tomllib.loads(text)["restore"]["recent_days"], 3)
+        self.assertEqual(lists(cfg)["work"], ["tools@my-plugins", PID])
+        self.assertIn(hand, res.backup.read_text())
+
+    def test_unparseable_edit_while_install_runs_not_written(self):
+        cfg = make_env(self.tmp)
+        run = FakeRunner(strict=True)
+        inst = installer(run, cfg)
+        broken = cfg.path.read_text() + "\n[[[ broken\n"
+
+        def rule(args):
+            cfg.path.write_text(broken)
+            return inst(args)
+        run.on(INSTALL, rule)
+        res = apply_changes(cfg, run, self.out.append, PID, [Change("work", True, True, False)], stamp=lambda: "S")
+        self.assertEqual(cfg.path.read_text(), broken)
+        self.assertIsNone(res.backup)
+        self.assertEqual(res.changed, ["work"])
+        self.assertIn(f"❌ 設定檔無法自動修改（{cfg.path}），指令已執行；請手動改後跑 sampan plugins sync", self.out)
+        self.assertEqual(sorted(self.tmp.glob("config.toml.bak-*")), [])
+
+    def test_write_error_reported_and_applied_returned(self):
+        cfg = make_env(self.tmp)
+        run = FakeRunner(strict=True)
+        run.on(INSTALL, installer(run, cfg))
+        with mock.patch("sampan.plugin_apply.atomic_write", side_effect=OSError("disk full")):
+            res = apply_changes(cfg, run, self.out.append, PID, [Change("work", True, True, False)], stamp=lambda: "S")
+        self.assertEqual((res.changed, res.failed, res.backup), (["work"], {}, None))
+        self.assertIn("❌ 設定檔寫入失敗（disk full），指令已執行；請手動改後跑 sampan plugins sync", self.out)
+
+
+if __name__ == "__main__":
+    unittest.main()

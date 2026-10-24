@@ -80,7 +80,7 @@ def market_choices(cfg, snap, name, source):
         disabled = None
         if p.name in snap.missing:
             disabled = "目錄不存在"
-        elif name in st.marketplaces and not same_source(theirs, source):
+        elif source is not None and name in st.marketplaces and not same_source(theirs, source):  # outside the config: any source
             disabled = f"來源不同：{theirs or NO_SOURCE}"
         elif name in st.marketplaces and n > 0:
             disabled = f"清單還有 {n} 個 plugin 用它（先在 plugin 頁移掉）"
