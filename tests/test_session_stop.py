@@ -191,15 +191,41 @@ class StopTest(unittest.TestCase):
         self.stop(r, own_pane=None)
         self.assertEqual({a[0] for a in self.sent(r)}, {"%1", "%3"})
 
-    def test_worktree_session_is_not_sent_exit(self):
-        # Task 14 real-machine test: a --worktree session receiving /exit pops up a Keep/Remove worktree confirmation
+    def worktree(self, screen=""):
         write_session(self.cfg, "alice", 200, sid=A, tmux="a:@1.%1", status="idle",
                       cwd="/Users/u/proj/.claude/worktrees/feature-schedule")
         r = self.runner()
-        rc = self.stop(r, names=("a",))
-        self.assertEqual(self.sent(r), [])
-        self.assertEqual(rc, 1)
-        self.assertTrue(any("worktree" in m and "Keep worktree" in m for m in self.msgs))
+        r.on(["tmux", "-u", "capture-pane"], lambda a: cp(out=screen))
+        return r
+
+    def test_worktree_session_without_the_question_exits_like_any_other(self):
+        # a resumed session in a worktree it did not create this run: /exit just ends it (Mac mini, 2026-10-24)
+        r = self.worktree()
+        stopped, left = [], []
+        rc = self.stop(r, names=("a",), stopped=stopped, left=left)
+        self.assertEqual(self.sent(r), [["%1", "C-u"], ["%1", "/exit", "Enter"]])
+        self.assertEqual((rc, stopped, left), (0, ["a"], []))
+
+    def test_worktree_question_after_exit_is_left_to_the_user(self):
+        # Task 14 real-machine test: a --worktree session receiving /exit pops up a Keep/Remove worktree confirmation
+        self.exit_on_keys = False
+        r = self.worktree("Exiting worktree session\n❯ 1. Keep worktree\n  2. Remove worktree\n")
+        stopped, left, why = [], [], {}
+        rc = self.stop(r, names=("a",), stopped=stopped, left=left, why=why)
+        self.assertEqual(self.sent(r), [["%1", "C-u"], ["%1", "/exit", "Enter"]])  # nothing pressed on the question
+        self.assertEqual((rc, stopped, left), (1, [], ["a"]))
+        self.assertEqual(why, {"a": "在問要不要保留 worktree"})
+        text = "\n".join(self.msgs)
+        self.assertIn("  ⎇ a：/exit 後在問要不要保留 worktree，sampan 沒有替你選；請進去選「Keep worktree」，再 sampan restore a",
+                      text)
+        self.assertNotIn("逾時", text.split("sampan stop：")[0])
+        self.assertIn("worktree 1", text)
+
+    def test_left_sessions_carry_their_reason(self):
+        r = self.runner()
+        left, why = [], {}
+        self.stop(r, left=left, why=why)
+        self.assertEqual(why, {"b": "忙碌中", "me": "sampan 自己所在的 pane"})
 
 
 TID = "01a1568b-81c2-71f1-99f7-b7a590f4ed96"

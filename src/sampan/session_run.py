@@ -244,8 +244,9 @@ def cmd_forget(cfg, run, out, name, *, dry_run=False):
 
 def cmd_stop(cfg, run, out, *, names=(), profile=None, force=False, dry_run=False, keep_tmux=False,
              sleep=time.sleep, timeout=90, own_pane=None, kill=os.kill, proc_root=Path("/proc"),
-             stopped=None, left=None):
-    """stopped / left: when given lists, receive the names of sessions that ended, and of wanted sessions that were not stopped."""
+             stopped=None, left=None, why=None):
+    """stopped / left: when given lists, receive the names of sessions that ended, and of wanted sessions that were not stopped.
+    why: when given a dict, receives {name: reason} for each one in left (shown next to the name by a restart)."""
     from .save import cmd_save
 
     # save's lines are held back until we know tmux is readable: when it is not, save has said so already and
@@ -293,10 +294,6 @@ def cmd_stop(cfg, run, out, *, names=(), profile=None, force=False, dry_run=Fals
             busy.append(f"{pane.session}（{lc.status}）")
             busy_names.append(pane.session)
             continue
-        if lc.agent == "claude" and WORKTREE_MARK in lc.cwd:
-            # /exit pops up a "Keep worktree / Remove worktree" confirmation, and a wrong choice deletes the commits on the branch: do not handle it automatically
-            worktrees.append(pane.session)
-            continue
         if dry_run:
             out(f"[dry-run] {pane.session}：送 {EXIT_TEXT[lc.agent]}")
             continue
@@ -312,6 +309,11 @@ def cmd_stop(cfg, run, out, *, names=(), profile=None, force=False, dry_run=Fals
         for pid in [p for p, (_pane, lc) in waiting.items() if not _alive(procs, lc.pid, lc.agent)]:
             done.append(waiting.pop(pid)[0].session)
             out(f"  · {done[-1]} 已結束（{waited} 秒）")
+        for pid, (pane, lc) in list(waiting.items()):
+            # a session that created its worktree in this run asks Keep / Remove worktree on /exit, and a wrong
+            # choice deletes the branch's commits: never answer it, leave it at the question for the user
+            if lc.agent == "claude" and WORKTREE_MARK in lc.cwd and _worktree_question(tmux.capture(pane.pane_id)):
+                worktrees.append(waiting.pop(pid)[0].session)
         if waiting and waited % 10 == 0:
             names = "、".join(sorted(p.session for p, _lc in waiting.values()))
             out(f"  … 還在等 {names}（{waited}／{timeout} 秒）")
@@ -320,6 +322,11 @@ def cmd_stop(cfg, run, out, *, names=(), profile=None, force=False, dry_run=Fals
         stopped.extend(done)
     if left is not None:
         left.extend(busy_names + worktrees + multi_hit + unknown + skipped_self + [p.session for p, _lc in timed_out])
+    if why is not None:
+        why.update({s: "忙碌中" for s in busy_names} | {s: "在問要不要保留 worktree" for s in worktrees}
+                   | {s: "同一個 tmux session 有多個 agent" for s in multi_hit} | {s: "無法判斷是否閒置" for s in unknown}
+                   | {s: "sampan 自己所在的 pane" for s in skipped_self}
+                   | {p.session: f"{timeout} 秒內沒結束" for p, _lc in timed_out})
     closed, kept = _close_sessions(tmux, done) if done and not keep_tmux else ([], [])
     if force and timed_out:
         procs = list_procs(run)
@@ -336,7 +343,7 @@ def cmd_stop(cfg, run, out, *, names=(), profile=None, force=False, dry_run=Fals
     for s in kept:
         out(f"  ⧉ {s}：已結束；tmux 裡還有其他視窗或 pane，保留 session")
     for s in worktrees:
-        out(f"  ⎇ {s}：worktree session，/exit 會問要不要保留 worktree。請手動 /exit 並選「1. Keep worktree」")
+        out(f"  ⎇ {s}：/exit 後在問要不要保留 worktree，sampan 沒有替你選；請進去選「Keep worktree」，再 sampan restore {s}")
     for b in busy:
         out(f"  ⏸ {b}：忙碌中，沒動它，請自己處理或稍後再跑一次")
     for s in multi_hit:
@@ -348,6 +355,11 @@ def cmd_stop(cfg, run, out, *, names=(), profile=None, force=False, dry_run=Fals
     for s in skipped_self:
         out(f"  ↷ {s}：這是執行 sampan 的 pane（自己），跳過；完整關機請在一般終端機執行")
     return 1 if busy or unknown or timed_out or worktrees or multi_hit else 0
+
+
+def _worktree_question(screen):
+    """Whether the pane shows Claude's Keep / Remove worktree question (asked on /exit of a worktree it created)."""
+    return "Keep worktree" in screen and "Remove worktree" in screen
 
 
 def _close_sessions(tmux, sessions):

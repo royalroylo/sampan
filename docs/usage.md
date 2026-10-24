@@ -75,7 +75,7 @@
 
 - **設定檔備份**：只有設定檔真的被改寫時，才先備份成 `config.toml.bak-<時間>`（同一次儲存最多一份）；全部失敗就沒有備份。設定檔其他部分（註解、排版）一個位元組都不動。儲存時會重新讀磁碟上的設定檔，所以你在畫面開著時手動改的內容不會被蓋掉。
 - **部分失敗**：某個 profile 的指令失敗，其他 profile 照常完成；設定檔只改指令成功的那幾個 profile，失敗的會列出來（「… 沒有改（設定檔也沒動那幾個 profile）」）。
-- **重開才生效**：安裝或移除成功後（在來源分頁移除來源而順便解除安裝了 plugin，也一樣），畫面會說哪些 profile 有幾個 session 要重開（「要生效需重開 …：按 R 立刻重開，其他鍵稍後」）。按 `R` 才會重開（stop 後 restore）；不按就不會動，畫面會提醒「稍後要生效：sampan stop --profile <p> 後 sampan restore」。sampan 自己所在的 pane、忙碌中的 session 絕不重開，會列在「這些還在跑舊版，閒下來後再重開：…」，稍後用 `sampan stop --profile <p>` 加 `sampan restore`。只更新設定檔清單、沒有真的安裝或移除時，不需要重開。
+- **重開才生效**：安裝或移除成功後（在來源分頁移除來源而順便解除安裝了 plugin，也一樣），畫面會說哪些 profile 有幾個 session 要重開（「要生效需重開 …：按 R 立刻重開，其他鍵稍後」）。按 `R` 才會重開（stop 後 restore）；不按就不會動，畫面會提醒「稍後要生效：sampan stop --profile <p> 後 sampan restore」。sampan 自己所在的 pane、忙碌中的 session 絕不重開，會列在「這些還在跑舊版，處理後再重開：名稱（原因）…」，稍後用 `sampan stop --profile <p>` 加 `sampan restore`。只更新設定檔清單、沒有真的安裝或移除時，不需要重開。worktree 裡的 session 一樣會送 `/exit`；如果 Claude 接著問要不要保留 worktree（只有那次執行是它自己建立 worktree 時才問），sampan 不替你選，原因會寫「在問要不要保留 worktree」，請進去選「Keep worktree」再 `sampan restore`。
 
 **來源分頁**（Tab）：列出 marketplace 來源，每個來源有一個狀態：
 

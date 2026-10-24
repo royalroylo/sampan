@@ -366,13 +366,15 @@ def restart_profiles(cfg, run, out, ask, profiles, *, own_pane=None, on_prompt=N
     from . import restore, session_run  # lazy: session_run imports a lot
     stop_fn = stop_fn or session_run.cmd_stop
     restore_fn = restore_fn or restore.cmd_restore
-    worst, left_all = 0, []
+    worst, left_all, why = 0, [], {}
     for p in profiles:
         s, left = [], []
-        worst = max(worst, stop_fn(cfg, run, out, profile=p, own_pane=own_pane, stopped=s, left=left, timeout=90))
+        worst = max(worst, stop_fn(cfg, run, out, profile=p, own_pane=own_pane, stopped=s, left=left, why=why,
+                                   timeout=90))
         if s:
             worst = max(worst, restore_fn(cfg, run, out, ask, names=tuple(s), confirm=False, on_prompt=on_prompt))
         left_all += left
-    if left_all:
-        out("⚠ 這些還在跑舊版，閒下來後再重開：" + "、".join(sorted(set(left_all))))
+    if left_all:  # the reason sits next to each name: the stop lines explaining it may have scrolled away
+        out("⚠ 這些還在跑舊版，處理後再重開：" + "、".join(n + (f"（{why[n]}）" if why.get(n) else "")
+                                                 for n in sorted(set(left_all))))
     return worst

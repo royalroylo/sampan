@@ -5,6 +5,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- `sampan stop` (and `R` restarts) send `/exit` to sessions in a `.claude/worktrees/` directory too, instead of always
+  skipping them. Claude asks Keep / Remove worktree only when that run created the worktree; when the question shows up,
+  sampan presses nothing and leaves it to you. A resumed session in a worktree now restarts like any other.
+- The "still on the old version" list after a restart shows each session's reason (busy, asking about the worktree,
+  sampan's own pane…), since the lines explaining it may have scrolled away.
+
 ## [0.7.1] - 2026-10-24
 
 ### Added

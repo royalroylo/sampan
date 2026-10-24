@@ -305,6 +305,7 @@ class RestartTest(unittest.TestCase):
             calls.append(("stop", kw["profile"], kw["own_pane"], kw["timeout"]))
             kw["stopped"].extend(["s1"] if kw["profile"] == "alice" else [])
             kw["left"].extend(["busy1", "me"])
+            kw["why"]["busy1"] = "忙碌中"
             return 1 if kw["profile"] == "alice" else 0
 
         def restore_fn(cfg, run, out_, ask, **kw):
@@ -315,7 +316,7 @@ class RestartTest(unittest.TestCase):
         self.assertEqual(calls, [("stop", "alice", "%3", 90), ("restore", ("s1",), False, "P"),
                                  ("stop", "work", "%3", 90)])
         self.assertEqual(rc, 1)
-        self.assertEqual(out, ["⚠ 這些還在跑舊版，閒下來後再重開：busy1、me"])
+        self.assertEqual(out, ["⚠ 這些還在跑舊版，處理後再重開：busy1（忙碌中）、me"])
 
 
 # ---- Task 10: marketplace apply ----
