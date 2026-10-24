@@ -185,3 +185,136 @@ class ApplyTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---- Task 5: update-only planner, latest check, restart helpers ----
+from sampan import plugin_apply as pa  # noqa: E402
+from sampan.plugin_view import Latest  # noqa: E402
+from sampan.status import State, StatusRow  # noqa: E402
+
+
+def seed(cfg, profile, plugins, markets=("my-plugins",), version="v1"):
+    """Write installed_plugins.json and known_marketplaces.json for a profile."""
+    pd = cfg.profiles[profile].config_dir / "plugins"
+    pd.mkdir(parents=True, exist_ok=True)
+    (pd / "installed_plugins.json").write_text(json.dumps(
+        {"version": 2, "plugins": {p: [{"scope": "user", "version": version}] for p in plugins}}))
+    (pd / "known_marketplaces.json").write_text(json.dumps(
+        {m: {"source": {"source": "github", "repo": f"owner/{m}"}} for m in markets}))
+
+
+def mkt_update(m):
+    return ["claude", "plugin", "marketplace", "update", m]
+
+
+def plugin_update(pid):
+    return ["claude", "plugin", "update", pid, "--scope", "user"]
+
+
+class UpdateTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.cfg = make_env(self.tmp)
+        self.out = []
+        # alice: tools installed (listed), extra installed (not listed); work: nothing installed though tools is listed
+        seed(self.cfg, "alice", ["tools@my-plugins", "extra@my-plugins"])
+        seed(self.cfg, "work", [])
+
+    def test_plan_update_only_installed_and_ignores_lists(self):
+        plan = pa.plan_update(snapshot(self.cfg))
+        self.assertEqual(plan, {"alice": [mkt_update("my-plugins"), plugin_update("extra@my-plugins"),
+                                          plugin_update("tools@my-plugins")]})
+        only = pa.plan_update(snapshot(self.cfg), ["tools@my-plugins"])
+        self.assertEqual(only, {"alice": [mkt_update("my-plugins"), plugin_update("tools@my-plugins")]})
+        self.assertEqual(pa.plan_update(snapshot(self.cfg), ["zzz@my-plugins"]), {})
+
+    def test_plan_update_skips_unknown_marketplace_and_missing_profile(self):
+        seed(self.cfg, "alice", ["tools@my-plugins"], markets=())
+        self.assertEqual(pa.plan_update(snapshot(self.cfg)), {"alice": [plugin_update("tools@my-plugins")]})
+        import shutil
+        shutil.rmtree(self.cfg.profiles["alice"].config_dir)
+        self.assertEqual(pa.plan_update(snapshot(self.cfg)), {})
+
+    def test_update_plugins_reports_only_real_changes(self):
+        cfg = self.cfg
+
+        def upd(args):
+            if args[3] != "extra@my-plugins":
+                return cp()
+            f = cfg.profiles["alice"].config_dir / "plugins" / "installed_plugins.json"
+            data = json.loads(f.read_text())
+            data["plugins"][args[3]] = [{"scope": "user", "version": "v2-aaaaaaaaaaaaaaaa"}]
+            f.write_text(json.dumps(data))
+            return cp()
+        run = FakeRunner(strict=True)
+        run.on(["claude", "plugin", "marketplace", "update"], cp())
+        run.on(["claude", "plugin", "update"], upd)
+        changed = pa.update_plugins(cfg, run, self.out.append)
+        self.assertEqual(changed, ["alice"])
+        arrows = [x for x in self.out if "→" in x]
+        self.assertEqual(arrows, ["  alice：extra v1 → v2-aaaaaaaaa"])
+        self.assertNotIn("沒有變動", self.out)
+        self.out.clear()
+        self.assertEqual(pa.update_plugins(cfg, run, self.out.append), [])
+        self.assertIn("沒有變動", self.out)
+        self.assertEqual([x for x in self.out if "→" in x], [])
+
+    def test_update_plugins_failure_line(self):
+        run = FakeRunner(strict=True)
+        run.on(["claude", "plugin", "marketplace", "update"], cp())
+        run.on(["claude", "plugin", "update"], cp(1, "", "boom"))
+        pa.update_plugins(self.cfg, run, self.out.append, ["tools@my-plugins"])
+        self.assertIn("❌ alice：claude plugin update tools@my-plugins --scope user 失敗：boom", self.out)
+
+    def test_check_latest_runs_marketplace_update_then_reads(self):
+        cfg = self.cfg
+        d = cfg.profiles["alice"].config_dir / "plugins" / "marketplaces" / "my-plugins" / ".claude-plugin"
+        d.mkdir(parents=True)
+        (d / "marketplace.json").write_text(json.dumps({"plugins": [{"name": "tools", "version": "9.9"}]}))
+        run = FakeRunner(strict=True).on(mkt_update("my-plugins"), cp())
+        res = pa.check_latest(cfg, run, self.out.append, snapshot(cfg))
+        self.assertEqual([c["args"] for c in run.calls], [mkt_update("my-plugins")])
+        self.assertEqual(self.out, ["▶ alice：更新 my-plugins 來源…"])
+        self.assertEqual(res[("alice", "tools@my-plugins")], Latest("9.9", None))
+        self.assertEqual(res[("alice", "extra@my-plugins")], Latest(None, None))
+        self.assertEqual(set(res), {("alice", "tools@my-plugins"), ("alice", "extra@my-plugins")})
+
+    def test_check_latest_failure_continues(self):
+        run = FakeRunner(strict=True).on(mkt_update("my-plugins"), cp(1, "", "offline"))
+        res = pa.check_latest(self.cfg, run, self.out.append, snapshot(self.cfg))
+        self.assertEqual(len(res), 2)
+        self.assertTrue(any(x.startswith("⚠ ") and "offline" in x for x in self.out))
+
+
+class RestartTest(unittest.TestCase):
+    def test_running_counts_and_hint_exact(self):
+        rows = [StatusRow("a", "claude", "alice", "s", State.RUNNING),
+                StatusRow("b", "claude", "alice", "s", State.RUNNING),
+                StatusRow("c", "claude", "work", "s", State.STOPPED),
+                StatusRow("d", "codex", "", "s", State.RUNNING),
+                StatusRow("e", "claude", "other", "s", State.RUNNING)]
+        counts = pa.running_counts(rows, ["alice", "work"])
+        self.assertEqual(counts, {"alice": 2})
+        self.assertEqual(pa.restart_hint(counts), "要生效需重開 alice 的 session（2 個）：按 R 立刻重開，其他鍵稍後")
+        self.assertEqual(pa.restart_hint({"a": 1, "b": 3}),
+                         "要生效需重開 a 的 session（1 個）、b 的 session（3 個）：按 R 立刻重開，其他鍵稍後")
+        self.assertIsNone(pa.restart_hint({}))
+
+    def test_restart_profiles_restores_only_stopped_and_lists_left(self):
+        out, calls = [], []
+
+        def stop_fn(cfg, run, out_, **kw):
+            calls.append(("stop", kw["profile"], kw["own_pane"], kw["timeout"]))
+            kw["stopped"].extend(["s1"] if kw["profile"] == "alice" else [])
+            kw["left"].extend(["busy1", "me"])
+            return 1 if kw["profile"] == "alice" else 0
+
+        def restore_fn(cfg, run, out_, ask, **kw):
+            calls.append(("restore", kw["names"], kw["confirm"], kw["on_prompt"]))
+            return 0
+        rc = pa.restart_profiles("cfg", "run", out.append, "ask", ["alice", "work"], own_pane="%3",
+                                 on_prompt="P", stop_fn=stop_fn, restore_fn=restore_fn)
+        self.assertEqual(calls, [("stop", "alice", "%3", 90), ("restore", ("s1",), False, "P"),
+                                 ("stop", "work", "%3", 90)])
+        self.assertEqual(rc, 1)
+        self.assertEqual(out, ["⚠ 這些還在跑舊版，閒下來後再重開：busy1、me"])

@@ -71,6 +71,13 @@ class StopTest(unittest.TestCase):
         self.assertIn("自己", text)
         self.assertTrue(self.cfg.registry_path.exists())  # save first
 
+    def test_cmd_stop_fills_stopped_and_left(self):
+        r = self.runner()
+        stopped, left = [], []
+        self.stop(r, stopped=stopped, left=left)
+        self.assertEqual(stopped, ["a"])
+        self.assertEqual(sorted(left), ["b", "me"])
+
     def killed_sessions(self, r):
         return [c["args"][3:] for c in r.called(["tmux", "-u", "kill-session"])]
 

@@ -208,7 +208,9 @@ def cmd_rename(cfg, run, out, old, new):
 
 
 def cmd_stop(cfg, run, out, *, names=(), profile=None, force=False, dry_run=False, keep_tmux=False,
-             sleep=time.sleep, timeout=90, own_pane=None, kill=os.kill, proc_root=Path("/proc")):
+             sleep=time.sleep, timeout=90, own_pane=None, kill=os.kill, proc_root=Path("/proc"),
+             stopped=None, left=None):
+    """stopped / left: when given lists, receive the names of sessions that ended, and of wanted sessions that were not stopped."""
     from .save import cmd_save
 
     # save's lines are held back until we know tmux is readable: when it is not, save has said so already and
@@ -237,7 +239,7 @@ def cmd_stop(cfg, run, out, *, names=(), profile=None, force=False, dry_run=Fals
     def wanted(session, prof):
         return (not names or session in names) and (not profile or prof is None or prof == profile)
 
-    busy, sent, skipped_self, unknown, worktrees = [], [], [], [], []
+    busy, busy_names, sent, skipped_self, unknown, worktrees = [], [], [], [], [], []
     multi_hit = sorted(s for s in multi if wanted(s, None))
     for pane in panes:
         if pane.session in multi:
@@ -254,6 +256,7 @@ def cmd_stop(cfg, run, out, *, names=(), profile=None, force=False, dry_run=Fals
             continue
         if lc.status != "idle":  # Codex's unknown (approval, trust or other menus, or an unrecognised screen) also counts as busy
             busy.append(f"{pane.session}（{lc.status}）")
+            busy_names.append(pane.session)
             continue
         if lc.agent == "claude" and WORKTREE_MARK in lc.cwd:
             # /exit pops up a "Keep worktree / Remove worktree" confirmation, and a wrong choice deletes the commits on the branch: do not handle it automatically
@@ -278,6 +281,10 @@ def cmd_stop(cfg, run, out, *, names=(), profile=None, force=False, dry_run=Fals
             names = "、".join(sorted(p.session for p, _lc in waiting.values()))
             out(f"  … 還在等 {names}（{waited}／{timeout} 秒）")
     timed_out = list(waiting.values())
+    if stopped is not None:
+        stopped.extend(done)
+    if left is not None:
+        left.extend(busy_names + worktrees + multi_hit + unknown + skipped_self + [p.session for p, _lc in timed_out])
     closed, kept = _close_sessions(tmux, done) if done and not keep_tmux else ([], [])
     if force and timed_out:
         procs = list_procs(run)

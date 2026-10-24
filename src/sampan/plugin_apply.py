@@ -10,8 +10,9 @@ from . import config_edit
 from .clock import now_stamp
 from .config import strip_credentials, valid_source
 from .fsutil import atomic_write
-from .plugin_view import _mkt
+from .plugin_view import _mkt, newest, snapshot
 from .plugins import read_state
+from .status import State
 
 
 @dataclass(frozen=True)
@@ -129,3 +130,95 @@ def apply_changes(cfg, run, out, pid, changes, *, new_source=None, stamp=now_sta
     if failed:
         out(f"⚠ {', '.join(failed)} 沒有改（設定檔也沒動那幾個 profile）")
     return Applied(changed, failed, backup)
+
+
+def plan_update(snap, pids=None):
+    """Update-only commands per profile: `marketplace update` for the marketplaces of installed plugins, then `plugin update` per plugin.
+
+    Never installs, uninstalls or reads the config lists. Profiles with nothing to do are left out."""
+    plan = {}
+    for name, st in snap.states.items():
+        if name in snap.missing:
+            continue
+        installed = sorted(p for p in st.installed if pids is None or p in pids)
+        mkts = sorted({_mkt(p) for p in installed} & set(st.marketplaces))
+        cmds = [["claude", "plugin", "marketplace", "update", m] for m in mkts]
+        cmds += [["claude", "plugin", "update", p, "--scope", "user"] for p in installed]
+        if installed:
+            plan[name] = cmds
+    return plan
+
+
+def update_plugins(cfg, run, out, pids=None):
+    """Run plan_update; report only versions that really changed. Returns the profiles with a change."""
+    plan = plan_update(snapshot(cfg), pids)
+    changed = []
+    for name, cmds in plan.items():
+        prof = cfg.profiles[name]
+        before = read_state(prof).installed
+        env = prof.env(os.environ)
+        for c in cmds:
+            r = run(c, env=env, cwd=str(cfg.home))
+            if r.returncode != 0:
+                out(f"❌ {name}：{shlex.join(c)} 失敗：{(r.stderr or r.stdout).strip()[:300]}")
+        after = read_state(prof).installed
+        diffs = [(p, before[p], after[p]) for p in sorted(after) if p in before and before[p] != after[p]]
+        for p, b, a in diffs:
+            out(f"  {name}：{p.split('@', 1)[0]} {b[:12]} → {a[:12]}")
+        if diffs:
+            changed.append(name)
+    if not changed:
+        out("沒有變動")
+    return changed
+
+
+def check_latest(cfg, run, out, snap):
+    """Refresh each profile's marketplace clones (network), then read the newest version of every installed plugin."""
+    result = {}
+    for name, st in snap.states.items():
+        if name in snap.missing:
+            continue
+        prof = cfg.profiles[name]
+        env = prof.env(os.environ)
+        for m in sorted({_mkt(p) for p in st.installed} & set(st.marketplaces)):
+            out(f"▶ {name}：更新 {m} 來源…")
+            c = ["claude", "plugin", "marketplace", "update", m]
+            r = run(c, env=env, cwd=str(cfg.home))
+            if r.returncode != 0:
+                out(f"⚠ {name}：{shlex.join(c)} 失敗：{(r.stderr or r.stdout).strip()[:300]}")
+        for pid in sorted(st.installed):
+            result[(name, pid)] = newest(prof, _mkt(pid), pid.split("@", 1)[0], run)
+    return result
+
+
+def running_counts(rows, profiles):
+    """Running Claude sessions per profile (only counts above zero)."""
+    counts = {}
+    for r in rows:
+        if r.agent == "claude" and r.state is State.RUNNING and r.profile in profiles:
+            counts[r.profile] = counts.get(r.profile, 0) + 1
+    return counts
+
+
+def restart_hint(counts):
+    if not counts:
+        return None
+    return "要生效需重開 " + "、".join(f"{p} 的 session（{n} 個）" for p, n in counts.items()) \
+        + "：按 R 立刻重開，其他鍵稍後"
+
+
+def restart_profiles(cfg, run, out, ask, profiles, *, own_pane=None, on_prompt=None, stop_fn=None, restore_fn=None):
+    """Stop idle sessions of the profiles and restore exactly those; busy / own-pane ones are listed once. Returns the worst rc."""
+    from . import restore, session_run  # lazy: session_run imports a lot
+    stop_fn = stop_fn or session_run.cmd_stop
+    restore_fn = restore_fn or restore.cmd_restore
+    worst, left_all = 0, []
+    for p in profiles:
+        s, left = [], []
+        worst = max(worst, stop_fn(cfg, run, out, profile=p, own_pane=own_pane, stopped=s, left=left, timeout=90))
+        if s:
+            worst = max(worst, restore_fn(cfg, run, out, ask, names=tuple(s), confirm=False, on_prompt=on_prompt))
+        left_all += left
+    if left_all:
+        out("⚠ 這些還在跑舊版，閒下來後再重開：" + "、".join(sorted(set(left_all))))
+    return worst
