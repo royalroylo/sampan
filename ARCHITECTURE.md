@@ -21,11 +21,12 @@ What does not happen: nothing in detection, the registry or the leaf modules imp
      `clock.py` stores times in UTC and formats them in local time.
 3. **Actions** (change things, always on explicit command)
    - `save.py`, `restore.py`, `session_run.py` (new / stop / move / rename), `adopt.py`, `launch.py`, `prompts.py`
-     (answering startup prompts through a `Relay`), `plugins.py` (read-only status and `sync` for scripts), `plugin_view.py` / `marketplace_view.py` (what the plugin screen shows: rows, cards, save previews; pure), `plugin_apply.py` (runs the `claude plugin` commands of a save, backs up and edits the config, the restart offer), `config_edit.py` (byte-preserving edits of `config.toml`), `hook.py`, `launchd.py`, `init.py`, `update.py`.
+     (answering startup prompts through a `Relay`), `plugins.py` (read-only status and `sync` for scripts), `plugin_view.py` / `marketplace_view.py` (what the plugin screen shows: rows, cards, save previews; pure), `plugin_apply.py` (runs the `claude plugin` commands of a save, backs up and edits the config, restarts the sessions of chosen profiles), `config_edit.py` (byte-preserving edits of `config.toml`), `hook.py`, `launchd.py`, `init.py`, `update.py`.
 4. **Interfaces**
    - `cli.py` (argparse and dispatch, exit codes), `ui/` (curses screen), `doctor.py` (diagnostics).
    - `ui/` is split into `text`, `state`, `cards`, `render` (pure), `screen` (the thin curses adapter),
-     `actions` (the main loop and question flows), `dirpick`, and `plugin_state` / `plugin_actions` (the plugin screen's state machines and its `--plain` flow).
+     `actions` (the main loop and question flows), `dirpick`, and `plugin_state` / `plugin_actions` (the plugin
+     screen's state machines, its question flows including the restart offer, and its `--plain` flow).
 
 All external programs (`tmux`, `ps`, `lsof`, `claude`, `launchctl`, `git`, `uv`) go through one injected `run(args)`
 callable (`runner.py`). That is what makes the suite fast and safe: tests pass a `FakeRunner`.
@@ -37,8 +38,9 @@ callable (`runner.py`). That is what makes the suite fast and safe: tests pass a
 - sampan presses no key the user did not choose. The only automatic answer is `sampan move` pressing "trust" when the
   prompt's path is exactly the destination. A prompt that cannot be read gets no keys.
 - `save` (and so the schedule) never restores, starts, moves or stops anything.
-- The registry never deletes a row by itself; only `sampan forget` (or `X`), which the user confirms, removes one. A session whose tmux is gone becomes "stopped", not removed. If tmux itself
-  cannot be read, the state is "unknown", never "stopped".
+- The registry never deletes a row by itself; only `sampan forget` or `X` in the ui (which asks first) removes one.
+  A session whose tmux is gone becomes "stopped", not removed. If tmux itself cannot be read, the state is "unknown",
+  never "stopped".
 - Every write is atomic, and the previous registry is copied to `history/` first. Everything written under the
   state dir is private (files `600`, directories `700`, whatever the umask; best-effort where chmod is refused), and the
   launchd job runs with `Umask` `077` so its logs there are private too.

@@ -277,7 +277,7 @@ class ForgetTest(Base):
         before = self.cfg.registry_path.read_text()
         self.live = {"u"}
         self.assertEqual(cmd_forget(self.cfg, self.runner(), self.msgs.append, "u"), 1)
-        self.assertEqual(self.msgs[-1], "❌ u 還在 tmux 裡；先 sampan stop u")
+        self.assertEqual(self.msgs[-1], "❌ u 還在 tmux 裡；先 sampan stop u（只剩 shell 的話：tmux kill-session -t =u）")
         self.assertEqual(cmd_forget(self.cfg, self.runner(), self.msgs.append, "nope"), 2)
         self.assertEqual(self.msgs[-1], "❌ 登記表沒有 nope")
         self.assertEqual(self.cfg.registry_path.read_text(), before)

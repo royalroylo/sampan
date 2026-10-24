@@ -225,7 +225,7 @@ def cmd_forget(cfg, run, out, name, *, dry_run=False):
             out(f"❌ {e}；不知道 {name} 還在不在 tmux 裡，什麼都沒移除")
             return 2
         if tmux.has_session(name):
-            out(f"❌ {name} 還在 tmux 裡；先 sampan stop {name}")
+            out(f"❌ {name} 還在 tmux 裡；先 sampan stop {name}（只剩 shell 的話：tmux kill-session -t ={name}）")
             return 1
         if dry_run:
             out(f"（dry-run）會從登記表移除 {name}，什麼都沒改")
