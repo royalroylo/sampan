@@ -337,7 +337,7 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
            restore_fn=restore_mod.cmd_restore, restore_picker_fn=None,
            adopt_fn=adopt_mod.cmd_adopt, adopt_picker_fn=None, save_fn=save_mod.cmd_save, loop=False,
            attach_fn=None, choose_dir_fn=None, updater=None, update_fn=update_mod.do_update, argv=(), prompt_fn=None, plugins_fn=None,
-           profiles_fn=None):
+           profiles_fn=None, set_cfg_fn=None):
     """picker_fn(rows, current) returns (action, list of names); when None, use the plain-text menu where a number is typed.
     restore_picker_fn / adopt_picker_fn are the checklist interfaces for R / A; when None, restore / adopt ask in text themselves.
     loop=True: after an action return to the list, leaving only on q / Esc (or when an opened session is attached); False does just one action.
@@ -350,7 +350,26 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
     None = do not look at prompts (as before).
     plugins_fn(ask=…, own_pane=…, on_prompt=…) is the plugin screen for p (curses: CursesScreen.plugins); when None, the --plain plugin menu.
     profiles_fn(ask=…) is the profile screen for o (curses: CursesScreen.profiles); when None, the --plain profile menu.
-    After it the config is re-read, so the list and n / P see renamed, disabled or added profiles."""
+    After it (even when it raises) the config is re-read, so the list and n / P see renamed, disabled or added profiles.
+    The config is also re-read before each action when config.toml changed on disk (another terminal ran sampan profile
+    …); set_cfg_fn(cfg) hands every re-read config on (curses: to CursesScreen.cfg)."""
+
+    def _stamp():
+        try:
+            st = cfg.path.stat()
+        except OSError:
+            return None
+        return st.st_mtime_ns, st.st_size
+
+    seen = _stamp()
+
+    def _reload():
+        nonlocal cfg, seen
+        from .plugin_actions import reload_config  # lazy: plugin_actions imports this module
+        seen = _stamp()  # taken first: a write during the read is seen next time
+        cfg = reload_config(cfg, out)
+        if set_cfg_fn is not None:
+            set_cfg_fn(cfg)
 
     def _attach_row(names, rows, kw):
         name = names[0]
@@ -407,14 +426,14 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
         return plain_plugins(cfg, run, out, ask, own_pane=own_pane, on_prompt=kw.get("on_prompt")), None
 
     def _profiles(names, rows, kw):
-        nonlocal cfg
-        from .plugin_actions import reload_config  # lazy: plugin_actions imports this module
-        if profiles_fn is not None:
-            rc = profiles_fn(ask=ask)
-        else:
-            from .profile_actions import plain_profiles
-            rc = plain_profiles(cfg, run, out, ask, rows_fn=rows_fn)
-        cfg = reload_config(cfg, out)
+        try:
+            if profiles_fn is not None:
+                rc = profiles_fn(ask=ask)
+            else:
+                from .profile_actions import plain_profiles
+                rc = plain_profiles(cfg, run, out, ask, rows_fn=rows_fn)
+        finally:
+            _reload()
         return rc, None
 
     # one handler per action: (names, rows, kw) -> (rc, session to attach to, or None);
@@ -450,6 +469,8 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
     if hint:
         out(hint)  # --plain: mention once at the start (cache only)
     while True:
+        if _stamp() != seen:
+            _reload()
         try:
             rows = rows_fn(cfg, run)
         except RegistryError as e:

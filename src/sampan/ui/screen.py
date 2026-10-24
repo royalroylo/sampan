@@ -674,11 +674,12 @@ def curses_ui(cfg, run, out, *, current_session=None, own_pane=None, exec_fn=os.
                                               updater=updater, interactive=lambda args, env: run_outside(scr, args, env))
         opts = dict(picker_fn=screen.pick, restore_picker_fn=screen.restore_checklist, prompt_fn=screen.prompt_choice,
                     adopt_picker_fn=screen.adopt_checklist, plugins_fn=screen.plugins, profiles_fn=screen.profiles,
+                    set_cfg_fn=lambda c: setattr(screen, "cfg", c),
                     exec_fn=lambda f, args: pending.append((f, args)),
                     attach_fn=lambda args: run_outside(scr, args), loop=True,
                     choose_dir_fn=lambda start, *, allow_missing: screen.choose_dir(
                         start, home=str(cfg.home), allow_missing=allow_missing,
-                        title="選搬過去的目錄" if allow_missing else "選工作目錄", **dir_context(cfg)))
+                        title="選搬過去的目錄" if allow_missing else "選工作目錄", **dir_context(screen.cfg)))
         opts.update(kw)
         return cmd_ui(cfg, run, screen.out, screen.ask, current_session=current_session, own_pane=own_pane,
                       updater=updater, **opts)

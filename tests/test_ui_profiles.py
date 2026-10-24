@@ -273,5 +273,73 @@ class PlainTest(Base):
         self.assertIn("　o 帳號", HELP)
 
 
+class ConfigReloadTest(Base):
+    """cmd_ui picks up config.toml edited elsewhere before the next action (I3)."""
+
+    def picker(self, *actions):
+        it = iter(actions)
+        return lambda rows, current: next(it)
+
+    def test_config_edited_on_disk_is_seen_by_the_next_action(self):
+        seen, pushed = [], []
+
+        def save(cfg, run, out):
+            seen.append(cfg)
+            if len(seen) == 1:  # edited elsewhere (another terminal) while the list is shown
+                cfg.path.write_text(cfg.path.read_text().replace("[profiles.work]", "[profiles.job]"))
+            return 0
+        rc = cmd_ui(self.cfg, FakeRunner(), [].append, loop=True, rows_fn=lambda c, r: [], save_fn=save,
+                    picker_fn=self.picker(("save", []), ("save", []), ("quit", [])), set_cfg_fn=pushed.append)
+        self.assertEqual(rc, 0)
+        self.assertIn("work", seen[0].profiles)
+        self.assertIn("job", seen[1].profiles)
+        self.assertNotIn("work", seen[1].profiles)
+        self.assertEqual([list(c.profiles) for c in pushed], [["alice", "job"]])
+
+    def test_unchanged_config_is_not_reread(self):
+        seen = []
+        cmd_ui(self.cfg, FakeRunner(), [].append, loop=True, rows_fn=lambda c, r: [],
+               save_fn=lambda cfg, run, out: seen.append(cfg) or 0,
+               picker_fn=self.picker(("save", []), ("save", []), ("quit", [])))
+        self.assertIs(seen[0], self.cfg)
+        self.assertIs(seen[1], self.cfg)
+
+    def test_config_reloaded_even_when_profile_screen_raises(self):
+        import os
+        seen = []
+        st = self.cfg.path.stat()
+
+        def profiles(**kw):
+            # same size and mtime: only the reload after the profile screen can notice the change
+            self.cfg.path.write_text(self.cfg.path.read_text().replace("[profiles.work]", "[profiles.wolk]"))
+            os.utime(self.cfg.path, ns=(st.st_atime_ns, st.st_mtime_ns))
+            raise RuntimeError("boom")
+        msgs = []
+        cmd_ui(self.cfg, FakeRunner(), msgs.append, loop=True, rows_fn=lambda c, r: [], profiles_fn=profiles,
+               save_fn=lambda cfg, run, out: seen.append(cfg) or 0,
+               picker_fn=self.picker(("profiles", []), ("save", []), ("quit", [])))
+        self.assertIn("❌ profiles 失敗：boom", msgs)
+        self.assertIn("wolk", seen[0].profiles)
+
+    def test_curses_screen_gets_the_reloaded_config(self):
+        from sampan.ui import curses_ui
+        from tests.test_ui_screen import FakeScr
+        box = {}
+
+        def wrapper(fn):
+            box["scr"] = FakeScr(["w", "w", "q"])
+            return fn(box["scr"])
+
+        def save(cfg, run, out):
+            cfg.path.write_text(cfg.path.read_text().replace("[profiles.work]", "[profiles.job]"))
+            return 0
+        with mock.patch("sampan.ui.screen.CursesScreen.pick", autospec=True,
+                        side_effect=lambda self_, rows, cur: box.setdefault("cfgs", []).append(self_.cfg)
+                        or (("save", []) if len(box["cfgs"]) < 3 else ("quit", []))):
+            curses_ui(self.cfg, runner(), lambda _l: None, wrapper=wrapper, rows_fn=lambda c, r: [], save_fn=save)
+        self.assertIn("work", box["cfgs"][0].profiles)
+        self.assertIn("job", box["cfgs"][1].profiles)
+
+
 if __name__ == "__main__":
     unittest.main()
