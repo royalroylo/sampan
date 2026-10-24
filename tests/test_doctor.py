@@ -223,6 +223,18 @@ class DoctorTest(unittest.TestCase):
         make_db(home, [])
         self.assertFalse(any("Codex" in t for t in self.titles("warn")))
 
+    def test_codex_state_advice_names_profile_disable(self):
+        c = next(c for c in self.checks() if c.title.startswith("讀不到 Codex"))
+        self.assertEqual(c.detail, "沒有用 Codex 的話：sampan profile disable codex")
+
+    def test_disabled_profile_dir_is_known_and_reported(self):
+        (self.cfg.home / ".claude-profiles" / "old").mkdir(parents=True)
+        self.cfg = make_env(self.cfg.path.parent, TOML + '\n[profiles.old]\nconfig_dir = "~/.claude-profiles/old"\n'
+                            'disabled = true\n')
+        checks = self.checks()
+        self.assertFalse([c.title for c in checks if "不在設定裡" in c.title])
+        self.assertIn(("info", "old 已停用"), [(c.level, c.title) for c in checks])
+
     def test_codex_disabled_skips_codex_check(self):
         from dataclasses import replace
         self.cfg = replace(self.cfg, codex=replace(self.cfg.codex, enabled=False))

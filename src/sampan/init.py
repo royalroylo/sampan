@@ -227,13 +227,14 @@ def _propose_additions(existing, text, detected, ask, out, home):
     """Ask about each new profile/plugin; return the new text (== text when nothing accepted), or None."""
     expected = copy.deepcopy(tomllib.loads(text))
     chosen = dict(existing.marketplaces)
-    by_dir = {_key(p.config_dir): p for p in existing.profiles.values()}
-    taken = set(existing.profiles)
+    # disabled profiles count too: their directory is not new, and their name is taken
+    by_dir = {_key(p.config_dir): p for p in existing.all_profiles.values() if p.agent == "claude"}
+    taken = set(existing.all_profiles)
     plugin_adds, new_mk, new_profiles = {}, {}, []
     for d in detected:
         p = by_dir.get(_key(d.config_dir))
         if p is not None:
-            for pid in d.plugins:
+            for pid in (() if p.disabled else d.plugins):
                 if pid in p.plugins:
                     continue
                 repo, why = _source(pid, d.marketplaces, chosen)
@@ -454,7 +455,7 @@ def _login_command(run, base):
 
 def _add_codex_profile(cfg, out, name, target, disp, *, create, base, interactive, which):
     """The Codex half of profile add: optional login, then the section through profile_ops.edit_config."""
-    from .config_edit import append_section
+    from .config_edit import append_section, remove_table
     from .profile_ops import edit_config
     later = f"之後再登入：CODEX_HOME={shlex.quote(str(target))} codex login"
     if create:
@@ -468,7 +469,11 @@ def _add_codex_profile(cfg, out, name, target, disp, *, create, base, interactiv
                 out("⚠ 登入沒有完成")
                 out(later)
     section = f"[profiles.{_k(name)}]\nagent = \"codex\"\nconfig_dir = {_s(disp)}\nlabel = \"\"\n"
-    new_cfg = edit_config(cfg, out, lambda text: append_section(text, section))
+    def add(text):
+        # a leftover [codex] (e.g. `enabled = false` after the last Codex profile was forgotten) is ignored once a
+        # Codex profile exists: drop it so it doesn't linger
+        return append_section(remove_table(text, "codex") or text, section)
+    new_cfg = edit_config(cfg, out, add)
     if new_cfg is None:
         return 1
     out(f"✔ 已把 Codex profile {name}（{disp}）寫進 {cfg.path}")

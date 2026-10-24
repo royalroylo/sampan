@@ -430,6 +430,25 @@ class InitRerunTests(Base):
         self.assertEqual(cfg.marketplaces["claude-plugins-official"], "anthropics/claude-plugins-official")
         self.assertIn("x@claude-plugins-official", self.text())
 
+    def test_rerun_ignores_disabled_profile_dir_and_plugins(self):
+        self.cfg_path.write_text(EXISTING.replace('label = "公司"', 'label = "公司"\ndisabled = true'))
+        shutil.rmtree(self.extra)
+        prompts = []
+        self.assertEqual(self.init(self.runner(), asker({}, prompts)), 0)
+        self.assertFalse(any("work" in p for p in prompts))  # neither re-added as a new profile nor offered its plugins
+        cfg = load_config(self.cfg_path, home=self.home)
+        self.assertTrue(cfg.all_profiles["work"].disabled)
+        self.assertEqual(cfg.all_profiles["work"].plugins, ())
+
+    def test_rerun_new_dir_named_like_disabled_profile_gets_another_name(self):
+        self.cfg_path.write_text(EXISTING + '\n[profiles.extra]\nconfig_dir = "~/elsewhere"\ndisabled = true\n')
+        prompts = []
+        self.assertEqual(self.init(self.runner(), asker({}, prompts)), 0)
+        self.assertTrue(any("[extra-2]" in p for p in prompts))
+        cfg = load_config(self.cfg_path, home=self.home)
+        self.assertEqual(cfg.profiles["extra-2"].config_dir, self.extra)
+        self.assertTrue(cfg.all_profiles["extra"].disabled)
+
     def test_rerun_adds_plugin_from_git_marketplace(self):
         # Another machine: the first init skipped the Gitea-sourced plugin; after the fix, re-running init must add it to the existing profile
         git = "https://git.example.com/owner/my-plugins.git"
@@ -606,6 +625,7 @@ class ProfileAddCodexTests(Base):
         self.assertEqual(cfg.codex.profile, "cx")
         self.assertIn("# 自己寫的註解", text)
         self.assertIn("只用第一個使用中的 Codex profile（cx）", self.text())
+        self.assertNotIn("[codex]", text)  # the stale `enabled = false` does not linger
 
     def test_add_codex_name_clash_with_disabled_profile(self):
         before = self.cfg_path.read_bytes()

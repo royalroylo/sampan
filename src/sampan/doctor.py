@@ -43,8 +43,10 @@ def _profile_dirs(cfg):
         if not Path(p.config_dir).is_dir():
             out.append(Check("warn", f"{p.name}：設定裡的目錄 {p.config_dir} 不存在，已略過",
                              "目錄被刪掉或搬走了；復原它，或從 config.toml 移除這個 profile（sampan 不會自己建立）"))
+    claude = [p for p in cfg.all_profiles.values() if p.agent == "claude"]
+    out += [Check("info", f"{p.name} 已停用") for p in claude if p.disabled]
     root = cfg.home / ".claude-profiles"
-    known = {Path(p.config_dir) for p in cfg.profiles.values()}
+    known = {Path(p.config_dir) for p in claude}  # a disabled profile's directory is not a new one
     for d in sorted(root.iterdir()) if root.is_dir() else []:
         if d.is_dir() and d not in known and ".retired." not in d.name:
             out.append(Check("info", f"{d} 有 profile 目錄但不在設定裡",
@@ -248,7 +250,7 @@ def _codex(cfg):
     db = _state_db(cfg.codex.home)
     if db is None:
         return [Check("warn", f"讀不到 Codex 的 state_*.sqlite（{cfg.codex.home}）",
-                      "沒有用 Codex 的話，把 config.toml 的 [codex] enabled 設成 false")]
+                      f"沒有用 Codex 的話：sampan profile disable {cfg.codex.profile}")]
     try:
         con = sqlite3.connect(f"file:{quote(str(db))}?mode=ro", uri=True)
         try:
