@@ -18,12 +18,13 @@ waiting for a key, and the list is re-read every 5 seconds (cursor and checkmark
 are the message area (the result of the last action, live progress of long actions, the input line for questions such as y/N and names) and the key help.
 
 Keys: up/down move, space checks, Enter attaches (a stopped session is reattached first), s stops (confirmed in place), m moves to another directory,
-e renames, R reattaches, A adopts claude/codex running outside tmux, r retire, a activate, n new session, w save now, U update sampan, q / Esc quit.
+e renames, R reattaches, A adopts claude/codex running outside tmux, r retire, a activate, n new session, w save now, U update sampan,
+p opens the plugin screen, X removes a stopped or retired session from the registry, q / Esc quit.
 
 When a newer version exists (update.Checker checks in the background, cached for 6 hours, and re-checks in the idle time while waiting for a key) one more
 line appears above the key help saying a new version is available and to press U; U updates after an in-place confirmation, the output is shown live in the
 message area; on success curses is closed and sampan is exec'd with the same arguments, on failure it stays on the list.
-When no newer version is known, U re-checks right away (skipping the cache) and, if still nothing newer, offers to reinstall the current version.
+When no newer version is known, U re-checks right away (skipping the cache) and, if still nothing newer, only says so (reinstalling is `sampan update --force`).
 
 The working directory of n and the new directory of m use the directory chooser (dirpick.DirPicker + render_dirpick): subdirectories on the left, recently
 used ones (from the registry) and the sessions already in the directory under the cursor on the right; up/down move, right / Enter enter, left / Backspace

@@ -60,7 +60,9 @@ sampan init
 | `s` | 收起來（agent 正常結束，對話保留） |
 | `R` | 一次接回好幾個 |
 | `m` | 換工作目錄 |
-| `U` | 更新 sampan（已知有新版就直接更新；還不知道時當下重新查，已是最新時可選擇重新安裝） |
+| `p` | 開 plugin 管理畫面（各 profile 的 plugin 與 marketplace 來源） |
+| `X` | 把已停止或 retired 的 session 從登記表移除（對話不刪） |
+| `U` | 更新 sampan（已知有新版就直接更新；還不知道時當下重新查，已是最新時只告知；要重裝用 `sampan update --force`） |
 | `q` | 離開 |
 
 - 每天開工：`sampan`，Enter 進到要做的那個。

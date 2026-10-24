@@ -21,11 +21,11 @@ What does not happen: nothing in detection, the registry or the leaf modules imp
      `clock.py` stores times in UTC and formats them in local time.
 3. **Actions** (change things, always on explicit command)
    - `save.py`, `restore.py`, `session_run.py` (new / stop / move / rename), `adopt.py`, `launch.py`, `prompts.py`
-     (answering startup prompts through a `Relay`), `plugins.py`, `hook.py`, `launchd.py`, `init.py`, `update.py`.
+     (answering startup prompts through a `Relay`), `plugins.py` (read-only status and `sync` for scripts), `plugin_view.py` / `marketplace_view.py` (what the plugin screen shows: rows, cards, save previews; pure), `plugin_apply.py` (runs the `claude plugin` commands of a save, backs up and edits the config, the restart offer), `config_edit.py` (byte-preserving edits of `config.toml`), `hook.py`, `launchd.py`, `init.py`, `update.py`.
 4. **Interfaces**
    - `cli.py` (argparse and dispatch, exit codes), `ui/` (curses screen), `doctor.py` (diagnostics).
    - `ui/` is split into `text`, `state`, `cards`, `render` (pure), `screen` (the thin curses adapter),
-     `actions` (the main loop and question flows) and `dirpick`.
+     `actions` (the main loop and question flows), `dirpick`, and `plugin_state` / `plugin_actions` (the plugin screen's state machines and its `--plain` flow).
 
 All external programs (`tmux`, `ps`, `lsof`, `claude`, `launchctl`, `git`, `uv`) go through one injected `run(args)`
 callable (`runner.py`). That is what makes the suite fast and safe: tests pass a `FakeRunner`.
@@ -42,7 +42,7 @@ callable (`runner.py`). That is what makes the suite fast and safe: tests pass a
 - Every write is atomic, and the previous registry is copied to `history/` first. Everything written under the
   state dir is private (files `600`, directories `700`, whatever the umask; best-effort where chmod is refused), and the
   launchd job runs with `Umask` `077` so its logs there are private too.
-- No telemetry; the only network use is the version-tag check and what the user confirms (`U`, `sampan update`).
+- No telemetry; the only network use is the version-tag check and what the user asks for: `U` / `sampan update`, and in the plugin screen `r`, `u`, `U` and a confirmed save (opening the screen reads only local files).
 
 ## Data files
 

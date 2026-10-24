@@ -31,8 +31,10 @@
 | 換帳號繼續（例如額度用完） | `P`（只有 Claude） | 列出 profile 讓你選，確認後 claude 結束、用新的 profile 在同一個目錄接回同一段對話；新帳號第一次進這個目錄時自動信任（規則同 `m`）。已停止的 session 直接用新 profile 接回。新 profile 沒裝原本有的 plugin 時會先列出來，但照樣可以換。卡在額度選單、等不到 claude 結束時，sampan 不亂按鍵，會請你自己按 Esc 再打 `/exit`，之後再按 `P` 一次 |
 | 換工作目錄 | `m` | 用選目錄畫面挑新目錄（從它現在的目錄開始；那個目錄已經不在時，從 `[ui] start_dir` 開始，和 `n` 一樣），確認後 agent 結束、在新目錄接回同一段對話 |
 | 這件事做完了 | `r` | 標成 retired，之後不會出現在接回清單 |
+| 從登記表移除一個不用的 session | `X`（只有已停止或 retired 的列） | 在畫面底部問確定（之後不會再列出，也不會被 `R` 接回）；移除後印出手動接回的指令。對話紀錄不會刪，舊的登記表留在 `history/` |
+| 管理 plugin 與 marketplace 來源 | `p` | 進到 plugin 管理畫面，見下面「plugin 管理畫面」 |
 | 立刻存一次登記表 | `w` | 平常每個整點會自動存 |
-| 更新 sampan | `U`（有新版時按鍵說明上面會出現「有新版 v…（目前 …），按 U 更新」） | 在畫面底部問確定，跑 `uv tool upgrade sampan`（版本沒變再 `uv tool install --reinstall git+https://github.com/royalroylo/sampan@v<最新版>`），輸出顯示在訊息區；成功後自動重新開啟 sampan 回到清單，失敗就留在清單。不知道有新版時，`U` 會先當下重新查一次（不看快取）；仍是最新版（或查不到）就問要不要重新安裝目前版本 |
+| 更新 sampan | `U`（有新版時按鍵說明上面會出現「有新版 v…（目前 …），按 U 更新」） | 在畫面底部問確定，跑 `uv tool upgrade sampan`（版本沒變再 `uv tool install --reinstall git+https://github.com/royalroylo/sampan@v<最新版>`），輸出顯示在訊息區；成功後自動重新開啟 sampan 回到清單，失敗就留在清單。不知道有新版時，`U` 會先當下重新查一次（不看快取）；仍是最新版（或查不到）只會告知，不會問；要重新安裝請用 `sampan update --force` |
 
 **選目錄畫面**（`n`、`m`）：左邊是目前目錄底下的資料夾，右邊是「最近用過」的目錄（登記表裡用的 session 多的在前），游標那個目錄裡已經有 session 時會列出來；終端機不到 100 欄時只顯示左邊。
 
@@ -51,6 +53,44 @@
 選到家目錄 `~` 本身時會再問一次（建議用專案目錄）。`sampan ui --plain` 仍是直接打路徑。
 
 **新版提示**：`sampan` 開啟時在背景查 GitHub 上最新的版本 tag（結果快取 6 小時，畫面開著時過期會再查；沒網路就不提示），有新版才顯示提示、按 `U` 更新。`--plain` 只看快取、在開頭印一行；每小時的自動存檔不檢查。
+
+## plugin 管理畫面
+
+在清單按 `p` 進來（`--plain` 也有，用輸入編號）。這裡管的是各 profile 的 plugin 與 marketplace 來源；改的內容會一起寫回 `config.toml`，所以設定檔與實際安裝不會分家。**打開畫面不會連網**；只有按 `r`、`u`、`U`，或確認儲存時才會執行 `claude` 指令（連到 GitHub 等來源）。
+
+**兩層**：第一層是 plugin 清單（名稱、狀態：最新／有新版／未裝／不一致），右邊（窄螢幕在下面）是資訊卡，列出來源、各 profile 目前的版本與狀態。游標那個 profile 不能改時，資訊卡會寫原因（例如「目錄不存在」、「來源不同：…」）。按 Enter 進到第二層：每個 profile 一個勾選框，空白勾選或取消，勾完按 `s` 儲存，`Esc` 返回（有改動時會問「放棄變更？(y/N)」）。
+
+| 鍵 | 作用 |
+|---|---|
+| ↑↓、`1`–`9`、`/` | 移動、跳到那一列、依名稱搜尋 |
+| Enter | 進到第二層，選要裝在哪些 profile |
+| `r` | 檢查新版：查各來源最新的版本（會連網），之後狀態會標「有新版」 |
+| `u` | 更新游標那個 plugin，不另外問 |
+| `U` | 全部 plugin、全部 profile 都更新；因為會動到每個 profile，先問「全部 plugin、全部 profile 都更新？(y/N)」 |
+| `a` | 新增 plugin：從已下載的 marketplace 目錄挑，或按 `i` 自己輸入 `plugin@marketplace` |
+| Tab | 在「plugin」與「來源」兩個分頁間切換（`--plain` 用 `t`） |
+| `q` | 返回清單 |
+
+**儲存**：在第二層按 `s` 會先列出「將會：」要做的每一件事，每一行都寫明 profile（例如 `+ 安裝到 work（…）`、`− 從 work 移除`），再問「確定？(y/N)」，按 `y` 才執行。安裝與移除用 `--scope user`，只動 user scope。
+
+- **設定檔備份**：只有設定檔真的被改寫時，才先備份成 `config.toml.bak-<時間>`（同一次儲存最多一份）；全部失敗就沒有備份。設定檔其他部分（註解、排版）一個位元組都不動。儲存時會重新讀磁碟上的設定檔，所以你在畫面開著時手動改的內容不會被蓋掉。
+- **部分失敗**：某個 profile 的指令失敗，其他 profile 照常完成；設定檔只改指令成功的那幾個 profile，失敗的會列出來（「… 沒有改（設定檔也沒動那幾個 profile）」）。
+- **重開才生效**：安裝或移除成功後，畫面會說哪些 profile 有幾個 session 要重開（「要生效需重開 …：按 R 立刻重開，其他鍵稍後」）。按 `R` 才會重開（stop 後 restore）；不按就不會動。sampan 自己所在的 pane、忙碌中的 session 絕不重開，會列在「這些還在跑舊版，閒下來後再重開：…」，稍後用 `sampan stop --profile <p>` 加 `sampan restore`。只更新設定檔清單、沒有真的安裝或移除時，不需要重開。
+
+**來源分頁**（Tab）：列出 marketplace 來源，每個來源有一個狀態：
+
+| 狀態 | 意思 |
+|---|---|
+| 一致 | 設定檔與各 profile 裝的來源相同 |
+| 來源不同 | 同名 marketplace 在某個 profile 指向別的來源；那個 profile 的框不能勾，資訊卡寫出對方的來源 |
+| 清單外 | profile 裡有，但設定檔 `[marketplaces]` 沒有；只能移除 |
+| 沒用到 | 設定檔有，但沒有 plugin 用它 |
+
+在這個分頁按 `a` 新增來源（問 `owner/repo` 或 git 網址），第二層勾選要加到哪些 profile，儲存時一併寫進 `[marketplaces]`。`u` 更新游標那個來源，`U` 全部來源（先問）。從某個 profile 移除來源時，如果那個 profile 的設定檔清單還列著用它的 plugin，會被拒絕（資訊卡寫「清單還有 N 個 plugin 用它（先在 plugin 頁移掉）」），要先到 plugin 頁移掉那些 plugin，否則一次儲存會悄悄把它們解除安裝。
+
+**為什麼網址裡不能放 token**：sampan 會把來源寫進設定檔，也會原樣傳給 `claude`（指令列與日誌都看得到）。帶帳號或 token 的網址會被拒絕（「網址裡不要放帳號或 token，認證交給 git 的 credential helper」）。私有的 repo 請先設好 git 的 credential helper，來源寫乾淨的網址即可。
+
+腳本或排程不要用這個畫面，繼續用 `sampan plugins sync`（見「指令一覽」）。
 
 ## 常見情境
 
@@ -86,9 +126,10 @@
 | 改 session 名稱 | `sampan rename <名稱> <新名稱>`（或 ui 按 e）：tmux session 與登記表一起改，agent 照常執行、不送任何按鍵。名稱不能含 `.` 或 `:` |
 | session 換 profile（換帳號）繼續同一段對話 | `sampan switch <名稱> <profile> [--dry-run]`（或 ui 按 P）：執行中的照 `sampan move` 的流程在原目錄、用新 profile 接回；已停止的改登記表後直接接回。逐字稿在新 profile 讀不到時（各 profile 的 `projects/` 沒共用）會**搬**過去而不是複製，永遠只有一份；新 profile 已經有同一段對話的逐字稿時不動，請你先決定留哪份。Codex 沒有 profile，不適用 |
 | session 換到別的工作目錄 | `sampan move <名稱> <目錄>`（或 ui 按 m）：結束 agent、在新目錄接回同一段對話、自動信任新目錄（只在提示顯示的路徑就是新目錄時）、更新登記表。目錄不存在會建立；忙碌中、worktree、自己的 pane 不動 |
-| 某個 session 以後不用重開 | `sampan retire <名稱>`（恢復：`sampan activate <名稱>`） |
-| 看各 profile 的 plugin 版本 | `sampan plugins status` |
-| plugin 有新版／拿掉 plugin | 改 `config.toml` 後 `sampan plugins sync`；`sampan plugins sync --prune --dry-run` 先看要移除什麼 |
+| 某個 session 以後不用重開 | `sampan retire <名稱>`（恢復：`sampan activate <名稱>`）；對 retired 的 session 打 `sampan restore <名稱>` 會說「<名稱> 是 retired；先 sampan activate <名稱>」 |
+| 把沒在跑的 session 從登記表移除 | `sampan forget <名稱> [--dry-run]`（或 ui 按 X）：只限已停止或 retired 的（還在 tmux 裡的先 `sampan stop`）；ui 裡會先問確定。移除後印出手動接回的指令；對話紀錄永遠不刪，移除前的登記表留在 `history/` |
+| 看各 profile 的 plugin 版本 | `sampan plugins status`（互動管理在 ui 按 `p`） |
+| plugin 有新版／拿掉 plugin | 改 `config.toml` 後 `sampan plugins sync`（給腳本用，仍然可用）；`sampan plugins sync --prune --dry-run` 先看要移除什麼 |
 | 新增 Claude 帳號 | `sampan profile add <名稱>`（建立 `~/.claude-profiles/<名稱>` 並登入）；`--dir <既有目錄>` 用現成目錄（不建、不登入） |
 
 多數會動到 session 的指令都有 `--dry-run`。plugin 換版後，要把該 profile 的 Claude session 整個重開才會生效（stop 後再 restore）。

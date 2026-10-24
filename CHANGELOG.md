@@ -5,6 +5,29 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Plugin management screen: `p` in the ui. Two layers (a plugin list with an info card, then per-profile checkboxes), `r`
+  checks for newer versions, `u` / `U` update, `a` adds a plugin, `/` and digits search and jump. Saving shows a preview
+  of every change per profile and asks first; the config is backed up as `config.toml.bak-<stamp>` only when it is
+  really rewritten, a failure in one profile leaves the other profiles' changes in place and changes the config only for
+  profiles that succeeded, and a restart hint offers `R` (busy sessions and sampan's own pane are never restarted).
+  Opening the screen never touches the network. `sampan plugins sync` remains for scripts.
+- Marketplace sources tab (Tab; `t` in `--plain`) with the states 一致 / 來源不同 / 清單外 / 沒用到: add a source (`a`;
+  URLs carrying a user name or token are refused, use git's credential helper), remove it from profiles (refused
+  while that profile's config still lists plugins from it), and update one or all (`u` / `U`). Rows that cannot be
+  changed show their reason in the card.
+- `sampan forget <name> [--dry-run]` and `X` in the ui: remove a stopped or retired session from the registry after
+  confirming. It prints the command to resume it by hand; conversation files are never deleted and the previous registry
+  is kept in `history/`.
+
+### Changed
+- `U` in the ui no longer offers to reinstall when nothing newer is found; it only says so. Reinstalling is
+  `sampan update --force`.
+- `sampan restore <name>` on a retired session now says `<name> 是 retired；先 sampan activate <name>`.
+- Long messages in the ui now wrap instead of being cut off.
+- ARCHITECTURE: the network invariant also lists what is pressed in the plugin screen (`r`, `u`, `U`, save); new modules
+  are listed under Layers.
+
 ## [0.6.5] - 2026-10-24
 
 ### Added

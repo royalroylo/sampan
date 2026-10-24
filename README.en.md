@@ -61,7 +61,9 @@ Type `sampan`. The session list is on the left, an info card for the row under t
 | `s` | Put it away (the agent exits normally, the conversation is kept) |
 | `R` | Resume several at once |
 | `m` | Change working directory |
-| `U` | Update sampan (updates when a newer version is already known; otherwise checks right then, and when already up to date it offers a reinstall) |
+| `p` | Open plugin management (each profile's plugins and marketplace sources) |
+| `X` | Remove a stopped or retired session from the registry (the conversation is not deleted) |
+| `U` | Update sampan (updates when a newer version is already known; otherwise checks right then, and when already up to date it only says so; to reinstall use `sampan update --force`) |
 | `q` | Quit |
 
 - Starting the day: `sampan`, then Enter on the one you want.

@@ -34,11 +34,13 @@ list. Press `q` to quit.
 | Resume several at once | `R` | Checklist (pre-checked: active in the last 7 days); after resuming, takes you into the first one |
 | Bring Claude agents running outside tmux (in any terminal program) into tmux | `A` | Pick which, name each; you type `/exit` in the original terminal, sampan waits, then resumes the same conversation in tmux and takes you in |
 | Rename | `e` | tmux and registry together; the agent keeps running |
+| Remove an unused session from the registry | `X` (stopped or retired rows only) | Confirms at the bottom of the screen (it will no longer be listed or resumed by `R`); afterwards prints the command to resume it by hand. The conversation files are never deleted; the previous registry stays in `history/` |
+| Manage plugins and marketplace sources | `p` | Opens the plugin management screen, see "The plugin management screen" below |
 | Continue on another account (e.g. its quota ran out) | `P` (Claude only) | Lists the profiles; after you confirm, claude exits and the same conversation resumes under the new profile in the same directory, trusting that directory automatically the first time (same rule as `m`). A stopped session is reattached under the new profile directly. Plugins the new profile does not list are named first, but do not block the switch. If claude does not exit (e.g. it sits at a quota menu), sampan presses nothing else and asks you to press Esc and type `/exit` yourself, then press `P` again |
 | Change working directory | `m` | Directory chooser (starting at its current directory; if that directory is gone, at `[ui] start_dir`, as for `n`); after you confirm, the agent exits and resumes the same conversation in the new directory |
 | Mark as done | `r` | Retired; not offered for resuming |
 | Save the registry now | `w` | Normally saved on the hour |
-| Update sampan | `U` (a line "new version v… (current …), press U to update" appears above the key help when a newer one exists) | Confirms at the bottom of the screen, runs `uv tool upgrade sampan` (if the version does not change, `uv tool install --reinstall git+https://github.com/royalroylo/sampan@v<latest>`), shows the output in the message area; on success sampan reopens itself at the list, on failure it stays in the list. When no newer version is known, `U` first checks again right then (skipping the cache); if it is still up to date (or the check fails) it offers to reinstall the current version |
+| Update sampan | `U` (a line "new version v… (current …), press U to update" appears above the key help when a newer one exists) | Confirms at the bottom of the screen, runs `uv tool upgrade sampan` (if the version does not change, `uv tool install --reinstall git+https://github.com/royalroylo/sampan@v<latest>`), shows the output in the message area; on success sampan reopens itself at the list, on failure it stays in the list. When no newer version is known, `U` first checks again right then (skipping the cache); if it is still up to date (or the check fails) it only says so and asks nothing; to reinstall use `sampan update --force` |
 
 **Directory chooser** (`n`, `m`): folders under the current directory on the left, recently used directories on the right
 (directories with more sessions in the registry first), and the sessions already in the directory under the cursor are
@@ -62,6 +64,44 @@ numbered, typed menu for scripts and narrow terminals, where you type the path d
 **Update hint**: when it opens, sampan checks the repository's newest version tag in the background (cached 6 hours,
 checked again when it has expired while the screen is open; offline just means no hint) and shows a hint with `U` to
 update only when a newer version exists. `--plain` only reads the cache and prints one line at the start; the hourly save never checks.
+
+## The plugin management screen
+
+Press `p` in the list (`--plain` has it too, by typing numbers). It manages each profile's plugins and marketplace sources, and writes what you change back to `config.toml`, so the config and what is installed do not drift apart. **Opening the screen never touches the network**; `claude` commands (which reach GitHub and other sources) run only when you press `r`, `u`, `U`, or confirm a save.
+
+**Two layers**: layer 1 is the plugin list (name, state: 最新 up to date / 有新版 newer available / 未裝 not installed / 不一致 mismatched), with an info card on the right (below on a narrow terminal) showing the source and each profile's version and state. When a profile cannot be changed, the card says why (for example "目錄不存在", "來源不同：…"). Enter opens layer 2: one checkbox per profile; space toggles, `s` saves, `Esc` goes back (with unsaved changes it asks "放棄變更？(y/N)").
+
+| Key | Action |
+|---|---|
+| ↑↓, `1`-`9`, `/` | Move, jump to that row, search by name |
+| Enter | Open layer 2 to choose which profiles get it |
+| `r` | Check for newer versions: looks up the newest version at each source (uses the network); plugins with one are then marked 有新版 |
+| `u` | Update the plugin under the cursor, without asking |
+| `U` | Update every plugin in every profile; because it touches every profile it first asks "全部 plugin、全部 profile 都更新？(y/N)" |
+| `a` | Add a plugin: pick from the downloaded marketplace catalogs, or press `i` to type `plugin@marketplace` yourself |
+| Tab | Switch between the "plugin" and "來源" (sources) tabs (`t` in `--plain`) |
+| `q` | Back to the list |
+
+**Saving**: `s` in layer 2 first lists everything it will do under "將會：", one line per change, each naming the profile (for example `+ 安裝到 work（…）`, `− 從 work 移除`), then asks "確定？(y/N)"; nothing runs until you press `y`. Install, uninstall and update use `--scope user`, so only user scope is touched.
+
+- **Config backup**: only when the config file is really rewritten, it is first backed up as `config.toml.bak-<stamp>` (at most one per save); if every profile fails there is no backup. The rest of the file (comments, layout) stays byte for byte the same. The file is re-read from disk at save time, so edits you made by hand while the screen was open survive.
+- **Partial failure**: if one profile's command fails the others still finish; the config changes only for the profiles whose commands succeeded, and the failed ones are listed ("… 沒有改（設定檔也沒動那幾個 profile）").
+- **A restart is needed to take effect**: after a successful install or removal the screen says which profiles have how many sessions to restart ("要生效需重開 …：按 R 立刻重開，其他鍵稍後"). Only pressing `R` restarts them (stop, then restore); otherwise nothing is touched. The pane sampan itself runs in and busy sessions are never restarted; they are listed under "這些還在跑舊版，閒下來後再重開：…" for you to do later with `sampan stop --profile <p>` and `sampan restore`. When only the config list changed and nothing was really installed or removed, no restart is needed.
+
+**The 來源 (sources) tab** (Tab) lists marketplace sources, each with a state:
+
+| State | Meaning |
+|---|---|
+| 一致 | The config and every profile have the same source |
+| 來源不同 | The same marketplace name points at a different source in some profile; that profile's box cannot be ticked and the card shows the other source |
+| 清單外 | A profile has it but `[marketplaces]` in the config does not; it can only be removed |
+| 沒用到 | The config has it but no plugin uses it |
+
+Press `a` on this tab to add a source (it asks for `owner/repo` or a git URL); in layer 2 tick the profiles to add it to, and saving also writes it to `[marketplaces]`. `u` updates the source under the cursor, `U` all sources (after asking). Removing a source from a profile is refused while that profile's config list still has plugins from it (the card says "清單還有 N 個 plugin 用它（先在 plugin 頁移掉）"): remove those plugins on the plugin tab first, otherwise one save would silently uninstall them.
+
+**Why a URL must not carry a token**: sampan writes the source into the config file and passes it as is to `claude` (it shows up in command lines and logs). A URL with a user name or token is refused ("網址裡不要放帳號或 token，認證交給 git 的 credential helper"). For a private repository, set up git's credential helper and give a clean URL.
+
+For scripts and schedules do not use this screen; keep using `sampan plugins sync` (see "Commands").
 
 ## Common situations
 
@@ -110,9 +150,10 @@ Every action also has a command, for scripts or when you prefer typing commands 
 | Rename a session | `sampan rename <name> <new name>` (or `e` in the ui): the tmux session and registry change together, the agent keeps running and no key is sent. No `.` or `:` in the name |
 | Continue a session under another profile (account) | `sampan switch <name> <profile> [--dry-run]` (or `P` in the ui): a running session goes through the `sampan move` flow in its own directory under the new profile; a stopped one has its registry row changed and is reattached. When the new profile cannot see the transcript (profiles with separate `projects/`), it is **moved** there, not copied, so there is only ever one copy; if the new profile already has a transcript of that conversation nothing is touched and you decide which to keep. Not for Codex (no profiles) |
 | Move a session to another directory | `sampan move <name> <dir>` (or `m` in the ui): ends the agent, resumes the same conversation in the new directory, trusts the new directory automatically (only when the path shown in the prompt is exactly the new directory) and updates the registry. A missing directory is created; busy sessions, worktrees and the pane you are in are left alone |
-| Never resume this one again | `sampan retire <name>` (undo: `sampan activate <name>`) |
-| Plugin versions per profile | `sampan plugins status` |
-| New plugin version / remove a plugin | edit `config.toml`, then `sampan plugins sync`; `sampan plugins sync --prune --dry-run` previews what would be removed |
+| Never resume this one again | `sampan retire <name>` (undo: `sampan activate <name>`); `sampan restore <name>` on a retired session says "<name> 是 retired；先 sampan activate <name>" |
+| Remove a session that is not running from the registry | `sampan forget <name> [--dry-run]` (or `X` in the ui): only for a stopped or retired session (run `sampan stop` first if it is still in tmux); the ui asks first. Afterwards it prints the command to resume it by hand; the conversation files are never deleted and the previous registry stays in `history/` |
+| Plugin versions per profile | `sampan plugins status` (manage them interactively with `p` in the ui) |
+| New plugin version / remove a plugin | edit `config.toml`, then `sampan plugins sync` (kept for scripts); `sampan plugins sync --prune --dry-run` previews what would be removed |
 | Add a Claude account | `sampan profile add <name>` (creates `~/.claude-profiles/<name>` and logs in); `--dir <existing dir>` uses an existing directory (no creation, no login) |
 
 After a plugin changes version, restart that profile's Claude sessions completely for it to take effect (stop, then restore).
