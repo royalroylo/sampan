@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-24
+
 ### Added
 - Plugin management screen: `p` in the ui. Two layers (a plugin list with an info card, then per-profile checkboxes), `r`
   checks for newer versions, `u` / `U` update, `a` adds a plugin, `/` and digits search and jump. Saving shows a preview
@@ -21,6 +23,7 @@ All notable changes to this project are documented here. The format follows
   is kept in `history/`.
 
 ### Changed
+- Documentation: release pins move to v0.7.0.
 - `U` in the ui no longer offers to reinstall when nothing newer is found; it only says so. Reinstalling is
   `sampan update --force`.
 - `sampan restore <name>` on a retired session now says `<name> 是 retired；先 sampan activate <name>`.
@@ -232,7 +235,8 @@ First public release. Versions up to 0.5.3 were released privately under the nam
 ### Security
 - Credentials in git URLs are no longer shown in output.
 
-[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.6.5...HEAD
+[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/royalroylo/sampan/releases/tag/v0.7.0
 [0.6.5]: https://github.com/royalroylo/sampan/releases/tag/v0.6.5
 [0.6.4]: https://github.com/royalroylo/sampan/releases/tag/v0.6.4
 [0.6.3]: https://github.com/royalroylo/sampan/releases/tag/v0.6.3
