@@ -250,3 +250,21 @@ def _restore_cells(c, box):
 def _adopt_cells(c, box):
     mark = "x" if c.key in box.marked else (" " if not c.skip else "-")
     return (f"[{mark}] {c.where}", c.agent, c.ago)
+
+
+PLUGIN_STYLE = {"最新": "ok", "有新版": "warn", "不一致": "err", "未裝": "muted"}
+PLUGIN_COLS = (5, 6)  # plugin list: installed/total, state
+TOGGLE_COLS = (12, 22)  # profile toggles: installed version, note
+
+
+def plugin_cells(row, num, total):
+    """One plugin list row: number (right-aligned to the width of total) and name, installed/total, coloured state."""
+    return (f"{num:>{len(str(total))}} {row.name}", f"{len(row.installed)}/{row.total}",
+            (row.state, PLUGIN_STYLE[row.state]))
+
+
+def toggle_cells(t, c):
+    """One profile row of layer 2 (t is a ProfileToggles, c a ProfileChoice): box and profile, installed version, note."""
+    note = t.note(c)
+    return (f"{t.mark(c)} {c.profile}", (c.installed or "—")[:12],
+            (note or "", "attn" if note and note.startswith("←") else "muted"))

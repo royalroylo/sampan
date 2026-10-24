@@ -3,30 +3,43 @@ import os
 import time
 from datetime import datetime, timezone
 
+from ..plugin_apply import check_latest
+from ..plugin_view import NO_SOURCE, _mkt, build_rows, profile_choices, snapshot
+from ..plugin_view import card_lines as plugin_card
 from ..prompts import SKIP, prompt_choices
 from ..status import status_rows
 from ..tmux import TMUX
 from .actions import cmd_ui, dir_context
-from .cards import _quote_of, adopt_card, card_lines, gather_cards, preview_header, restore_card
+from .cards import Wrap, _quote_of, adopt_card, card_lines, gather_cards, preview_header, restore_card
 from .dirpick import DirPicker
+from .plugin_actions import add_flow, reload_config, restart_offer, save_flow, update_flow
+from .plugin_state import CatalogPicker, PluginPicker, ProfileToggles
 from .render import (
     LIST_COLS,
+    PLUGIN_COLS,
+    TOGGLE_COLS,
     _adopt_cells,
     _list_cells,
     _restore_cells,
     list_cols,
     list_empty,
+    plugin_cells,
     prompt_frame,
     render,
     render_dirpick,
     screen_title,
+    toggle_cells,
 )
 from .state import Checklist, Picker, _row_key
 from .text import BACKSPACE, ENTER, MOVES, clean_capture, text_width
 
-KEYS_HELP = "↑↓ 移動　1-9 跳列　/ 搜尋　空白 勾選　Enter 接上　s 停掉　R 接回　A 接手　n 開新　w 存檔　q 離開"
+KEYS_HELP = "↑↓ 移動　1-9 跳列　/ 搜尋　空白 勾選　Enter 接上　s 停掉　R 接回　A 接手　n 開新　w 存檔　p plugin　q 離開"
 RESTORE_HELP = "↑↓ 移動　空白 勾選　Enter 確認接回　q 取消"
 ADOPT_HELP = "↑↓ 移動　空白 勾選　Enter 確認接手　q 取消"
+PLUGINS_HELP = "↑↓ 移動　1-9 跳列　/ 搜尋　Enter 選 profile　u 更新這個　U 全部更新　a 新增　r 檢查新版　q 返回"
+TOGGLE_HELP = "↑↓ 移動　空白 勾選／取消　s 儲存　Esc 返回"
+CATALOG_HELP = "↑↓ 移動　/ 搜尋　Enter 選這個　i 自己輸入　q 返回"
+PLUGINS_TITLE = "sampan · plugin 管理"
 PROMPT_HELP = "↑↓ 選擇　Enter 送出　Esc 先不管"
 TICK_MS = 1000  # while the list waits for a key, re-capture the preview this often
 REFRESH_S = 5  # while the list waits for a key, re-read the session list (state, info cards) this often
@@ -330,6 +343,137 @@ class CursesScreen:
         return self.checklist(cands, title="sampan adopt：勾選要接手的（tmux 外的 claude／codex）", help=ADOPT_HELP,
                               cells=_adopt_cells, ident=lambda c: c.key, card=adopt_card, cols=(6, 10))
 
+    def _getkey(self, prompt):
+        """Show prompt in the message area and return the next key (timeouts are ignored)."""
+        try:
+            while True:
+                self.prompt = prompt
+                self.draw()
+                k = self.key()
+                if k is not None:
+                    return k
+        finally:
+            self.prompt = None
+
+    def plugins(self, *, ask, own_pane=None, on_prompt=None):
+        """The plugin screen (p): layer 1 lists the plugins, Enter opens layer 2 (per-profile toggles). q returns 0.
+        Waits for keys without timeouts; the config is re-read after every action (a save rewrites it)."""
+        own_pane = own_pane if own_pane is not None else self.own_pane
+        cfg = reload_config(self.cfg, self.out)
+        latest, checked_at = None, None
+        rows = build_rows(cfg, snapshot(cfg), latest)
+        picker = PluginPicker(rows, clock=self.clock)
+        saved = self.view
+        self._timeout(-1)
+
+        def offer(changed):
+            if changed:
+                restart_offer(cfg, self.run, self.out, ask, changed, self._getkey, own_pane=own_pane,
+                              on_prompt=on_prompt, rows_fn=self.rows_fn)
+        try:
+            while True:
+                title = PLUGINS_TITLE + (f"　上次檢查 {checked_at}" if checked_at else "")
+                cells = {r.name: plugin_cells(r, i, len(rows)) for i, r in enumerate(rows, 1)}
+                here = picker.visible[picker.cursor] if picker.visible else None
+                empty = "目前沒有任何 plugin（a 新增）" if not picker.query else f"沒有名稱含「{picker.query}」的 plugin"
+                self.view = dict(title=title, left=[cells[r.name] for r in picker.visible], cursor=picker.cursor,
+                                 card=plugin_card(cfg, here) if here else [], preview=None, help=PLUGINS_HELP,
+                                 cols=PLUGIN_COLS, empty=empty, notice=None,
+                                 name_w=max((text_width(c[0]) for c in cells.values()), default=None))
+                self.prompt = picker.prompt
+                self.draw()
+                k = self.key()
+                if k is None:
+                    continue
+                action = picker.key(k)
+                if action is None:
+                    continue
+                kind, names = action
+                self.prompt = None
+                if kind == "back":
+                    return 0
+                self.messages = []  # a new action: the message area holds only this action's result
+                goto = None
+                if kind == "open":
+                    r = next(x for x in rows if x.name == names[0])
+                    offer(self._plugin_toggles(cfg, ask, r.pid, r.source, latest))
+                elif kind == "update":
+                    r = next(x for x in rows if x.name == names[0])
+                    offer(update_flow(cfg, self.run, self.out, ask, [r.pid]))
+                elif kind == "update_all":
+                    offer(update_flow(cfg, self.run, self.out, ask, None))
+                elif kind == "check":
+                    latest = check_latest(cfg, self.run, self.out, snapshot(cfg))
+                    checked_at = self.now_fn().astimezone().strftime("%H:%M")
+                elif kind == "add":
+                    picked = add_flow(cfg, self.out, ask, snapshot(cfg), self._choose_catalog)
+                    if picked:
+                        pid, new_source = picked
+                        offer(self._plugin_toggles(cfg, ask, pid, new_source or cfg.marketplaces.get(_mkt(pid)),
+                                                   latest, new_source=new_source))
+                        goto = pid
+                cfg = reload_config(cfg, self.out)
+                rows = build_rows(cfg, snapshot(cfg), latest)
+                picker.reload(rows)  # the cursor stays on the same plugin
+                target = next((r.name for r in rows if r.pid == goto), None)
+                if target is not None and picker.query is None:
+                    picker._goto(target)
+        finally:
+            self.prompt = None
+            self.view = saved
+
+    def _plugin_toggles(self, cfg, ask, pid, source, latest, *, new_source=None):
+        """Layer 2: one box per profile; s previews and saves. Returns the profiles that changed (empty when nothing was saved)."""
+        choices = profile_choices(cfg, snapshot(cfg), pid, source)
+        t = ProfileToggles(choices)  # boxes start at the install state
+        newest = next((lt.version for p in cfg.profiles if (lt := (latest or {}).get((p, pid))) and lt.version), None)
+        card = [f"來源 {source or NO_SOURCE}", f"最新 {newest or '未檢查'}"]
+        while True:
+            self.view = dict(title=f"{PLUGINS_TITLE} › {pid}", left=[toggle_cells(t, c) for c in choices],
+                             cursor=t.cursor, card=card, preview=None, help=TOGGLE_HELP, cols=TOGGLE_COLS,
+                             empty="（沒有任何 profile）", notice=None, name_w=None)
+            self.prompt = t.prompt
+            self.draw()
+            k = self.key()
+            if k is None:
+                continue
+            action = t.key(k)
+            self.prompt = t.prompt
+            if action is None:
+                continue
+            self.prompt = None
+            if action[0] == "back":
+                return []
+            return save_flow(cfg, self.run, self.out, ask, pid, choices, t.checked, new_source=new_source)
+
+    def _choose_catalog(self, entries):
+        """choose_fn for add_flow: the catalog picker. Returns the plugin id, "" (type it in) or None (cancelled)."""
+        picker = CatalogPicker(entries, clock=self.clock)
+        while True:
+            here = picker.visible[picker.cursor].entry if picker.visible else None
+            card = [here.pid, "─" * 30, f"來源 {here.source or NO_SOURCE}"] + (
+                ["", Wrap(here.description)] if here.description else []) if here else []
+            empty = (f"沒有名稱含「{picker.query}」的 plugin" if picker.query
+                     else "沒有已下載的 marketplace 目錄（i 自己輸入）")
+            self.view = dict(title=f"{PLUGINS_TITLE} › 新增", left=[(r.entry.pid,) for r in picker.visible],
+                             cursor=picker.cursor, card=card, preview=None, help=CATALOG_HELP, cols=(), empty=empty,
+                             notice=None, name_w=None)
+            self.prompt = picker.prompt
+            self.draw()
+            k = self.key()
+            if k is None:
+                continue
+            action = picker.key(k)
+            if action is None:
+                continue
+            self.prompt = None
+            kind, names = action
+            if kind == "back":
+                return None
+            if kind == "type":
+                return ""
+            return names[0]
+
 
 def _curses_prepare():
     import locale
@@ -373,7 +517,7 @@ def curses_ui(cfg, run, out, *, current_session=None, own_pane=None, exec_fn=os.
         screen = box["screen"] = CursesScreen(scr, cfg, run, rows_fn=kw.get("rows_fn", status_rows), own_pane=own_pane,
                                               updater=updater)
         opts = dict(picker_fn=screen.pick, restore_picker_fn=screen.restore_checklist, prompt_fn=screen.prompt_choice,
-                    adopt_picker_fn=screen.adopt_checklist, exec_fn=lambda f, args: pending.append((f, args)),
+                    adopt_picker_fn=screen.adopt_checklist, plugins_fn=screen.plugins, exec_fn=lambda f, args: pending.append((f, args)),
                     attach_fn=lambda args: run_outside(scr, args), loop=True,
                     choose_dir_fn=lambda start, *, allow_missing: screen.choose_dir(
                         start, home=str(cfg.home), allow_missing=allow_missing,

@@ -155,6 +155,8 @@ class Picker:
             return ("save", [])
         if k == "U":
             return ("update", [])
+        if k == "p":
+            return ("plugins", [])
         if k == "/":
             self.query = ""
             return None

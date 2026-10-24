@@ -12,7 +12,7 @@ from sampan.plugin_view import CatalogEntry, Change, ProfileChoice, profile_choi
 from sampan.ui import cmd_ui
 from sampan.ui import plugin_actions as pa
 from sampan.ui.plugin_state import CatalogPicker, PluginPicker, ProfileToggles
-from tests.fakes import FakeRunner
+from tests.fakes import FakeRunner, cp
 from tests.helpers import make_env, status_row
 from tests.test_plugin_apply import installer
 
@@ -351,6 +351,137 @@ class PlainMenuTest(unittest.TestCase):
     def test_help_mentions_p(self):
         from sampan.ui.actions import HELP
         self.assertIn("　p plugin 管理", HELP)
+
+
+class CursesPluginScreenTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.cfg = make_env(self.tmp)
+        write_state(self.cfg.profiles["alice"], [TOOLS], [("my-plugins", "owner/my-plugins")])
+        write_state(self.cfg.profiles["work"], [], [("my-plugins", "owner/my-plugins")])
+
+    def screen(self, keys, run=None, w=120, rows=()):
+        from sampan.ui.screen import CursesScreen
+        from tests.test_ui_screen import FakeScr
+        self.scr = FakeScr(keys, w=w)
+        self.run = run or FakeRunner(strict=True)
+        return CursesScreen(self.scr, self.cfg, self.run, rows_fn=lambda c, r: list(rows))
+
+    def frames(self):
+        return ["\n".join(f) for f in self.scr.screens]
+
+    def test_p_opens_plugins_and_q_returns(self):
+        from sampan.ui import curses_ui
+        from tests.test_ui_screen import FakeScr
+        write_state(self.cfg.profiles["work"], [TOOLS], [("my-plugins", "owner/my-plugins")])
+        box = {}
+
+        def wrapper(fn):
+            box["scr"] = FakeScr(["p", "q", "q"])
+            return fn(box["scr"])
+        run = FakeRunner(strict=True).on(["tmux", "-u", "list-panes"], cp()).on(["tmux", "-u", "list-windows"], cp())
+        rc = curses_ui(self.cfg, run, lambda _l: None, wrapper=wrapper, rows_fn=lambda c, r: [])
+        self.assertEqual(rc, 0)
+        screens = ["\n".join(f) for f in box["scr"].screens]
+        shown = [f for f in screens if "plugin 管理" in f]
+        self.assertTrue(shown)
+        self.assertIn("2/2", shown[0])
+        self.assertIn("↑↓ 移動　1-9 跳列　/ 搜尋　Enter 選 profile　u 更新這個", shown[0])
+        self.assertNotIn("plugin 管理", screens[-1].split("\n")[0])
+        self.assertTrue(screens[-1].startswith("═══ sampan"))
+        self.assertIn("p plugin　q 離開", screens[-1])
+
+    def test_layer2_toggle_save_confirm_applies(self):
+        run = FakeRunner(strict=True)
+        run.on(INSTALL_TOOLS, installer(run, self.cfg, version="1.0.0"))
+        s = self.screen(["2", "\n", "KEY_DOWN", " ", "s", "y", "\n", "x", "q"], run,
+                        rows=[status_row("a", profile="work")])
+        self.assertEqual(s.plugins(ask=s.ask), 0)
+        self.assertEqual([c["args"] for c in run.calls], [INSTALL_TOOLS])
+        self.assertEqual(tomllib.loads(self.cfg.path.read_text())["profiles"]["work"]["plugins"], [TOOLS])
+        text = "\n".join(self.frames())
+        self.assertIn("sampan · plugin 管理 › tools@my-plugins", text)
+        self.assertIn("來源 owner/my-plugins", text)
+        self.assertIn("最新 未檢查", text)
+        self.assertIn("[x]! work", text)
+        self.assertIn("← 儲存時會安裝", text)
+        self.assertIn("+ 安裝到 work（work@example.com）", text)
+        self.assertIn("要生效需重開 work 的 session（1 個）：按 R 立刻重開，其他鍵稍後", text)
+        self.assertIn("稍後要生效：sampan stop --profile work 後 sampan restore", self.frames()[-1])
+        self.assertIn(" 2/2 ", self.frames()[-1])
+        self.assertIn("-1", [str(t) for t in self.scr.timeouts])
+
+    def test_layer2_esc_with_changes_asks_discard(self):
+        original = self.cfg.path.read_text()
+        s = self.screen(["\n", "KEY_DOWN", " ", "\x1b", "n", "\x1b", "y", "q"])
+        self.assertEqual(s.plugins(ask=s.ask), 0)
+        frames = self.frames()
+        self.assertTrue(any("放棄變更？(y/N)" in f for f in frames))
+        self.assertIn("sampan · plugin 管理", frames[-1])
+        self.assertNotIn("›", frames[-1].split("\n")[0])
+        self.assertEqual(self.run.calls, [])
+        self.assertEqual(self.cfg.path.read_text(), original)
+
+    def test_render_cells_exact(self):
+        from sampan.plugin_view import build_rows
+        from sampan.ui.render import plugin_cells, toggle_cells
+        rows_ = build_rows(self.cfg, snapshot(self.cfg))
+        tools = next(r for r in rows_ if r.pid == TOOLS)
+        sp = next(r for r in rows_ if r.short == "superpowers")
+        self.assertEqual(plugin_cells(tools, 2, 12), (" 2 tools", "1/2", ("不一致", "err")))
+        self.assertEqual(plugin_cells(sp, 1, 2), ("1 superpowers", "0/2", ("未裝", "muted")))
+        t = ProfileToggles([C("alice", "1.0.0-abcdefghijkl", True), C("work", None, True), C("x", None, False, "目錄不存在")])
+        a, w, x = t.choices
+        self.assertEqual(toggle_cells(t, a), ("[x] alice", "1.0.0-abcdef", ("", "muted")))
+        self.assertEqual(toggle_cells(t, w), ("[ ]! work", "—", ("清單有但沒裝", "muted")))
+        self.assertEqual(toggle_cells(t, x), ("[-] x", "—", ("目錄不存在", "muted")))
+        t.key("KEY_DOWN")
+        t.key(" ")
+        self.assertEqual(toggle_cells(t, w), ("[x]! work", "—", ("← 儲存時會安裝", "attn")))
+
+    def test_narrow_terminal_renders(self):
+        from tests.test_ui_screen import text_width
+        s = self.screen(["/", "t", "\x1b", "\n", " ", "\x1b", "y", "q"], w=60)
+        self.assertEqual(s.plugins(ask=s.ask), 0)
+        self.assertTrue(self.scr.screens)
+        for f in self.scr.screens:
+            for line in f:
+                self.assertLessEqual(text_width(line), 60, line)
+
+    def test_check_add_and_catalog_screen(self):
+        clone = Path(self.cfg.profiles["alice"].config_dir) / "plugins" / "marketplaces" / "my-plugins" / ".claude-plugin"
+        clone.mkdir(parents=True)
+        (clone / "marketplace.json").write_text(json.dumps(
+            {"plugins": [{"name": "tools", "version": "2.0.0"}, {"name": "extra", "description": "Extra things"}]}))
+        run = FakeRunner(strict=True)
+        update = ["claude", "plugin", "marketplace", "update", "my-plugins"]
+        run.on(update, lambda a: cp())
+        # r checks, ↓ shows tools' card; a opens the catalog (sorted: extra, tools) and Enter picks extra
+        s = self.screen(["r", "KEY_DOWN", "a", "\n", "\x1b", "q"], run)
+        self.assertEqual(s.plugins(ask=s.ask), 0)
+        frames = self.frames()
+        text = "\n".join(frames)
+        self.assertRegex(text, r"sampan · plugin 管理　上次檢查 \d\d:\d\d")
+        self.assertIn("1.0.0 → 2.0.0", text)
+        self.assertIn("↑↓ 移動　/ 搜尋　Enter 選這個　i 自己輸入　q 返回", text)
+        self.assertIn("extra@my-plugins", text)
+        self.assertIn("sampan · plugin 管理 › extra@my-plugins", text)
+        self.assertIn("[ ] alice", text)  # a new plugin: boxes start at the install state
+        self.assertEqual([c["args"] for c in run.calls], [update])
+
+    def test_add_type_it_and_update_this(self):
+        run = FakeRunner(strict=True)
+        mkt = ["claude", "plugin", "marketplace", "update", "my-plugins"]
+        update = ["claude", "plugin", "update", TOOLS, "--scope", "user"]
+        run.on(mkt, lambda a: cp()).on(update, lambda a: cp())
+        keys = ["a", "i", *"extra@my-plugins", "\n", "\x1b", "KEY_DOWN", "u", "q"]
+        s = self.screen(keys, run)
+        self.assertEqual(s.plugins(ask=s.ask), 0)
+        text = "\n".join(self.frames())
+        self.assertIn("plugin@marketplace: extra@my-plugins", text)
+        self.assertIn("sampan · plugin 管理 › extra@my-plugins", text)
+        self.assertEqual([c["args"] for c in run.calls], [mkt, update])
+        self.assertIn("沒有變動", text)
 
 
 if __name__ == "__main__":
