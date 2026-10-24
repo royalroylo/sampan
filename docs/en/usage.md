@@ -101,6 +101,8 @@ Press `a` on this tab to add a source (it asks for `owner/repo` or a git URL); i
 
 **Why a URL must not carry a token**: sampan writes the source into the config file and passes it as is to `claude` (it shows up in command lines and logs). A URL with a user name or token is refused ("網址裡不要放帳號或 token，認證交給 git 的 credential helper"). For a private repository, set up git's credential helper and give a clean URL.
 
+**Action log**: the message area keeps only the last action's result. Earlier messages are in `~/.local/state/sampan/actions.log` (readable only by you), each line starting with the time and the action, such as `[plugin 存檔 …]`, `[重開]`, `[來源 …]`, `[forget …]` or `[switch …]`. Saves, `u` / `U`, `r`, adding, removing and updating sources, every step of an `R` restart (including the "still on the old version" list), `X` / `sampan forget` and `P` / `sampan switch` are logged; user names and tokens in URLs are replaced by `***` first. Past 1 MB the old file is renamed `actions.log.1`.
+
 For scripts and schedules do not use this screen; keep using `sampan plugins sync` (see "Commands").
 
 ## Common situations

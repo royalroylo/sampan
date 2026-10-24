@@ -415,6 +415,21 @@ class CursesPluginScreenTest(unittest.TestCase):
         self.assertIn(" 2/2 ", self.frames()[-1])
         self.assertIn("-1", [str(t) for t in self.scr.timeouts])
 
+    def test_restart_question_is_asked_on_the_redrawn_layer1_once(self):
+        run = FakeRunner(strict=True)
+        run.on(INSTALL_TOOLS, installer(run, self.cfg, version="1.0.0"))
+        s = self.screen(["2", "\n", "KEY_DOWN", " ", "s", "y", "\n", "x", "q"], run,
+                        rows=[status_row("a", profile="work")])
+        self.assertEqual(s.plugins(ask=s.ask), 0)
+        hint = "要生效需重開 work 的 session（1 個）：按 R 立刻重開，其他鍵稍後"
+        asking = [f for f in self.frames() if hint in f]
+        self.assertTrue(asking)
+        for f in asking:
+            self.assertNotIn("›", f.split("\n")[0])  # layer 1, not the layer-2 frame of before the save
+            self.assertIn(" 2/2 ", f)  # rows already show the saved state
+            self.assertEqual(f.count(hint), 1)
+            self.assertIn("✔ work：已安裝 tools 1.0.0", f)  # the save's result stays visible above the question
+
     def test_layer2_esc_with_changes_asks_discard(self):
         original = self.cfg.path.read_text()
         s = self.screen(["\n", "KEY_DOWN", " ", "\x1b", "n", "\x1b", "y", "q"])

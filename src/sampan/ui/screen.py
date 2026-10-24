@@ -388,24 +388,28 @@ class CursesScreen:
             if changed:
                 restart_offer(cfg, self.run, self.out, ask, changed, self._getkey, own_pane=own_pane,
                               on_prompt=on_prompt, rows_fn=self.rows_fn)
+
+        def show(picker):
+            """Draw layer 1 of the current tab (the list, its card and help) with picker's prompt."""
+            title = tab_title(PLUGINS_TITLE, tab) + (f"　上次檢查 {checked_at}" if checked_at else "")
+            here = picker.visible[picker.cursor] if picker.visible else None
+            if tab == "plugin":
+                cells = {r.name: plugin_cells(r, i, len(rows)) for i, r in enumerate(rows, 1)}
+                empty = "目前沒有任何 plugin（a 新增）" if not picker.query else f"沒有名稱含「{picker.query}」的 plugin"
+                card, help_, cols = plugin_card(cfg, here) if here else [], PLUGINS_HELP, PLUGIN_COLS
+            else:
+                cells = {r.name: market_cells(r, i, len(mrows)) for i, r in enumerate(mrows, 1)}
+                empty = "目前沒有任何來源（a 新增來源）" if not picker.query else f"沒有名稱含「{picker.query}」的來源"
+                card, help_, cols = market_card(cfg, snap, here) if here else [], MARKETS_HELP, MARKET_COLS
+            self.view = dict(title=title, left=[cells[r.name] for r in picker.visible], cursor=picker.cursor,
+                             card=card, preview=None, help=help_, cols=cols, empty=empty, notice=None,
+                             name_w=max((text_width(c[0]) for c in cells.values()), default=None))
+            self.prompt = picker.prompt
+            self.draw()
         try:
             while True:
                 picker = pickers[tab]
-                title = tab_title(PLUGINS_TITLE, tab) + (f"　上次檢查 {checked_at}" if checked_at else "")
-                here = picker.visible[picker.cursor] if picker.visible else None
-                if tab == "plugin":
-                    cells = {r.name: plugin_cells(r, i, len(rows)) for i, r in enumerate(rows, 1)}
-                    empty = "目前沒有任何 plugin（a 新增）" if not picker.query else f"沒有名稱含「{picker.query}」的 plugin"
-                    card, help_, cols = plugin_card(cfg, here) if here else [], PLUGINS_HELP, PLUGIN_COLS
-                else:
-                    cells = {r.name: market_cells(r, i, len(mrows)) for i, r in enumerate(mrows, 1)}
-                    empty = "目前沒有任何來源（a 新增來源）" if not picker.query else f"沒有名稱含「{picker.query}」的來源"
-                    card, help_, cols = market_card(cfg, snap, here) if here else [], MARKETS_HELP, MARKET_COLS
-                self.view = dict(title=title, left=[cells[r.name] for r in picker.visible], cursor=picker.cursor,
-                                 card=card, preview=None, help=help_, cols=cols, empty=empty, notice=None,
-                                 name_w=max((text_width(c[0]) for c in cells.values()), default=None))
-                self.prompt = picker.prompt
-                self.draw()
+                show(picker)
                 k = self.key()
                 if k is None:
                     continue
@@ -420,18 +424,18 @@ class CursesScreen:
                     tab = "market" if tab == "plugin" else "plugin"
                     continue
                 self.messages = []  # a new action: the message area holds only this action's result
-                goto = None
+                goto, changed = None, []
                 if tab == "market":
-                    goto = self._market_action(cfg, ask, kind, names, mrows, offer)
+                    goto, changed = self._market_action(cfg, ask, kind, names, mrows)
                 elif kind == "open":
                     r = next(x for x in rows if x.name == names[0])
-                    offer(self._plugin_toggles(cfg, ask, r.pid, r.source, latest,
-                                               new_source=enter_source(cfg, r.pid, r.source)))
+                    changed = self._plugin_toggles(cfg, ask, r.pid, r.source, latest,
+                                                   new_source=enter_source(cfg, r.pid, r.source))
                 elif kind == "update":
                     r = next(x for x in rows if x.name == names[0])
-                    offer(update_flow(cfg, self.run, self.out, ask, [r.pid]))
+                    changed = update_flow(cfg, self.run, self.out, ask, [r.pid])
                 elif kind == "update_all":
-                    offer(update_flow(cfg, self.run, self.out, ask, None))
+                    changed = update_flow(cfg, self.run, self.out, ask, None)
                 elif kind == "check":
                     latest = check_latest(cfg, self.run, self.out, snapshot(cfg))
                     checked_at = self.now_fn().astimezone().strftime("%H:%M")
@@ -439,8 +443,8 @@ class CursesScreen:
                     picked = add_flow(cfg, self.out, ask, snapshot(cfg), self._choose_catalog)
                     if picked:
                         pid, new_source = picked
-                        offer(self._plugin_toggles(cfg, ask, pid, new_source or cfg.marketplaces.get(_mkt(pid)),
-                                                   latest, new_source=new_source))
+                        changed = self._plugin_toggles(cfg, ask, pid, new_source or cfg.marketplaces.get(_mkt(pid)),
+                                                       latest, new_source=new_source)
                         goto = pid
                 cfg = reload_config(cfg, self.out)
                 snap = snapshot(cfg)
@@ -455,15 +459,20 @@ class CursesScreen:
                     target = None
                 if target is not None and picker.query is None:
                     picker._goto(target)
+                if changed:  # ask on the list as it is now, not on the frame of before the save
+                    show(picker)
+                    self.prompt = None
+                    offer(changed)
         finally:
             self.prompt = None
             self.view = saved
 
-    def _market_action(self, cfg, ask, kind, names, mrows, offer):
-        """One action of the 來源 tab. Returns the source just added (to move the cursor to it), else None."""
+    def _market_action(self, cfg, ask, kind, names, mrows):
+        """One action of the 來源 tab. Returns (the source just added, to move the cursor to it, or None;
+        the profiles that need a restart)."""
         if kind == "open":
             r = next(x for x in mrows if x.name == names[0])
-            offer(self._market_toggles(cfg, ask, r.name, r.source))
+            return None, self._market_toggles(cfg, ask, r.name, r.source)
         elif kind == "update":
             market_update_flow(cfg, self.run, self.out, ask, [names[0]])
         elif kind == "update_all":
@@ -471,9 +480,8 @@ class CursesScreen:
         elif kind == "add":
             src = market_add_flow(self.out, ask)
             if src:
-                offer(self._market_toggles(cfg, ask, None, src))
-                return src
-        return None  # "check" (r) belongs to the plugin tab
+                return src, self._market_toggles(cfg, ask, None, src)
+        return None, []  # "check" (r) belongs to the plugin tab
 
     def _market_toggles(self, cfg, ask, name, source):
         """Layer 2 of one marketplace (name None: a new source, nothing checked; source None: outside the config).

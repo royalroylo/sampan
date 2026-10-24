@@ -5,6 +5,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `actions.log` in the state directory: every message printed by plugin saves, `u` / `U`, `r`, marketplace changes,
+  restarts (each step, and the sessions left on the old version), `forget` and `switch`, one line each with the time
+  and the action. User names and tokens in URLs are redacted; the file is 0600 and rotates to `actions.log.1` at 1 MB.
+
+### Fixed
+- The restart question after a plugin save was shown twice.
+- After a save the restart question was asked over the layer-2 screen of before the save; it is now asked on the
+  redrawn plugin list.
+
 ## [0.7.0] - 2026-10-24
 
 ### Added

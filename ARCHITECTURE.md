@@ -21,7 +21,7 @@ What does not happen: nothing in detection, the registry or the leaf modules imp
      `clock.py` stores times in UTC and formats them in local time.
 3. **Actions** (change things, always on explicit command)
    - `save.py`, `restore.py`, `session_run.py` (new / stop / move / rename), `adopt.py`, `launch.py`, `prompts.py`
-     (answering startup prompts through a `Relay`), `plugins.py` (read-only status and `sync` for scripts), `plugin_view.py` / `marketplace_view.py` (what the plugin screen shows: rows, cards, save previews; pure), `plugin_apply.py` (runs the `claude plugin` commands of a save, backs up and edits the config, restarts the sessions of chosen profiles), `config_edit.py` (byte-preserving edits of `config.toml`), `hook.py`, `launchd.py`, `init.py`, `update.py`.
+     (answering startup prompts through a `Relay`), `plugins.py` (read-only status and `sync` for scripts), `plugin_view.py` / `marketplace_view.py` (what the plugin screen shows: rows, cards, save previews; pure), `plugin_apply.py` (runs the `claude plugin` commands of a save, backs up and edits the config, restarts the sessions of chosen profiles), `config_edit.py` (byte-preserving edits of `config.toml`), `actionlog.py` (appends action messages to `actions.log`), `hook.py`, `launchd.py`, `init.py`, `update.py`.
 4. **Interfaces**
    - `cli.py` (argparse and dispatch, exit codes), `ui/` (curses screen), `doctor.py` (diagnostics).
    - `ui/` is split into `text`, `state`, `cards`, `render` (pure), `screen` (the thin curses adapter),
@@ -55,6 +55,7 @@ callable (`runner.py`). That is what makes the suite fast and safe: tests pass a
 | `registry.json` | sessions: tmux name, agent, profile, conversation id, cwd, state, last seen (UTC) |
 | `history/registry-*.json` | previous registries (newest 20 by modification time) |
 | `save.log` | one line per `sampan save` run; `sampan doctor` reads it |
+| `actions.log` (`.1`) | every message of plugin, marketplace, restart, forget and switch actions, with time and action; tokens redacted (`actionlog.py`) |
 | `hooks/<pid>.json` | written by the optional SessionStart hook |
 | `update-check.json` | cached newest version tag (6 hours) |
 | `~/Library/LaunchAgents/io.github.royalroylo.sampan-save.plist` | macOS hourly save |

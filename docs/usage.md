@@ -90,6 +90,8 @@
 
 **為什麼網址裡不能放 token**：sampan 會把來源寫進設定檔，也會原樣傳給 `claude`（指令列與日誌都看得到）。帶帳號或 token 的網址會被拒絕（「網址裡不要放帳號或 token，認證交給 git 的 credential helper」）。私有的 repo 請先設好 git 的 credential helper，來源寫乾淨的網址即可。
 
+**操作紀錄**：畫面上的訊息區只留最後一次操作的結果。之前的訊息都記在 `~/.local/state/sampan/actions.log`（只有你讀得到），每行開頭是時間和操作名稱，例如 `[plugin 存檔 …]`、`[重開]`、`[來源 …]`、`[forget …]`、`[switch …]`。儲存、`u`／`U`、`r`、來源的新增移除與更新、`R` 重開的每一步（包括「還在跑舊版」的名單）、`X`／`sampan forget`、`P`／`sampan switch` 都會記；網址裡的帳號和 token 會先遮成 `***`。檔案超過 1 MB 時，舊的會改名成 `actions.log.1`。
+
 腳本或排程不要用這個畫面，繼續用 `sampan plugins sync`（見「指令一覽」）。
 
 ## 常見情境
