@@ -80,6 +80,8 @@ def market_choices(cfg, snap, name, source):
         disabled = None
         if p.name in snap.missing:
             disabled = "目錄不存在"
+        elif source is None and name not in st.marketplaces:  # outside the config: no source to add it with
+            disabled = "不在設定檔，只能移除"
         elif source is not None and name in st.marketplaces and not same_source(theirs, source):  # outside the config: any source
             disabled = f"來源不同：{theirs or NO_SOURCE}"
         elif name in st.marketplaces and n > 0:

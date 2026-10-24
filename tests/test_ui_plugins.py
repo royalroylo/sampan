@@ -588,9 +588,19 @@ class MarketTabTest(unittest.TestCase):
         self.assertIn("目錄有 0 個 plugin", text)
         self.assertIn("[-] alice", text)
         self.assertIn("清單還有 1 個 plugin", text)  # the note column (TOGGLE_COLS) cuts the rest
+        self.assertIn("alice：清單還有 1 個 plugin 用它（先在 plugin 頁移掉）", text)  # the card has the full reason
+        self.assertIn("work：清單還有 1 個 plugin 用它（先在 plugin 頁移掉）", text)
         self.assertEqual([c["args"] for c in run.calls], [upd, upd])  # u: once per profile that has it
         self.assertEqual(prompts, ["全部來源、全部 profile 都更新？(y/N): "])
         self.assertIn("已取消", text)
+
+    def test_plugin_layer2_card_lists_disabled_reasons(self):
+        write_state(self.cfg.profiles["work"], [], [("my-plugins", "other/fork")])
+        s = self.screen(["2", "\n", "\x1b", "q"])
+        self.assertEqual(s.plugins(ask=s.ask), 0)
+        text = "\n".join(self.frames())
+        self.assertIn("sampan · plugin 管理 › tools@my-plugins", text)
+        self.assertIn("work：來源不同：other/fork", text)
 
     def test_market_add_flow_refuses_token_url(self):
         prompts = []
@@ -641,13 +651,16 @@ class MarketTabTest(unittest.TestCase):
     def test_plain_market_remove_with_drops_offers_restart(self):
         write_state(self.cfg.profiles["work"], ["foo@other"], [("my-plugins", "owner/my-plugins"), ("other", "x/other")])
         run = market_runner(self.cfg)
-        it = iter(["t", "3", "2", "s", "y", "x", "q"])
+        it = iter(["t", "3", "1 2", "s", "y", "x", "q"])
         prompts = []
         ask = lambda p: prompts.append(p) or next(it)  # noqa: E731
         rows_ = [status_row("a", profile="work")]
         self.assertEqual(pa.plain_plugins(self.cfg, run, self.out.append, ask, rows_fn=lambda c, r: rows_), 0)
         self.assertIn("── other ──", self.out)
         self.assertIn("  [2] [ ] work  x/other  ← 儲存時會移除", self.out)
+        self.assertIn("  [1] [-] alice  —  不在設定檔，只能移除", self.out)
+        self.assertIn("  alice：不在設定檔，只能移除", self.out)  # disabled reasons listed under the rows
+        self.assertIn("alice 不能改：不在設定檔，只能移除", self.out)
         self.assertEqual([c["args"] for c in run.calls], [["claude", "plugin", "marketplace", "remove", "other"]])
         self.assertIn("要生效需重開 work 的 session（1 個）：按 R 立刻重開，其他鍵稍後（輸入 R）: ", prompts)
         self.assertEqual(prompts[-1], pa.MARKET_MENU)  # back on the 來源 tab

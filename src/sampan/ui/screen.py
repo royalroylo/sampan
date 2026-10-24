@@ -15,6 +15,7 @@ from .cards import Wrap, _quote_of, adopt_card, card_lines, gather_cards, previe
 from .dirpick import DirPicker
 from .plugin_actions import (
     add_flow,
+    disabled_lines,
     market_add_flow,
     market_save_flow,
     market_toggles,
@@ -483,6 +484,7 @@ class CursesScreen:
         else:
             n = sum(1 for e in catalog(cfg, snap) if _mkt(e.pid) == name)
             card = [f"來源 {source or '（不在設定檔）'}", f"目錄有 {n} 個 plugin"]
+        card += disabled_lines(choices)
         while True:
             self.view = dict(title=f"{PLUGINS_TITLE} › {name or source}", left=[toggle_cells(t, c) for c in choices],
                              cursor=t.cursor, card=card, preview=None, help=TOGGLE_HELP, cols=TOGGLE_COLS,
@@ -507,7 +509,7 @@ class CursesScreen:
         choices = profile_choices(cfg, snapshot(cfg), pid, source)
         t = ProfileToggles(choices)  # boxes start at the install state
         newest = next((lt.version for p in cfg.profiles if (lt := (latest or {}).get((p, pid))) and lt.version), None)
-        card = [f"來源 {source or NO_SOURCE}", f"最新 {newest or '未檢查'}"]
+        card = [f"來源 {source or NO_SOURCE}", f"最新 {newest or '未檢查'}"] + disabled_lines(choices)
         while True:
             self.view = dict(title=f"{PLUGINS_TITLE} › {pid}", left=[toggle_cells(t, c) for c in choices],
                              cursor=t.cursor, card=card, preview=None, help=TOGGLE_HELP, cols=TOGGLE_COLS,

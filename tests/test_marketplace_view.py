@@ -158,5 +158,18 @@ class MarketTest(unittest.TestCase):
                          [MarketChange("alice", False, ()), MarketChange("work", False, ())])
 
 
+    def test_market_choices_outside_config_unregistered_is_remove_only(self):
+        # a marketplace not in [marketplaces] has no source to add: profiles without it can't be ticked
+        write_known(self.cfg, "alice", {"stray": ("x/stray", None, None)})
+        write_known(self.cfg, "work", {})
+        snap = snapshot(self.cfg)
+        ch = market_choices(self.cfg, snap, "stray", None)
+        by = {c.profile: c for c in ch}
+        self.assertIsNone(by["alice"].disabled)
+        self.assertEqual(by["work"].disabled, "不在設定檔，只能移除")
+        self.assertEqual(plan_market(snap, ch, {"alice": False, "work": True}, "stray"),
+                         [MarketChange("alice", False, ())])
+
+
 if __name__ == "__main__":
     unittest.main()

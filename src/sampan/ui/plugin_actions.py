@@ -95,6 +95,11 @@ def add_flow(cfg, out, ask, snap, choose_fn):
     return pid, src
 
 
+def disabled_lines(choices):
+    """One "{profile}：{reason}" line per profile that can't be changed (layer 2 shows the full reason here)."""
+    return [f"{c.profile}：{c.disabled}" for c in choices if c.disabled]
+
+
 def market_toggles(choices):
     """Layer-2 boxes for a marketplace: checked = registered in that profile (nothing checked for a new source)."""
     return ProfileToggles(choices, notes=MARKET_NOTES, mismatch_fn=lambda c: None)
@@ -182,6 +187,8 @@ def _toggles(out, ask, header, t, save):
         out(f"── {header} ──")
         for j, c in enumerate(choices, 1):
             out(f"  [{j}] {t.mark(c)} {c.profile}  {c.installed[:12] if c.installed else '—'}  {t.note(c) or ''}")
+        for line in disabled_lines(choices):
+            out("  " + line)
         raw = _ask(ask, TOGGLE)
         if raw == "s":
             return save(t.checked)
