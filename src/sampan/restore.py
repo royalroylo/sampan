@@ -243,6 +243,11 @@ def cmd_restore(cfg, run, out, ask, *, names=(), select_all=False, dry_run=False
     if names or select_all:
         cands = [Candidate(c.row, c.last, c.tokens, c.skip is None, c.skip) for c in cands]
     if not cands:
+        retired = [r.tmux for r in rows if names and r.state == "retired"]
+        for n in retired:
+            out(f"{n} 是 retired；先 sampan activate {n}")
+        if retired:
+            return 0
         out("沒有要接回的 session（登記表裡 active 的都已在執行）")
         return 0
     out(f"可接回的 session（[x] = 預設勾選：{cfg.recent_days} 天內有活動）：")

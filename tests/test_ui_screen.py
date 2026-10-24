@@ -119,6 +119,25 @@ class RenderTest(unittest.TestCase):
         self.assertEqual([s for s in segs[2] if s[1] == "sel"][0][0].split()[0], "zeta-sampan")
 
 
+class MessageWrapTest(unittest.TestCase):
+    def test_long_message_wraps_with_style_and_indent(self):
+        msg = "⚠ alice-team 沒有裝：" + "字" * 91  # 200 cells
+        segs = render(title="sampan", left=LEFT, cursor=0, card=CARD, messages=[msg], prompt=None, help="h", width=80, height=30)
+        got = [seg for seg in segs if "字" in "".join(t for t, _ in seg)]
+        text = ["".join(t for t, _ in seg) for seg in got]
+        self.assertEqual(len(got), 3)
+        self.assertTrue(all(st == "warn" for seg in got for _, st in seg if _.strip()))
+        self.assertTrue(all(t.startswith("   字") for t in text[1:]))  # 1 gutter + 2 indent
+        self.assertEqual("".join(text).count("字"), 91)
+
+    def test_wrapped_lines_count_against_the_height_limit(self):
+        msgs = ["⚠ " + "字" * 100] * 3
+        lines = frame_text(render(title="sampan", left=LEFT, cursor=0, card=CARD, messages=msgs, prompt=None, help="h",
+                                  width=80, height=12))
+        self.assertEqual(len(lines), 12)
+        self.assertLessEqual(sum(1 for t in lines if "字" in t), 4)  # height // 3
+
+
 class CardTest(unittest.TestCase):
     def setUp(self):
         self.cfg = make_env(Path(tempfile.mkdtemp()))

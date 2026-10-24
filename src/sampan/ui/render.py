@@ -121,6 +121,16 @@ def screen_title(updater=None):
     return f"sampan {ver}" if ver and ver != "unknown" else "sampan"
 
 
+def _wrap_message(text, width):
+    """[(line, style)] for one message: wrapped to the screen width, continuation lines indented by two cells, same style."""
+    style = message_style(text)
+    first = _wrap(text, width - 1, max_lines=1 << 30) or [""]
+    out = [(first[0], style)]
+    rest = text[len(first[0]):]
+    out += [("  " + piece, style) for piece in _wrap(rest, width - 3, max_lines=1 << 30)]
+    return out
+
+
 def render(*, title, left, cursor, card, preview=None, messages=(), prompt=None, help="", width, height,
            cols=LIST_COLS, empty=None, notice=None, extra=(), name_w=None):
     """Turn one screen into [(text, style), …] lines that fit within height lines, each with display width at most width (styles: title / sel / dim / prompt / "").
@@ -138,10 +148,11 @@ def render(*, title, left, cursor, card, preview=None, messages=(), prompt=None,
     prompt_lines += [[(pad(" " + prompt, width), "prompt")]] if prompt is not None else []
     prompt_lines += [[(pad(" " + notice, width), "attn")]] if notice else []
     room = height - 3 - len(prompt_lines)  # title, separator line, key help
-    n_msg = min(len(messages), max(1, height // 3)) if messages else 0
+    wrapped = [piece for m in messages for piece in _wrap_message(m, width)]
+    n_msg = min(len(wrapped), max(1, height // 3)) if wrapped else 0
     n_msg = max(0, min(n_msg, room - 1)) if room > 1 else min(n_msg, max(0, room))
     body_h = max(0, room - n_msg)
-    msg_lines = [[(pad(" " + m, width), message_style(m))] for m in messages[len(messages) - n_msg:]] if n_msg else []
+    msg_lines = [[(pad(" " + m, width), style)] for m, style in wrapped[len(wrapped) - n_msg:]] if n_msg else []
     if width >= WIDE:
         cw = max(36, min(64, width // 2))
         lw = width - cw - 3

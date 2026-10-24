@@ -280,9 +280,13 @@ def _resume_line(cfg, name):
         return None
 
 
+REINSTALL_HINT = "；要重新安裝請用 sampan update --force"
+
+
 def _update(out, ask, updater, update_fn):
-    """U: update after confirmation; returns whether sampan must be restarted (new version, or reinstalled).
-    Nothing newer known: re-check now (the cache may predate a fresh tag), and if still nothing newer offer a reinstall."""
+    """U: update after confirmation; returns whether sampan must be restarted (only after a real update).
+    Nothing newer known: re-check now (the cache may predate a fresh tag), and if still nothing newer only say so;
+    reinstalling is `sampan update --force`."""
     if updater is None:
         out("目前已是最新版")
         return False
@@ -298,20 +302,12 @@ def _update(out, ask, updater, update_fn):
         return update_fn(out, current=updater.current, latest=latest)
     pin = updater.latest
     if pin is None:
-        out("查不到最新版（離線或連不到 GitHub）")
-        pin = update_mod.clean_release(updater.current)
-        if pin is None:  # a dev / unknown build with no known release: nothing sensible to reinstall
-            return False
-        question = f"要重新安裝目前版本（v{pin}）嗎？(y/N): "
+        out(f"查不到最新版（離線或連不到 GitHub）{REINSTALL_HINT}")
     elif update_mod.newer(pin, updater.current):
-        question = f"目前版本比最新版新；要改裝 v{pin} 嗎？(y/N): "
+        out(f"目前版本（{updater.current}）比最新版 v{pin} 新，不更新{REINSTALL_HINT}")
     else:
-        out(f"目前已是最新版（v{pin}）")
-        question = "要重新安裝目前版本嗎？(y/N): "
-    if (_ask(ask, question) or "").lower() != "y":
-        out("已取消")
-        return False
-    return update_fn(out, current=updater.current, latest=pin, force=True)
+        out(f"目前已是最新版（v{pin}）{REINSTALL_HINT}")
+    return False
 
 
 def _first_opened(out, opened, verb):

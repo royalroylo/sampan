@@ -378,37 +378,34 @@ class UiUpdateTest(unittest.TestCase):
         self.assertEqual(self.updates, ["0.6.0"])
         self.assertEqual(len(r.calls), 1)
 
-    def test_U_up_to_date_offers_reinstall(self):
-        up = FakeUpdater(latest="0.4.5")
-        rc = self.ui([("update", [])], ["y"], updater=up)
-        self.assertEqual(rc, 0)
+    HINT = "；要重新安裝請用 sampan update --force"
+
+    def only_informs(self, up):
+        from sampan.ui.actions import _update
+        self.msgs.clear()
+        self.assertFalse(_update(self.msgs.append, lambda p: 1 / 0, up, lambda *a, **k: 1 / 0))
         self.assertEqual(up.refreshed, [True])
-        self.assertIn("▶ 檢查最新版…", self.msgs)
-        self.assertIn("目前已是最新版（v0.4.5）", self.msgs)
-        self.assertEqual(self.updates, ["0.4.5"])
-        self.assertEqual(self.update_kws, [{"latest": "0.4.5", "force": True}])
-        self.assertEqual(self.execs, [("sampan", ["sampan", "ui"])])
+        return self.msgs
 
-    def test_U_up_to_date_reinstall_declined(self):
-        asked = []
+    def test_update_when_latest_only_informs(self):
+        msgs = self.only_informs(FakeUpdater(latest="0.4.5"))
+        self.assertEqual(msgs, ["▶ 檢查最新版…", "目前已是最新版（v0.4.5）" + self.HINT])
+
+    def test_update_unknown_latest_only_informs(self):
+        msgs = self.only_informs(FakeUpdater(latest=None, current="0.6.1"))
+        self.assertEqual(msgs, ["▶ 檢查最新版…", "查不到最新版（離線或連不到 GitHub）" + self.HINT])
+
+    def test_update_dev_build_ahead_only_informs(self):
+        msgs = self.only_informs(FakeUpdater(latest="0.6.1", current="0.6.2.dev3+gabc"))
+        self.assertEqual(msgs, ["▶ 檢查最新版…", "目前版本（0.6.2.dev3+gabc）比最新版 v0.6.1 新，不更新" + self.HINT])
+
+    def test_update_newer_still_asks(self):
         from sampan.ui.actions import _update
-
-        def ask(prompt):
-            asked.append(prompt)
-            return "n"
-        self.assertFalse(_update(self.msgs.append, ask, FakeUpdater(latest="0.4.5"), lambda *a, **k: 1 / 0))
-        self.assertEqual(asked, ["要重新安裝目前版本嗎？(y/N): "])
-        self.assertEqual(self.msgs[-1], "已取消")
-
-    def test_U_latest_unknown_pins_the_clean_current_version(self):
-        from sampan.ui.actions import _update
-        up = FakeUpdater(latest=None, current="0.6.1")
         asked = []
-        self.assertTrue(_update(self.msgs.append, lambda p: asked.append(p) or "y", up,
+        self.assertTrue(_update(self.msgs.append, lambda p: asked.append(p) or "y", FakeUpdater(),
                                 lambda out, *, current, **kw: self.update_kws.append(kw) or True))
-        self.assertIn("查不到最新版（離線或連不到 GitHub）", self.msgs)
-        self.assertEqual(asked, ["要重新安裝目前版本（v0.6.1）嗎？(y/N): "])
-        self.assertEqual(self.update_kws, [{"latest": "0.6.1", "force": True}])
+        self.assertEqual(asked, ["更新到 v0.4.6？(y/N): "])
+        self.assertEqual(self.update_kws, [{"latest": "0.4.6"}])
 
     def test_U_latest_unknown_and_dev_build_offers_nothing(self):
         from sampan.ui.actions import _update
@@ -416,17 +413,7 @@ class UiUpdateTest(unittest.TestCase):
             self.msgs.clear()
             up = FakeUpdater(latest=None, current=cur)
             self.assertFalse(_update(self.msgs.append, lambda p: 1 / 0, up, lambda *a, **k: 1 / 0), cur)
-            self.assertEqual(self.msgs, ["▶ 檢查最新版…", "查不到最新版（離線或連不到 GitHub）"])
-
-    def test_U_dev_build_ahead_offers_switch_not_reinstall(self):
-        from sampan.ui.actions import _update
-        up = FakeUpdater(latest="0.6.1", current="0.6.2.dev3+gabc")
-        asked = []
-        self.assertTrue(_update(self.msgs.append, lambda p: asked.append(p) or "y", up,
-                                lambda out, *, current, **kw: self.update_kws.append(kw) or True))
-        self.assertEqual(asked, ["目前版本比最新版新；要改裝 v0.6.1 嗎？(y/N): "])
-        self.assertFalse(any("目前已是最新版" in m for m in self.msgs))
-        self.assertEqual(self.update_kws, [{"latest": "0.6.1", "force": True}])
+            self.assertEqual(self.msgs, ["▶ 檢查最新版…", "查不到最新版（離線或連不到 GitHub）；要重新安裝請用 sampan update --force"])
 
     def test_U_newer_passes_latest(self):
         self.ui([("update", [])], ["y"], updater=FakeUpdater())

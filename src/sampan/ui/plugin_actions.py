@@ -19,6 +19,7 @@ from ..plugin_view import _mkt, build_rows, catalog, plan_changes, preview_lines
 from ..status import status_rows
 from ..textwidth import pad
 from .actions import _ask
+from .cards import Wrap
 from .plugin_state import ProfileToggles
 from .render import tab_title
 
@@ -97,7 +98,7 @@ def add_flow(cfg, out, ask, snap, choose_fn):
 
 def disabled_lines(choices):
     """One "{profile}：{reason}" line per profile that can't be changed (layer 2 shows the full reason here)."""
-    return [f"{c.profile}：{c.disabled}" for c in choices if c.disabled]
+    return [Wrap(f"{c.profile}：{c.disabled}") for c in choices if c.disabled]
 
 
 def market_toggles(choices):

@@ -524,6 +524,20 @@ class RestoreTest(Base):
         self.assertEqual(self.restore(self.runner()), 0)
         self.assertIn("沒有要接回", self.text())
 
+    def test_restore_named_retired_row_says_activate_first(self):
+        self.registry([Row("old", "claude", "alice", B, str(self.cwd), "retired")])
+        r = self.runner()
+        self.assertEqual(self.restore(r, names=["old"]), 0)
+        self.assertIn("old 是 retired；先 sampan activate old", self.msgs)
+        self.assertNotIn("沒有要接回", self.text())
+        self.assertEqual(self.keys(), [])
+        self.assertEqual(r.called(["tmux", "-u", "new-session"]), [])
+
+    def test_restore_names_nothing_keeps_old_message_with_retired_rows(self):
+        self.registry([Row("old", "claude", "alice", B, str(self.cwd), "retired")])
+        self.assertEqual(self.restore(self.runner()), 0)
+        self.assertIn("沒有要接回", self.text())
+
     def test_corrupt_registry(self):
         self.cfg.registry_path.parent.mkdir(parents=True)
         self.cfg.registry_path.write_text("{")

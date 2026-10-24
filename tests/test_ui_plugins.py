@@ -602,6 +602,18 @@ class MarketTabTest(unittest.TestCase):
         self.assertIn("sampan · plugin 管理 › tools@my-plugins", text)
         self.assertIn("work：來源不同：other/fork", text)
 
+    def test_disabled_lines_wrap_in_the_card_at_narrow_width(self):
+        from sampan.ui.cards import Wrap
+        from sampan.ui.render import render
+        from tests.test_ui_screen import frame_text
+        reason = "來源不同：" + "x" * 40 + "（先改設定檔）"
+        lines = pa.disabled_lines([C("work", None, False, reason)])
+        self.assertEqual(lines, [f"work：{reason}"])  # plain output unchanged
+        self.assertTrue(all(isinstance(line, Wrap) for line in lines))
+        text = frame_text(render(title="t", left=[("a", "b", "c", "d")], cursor=0, card=lines, width=40, height=20))
+        self.assertGreater(sum("x" in t for t in text), 1)
+        self.assertIn("（先改設定檔）", "".join(text))
+
     def test_market_add_flow_refuses_token_url(self):
         prompts = []
         ask = lambda p: prompts.append(p) or "https://user:tok@example.com/r.git"  # noqa: E731
