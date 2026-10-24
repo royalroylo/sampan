@@ -4,10 +4,14 @@ from pathlib import Path
 
 from .config import same_source
 from .plugins import ProfilePluginState, read_state
-from .ui.text import pad
+from .textwidth import pad
 
 STATES = ("最新", "有新版", "未裝", "不一致")
 NO_SOURCE = "本機或不支援的來源"
+
+
+def _mkt(pid):
+    return pid.split("@", 1)[1] if "@" in pid else ""
 
 
 @dataclass(frozen=True)
@@ -44,7 +48,7 @@ def build_rows(cfg, snap, latest=None):  # `latest` is accepted for the update c
     shorts = [pid.split("@", 1)[0] for pid in ids]
     rows = []
     for pid, short in zip(ids, shorts):
-        mkt = pid.split("@", 1)[1] if "@" in pid else ""
+        mkt = _mkt(pid)
         installed = {p.name: snap.states[p.name].installed[pid] for p in profiles if pid in snap.states[p.name].installed}
         listed = frozenset(p.name for p in profiles if pid in p.plugins)
         live = [p for p in profiles if p.name not in snap.missing]
@@ -92,7 +96,7 @@ class ProfileChoice:
 
 
 def profile_choices(cfg, snap, pid, source):
-    mkt = pid.split("@", 1)[1] if "@" in pid else ""
+    mkt = _mkt(pid)
     out = []
     for p in cfg.profiles.values():
         st = snap.states[p.name]
@@ -135,7 +139,7 @@ def plan_changes(snap, choices, checked, mkt):
 
 
 def preview_lines(cfg, pid, changes, new_source=None):
-    mkt = pid.split("@", 1)[1] if "@" in pid else ""
+    mkt = _mkt(pid)
     lines = ["將會："]
     for ch in changes:
         prof = cfg.profiles.get(ch.profile)

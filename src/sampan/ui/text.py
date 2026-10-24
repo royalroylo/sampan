@@ -1,30 +1,12 @@
 """Shared text helpers and key constants: display width (CJK takes two cells), pad/truncate, wrapping, pane capture cleanup. Depends on no other ui module."""
 import unicodedata
 
+from ..textwidth import _width, pad, text_width  # noqa: F401  (re-exported)
+
 ENTER = ("\n", "\r", "KEY_ENTER")
 BACKSPACE = ("\x7f", "\b", "KEY_BACKSPACE", "^?", "^H")
 MOVES = {"KEY_UP": -1, "k": -1, "KEY_DOWN": 1, "j": 1}
 QUOTE_LINES = 3
-
-
-def _width(ch):
-    return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
-
-
-def text_width(text):
-    return sum(_width(ch) for ch in text)
-
-
-def pad(text, width):
-    """Pad with spaces or truncate by display width (CJK takes two cells), never cutting a character in half."""
-    out, used = [], 0
-    for ch in text:
-        w = _width(ch)
-        if used + w > width:
-            break
-        out.append(ch)
-        used += w
-    return "".join(out) + " " * max(0, width - used)
 
 
 def _wrap(text, width, max_lines=QUOTE_LINES):

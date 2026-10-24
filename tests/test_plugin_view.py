@@ -1,4 +1,6 @@
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -140,6 +142,11 @@ class ViewTest(unittest.TestCase):
             "  · p4：清單拿掉（本來就沒裝）",
             "  [marketplaces] 加上 my-plugins = owner/my-plugins",
             f"設定檔 {cfg.path} 會一起更新（先備份）"])
+
+    def test_import_is_a_leaf(self):
+        code = "import sys, sampan.plugin_view; sys.exit(1 if 'sampan.ui' in sys.modules else 0)"
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
 
 
 if __name__ == "__main__":
