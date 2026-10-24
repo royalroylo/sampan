@@ -224,3 +224,89 @@ def plugin_lists(text):
     except tomllib.TOMLDecodeError:
         return None
     return {n: list(p.get("plugins", [])) for n, p in data.get("profiles", {}).items()}
+
+
+_ANY_TABLE_RE = re.compile(r"^[ \t]*\[", re.M)
+
+
+def _table_header(name):
+    q = re.escape(name)
+    return re.compile(rf"""^[ \t]*\[[ \t]*(?:{q}|"{q}"|'{q}')[ \t]*\][ \t]*(#.*)?$""", re.M)
+
+
+def _section_end(text, m):
+    """Index of the next table header line after the header match m (or end of text)."""
+    start = _line_end(text, m.end())
+    return next((start + mm.start() for mm in _ANY_TABLE_RE.finditer(text[start:])), len(text))
+
+
+def rename_profile(text, old, new):
+    """Rename the [profiles.old] header to [profiles.new]; None when old isn't there."""
+    m = _profile_header(old).search(text)
+    if m is None:
+        return None
+    header = m.group(0)
+    indent = header[:len(header) - len(header.lstrip(" \t"))]
+    tail = header[header.rindex("]", 0, len(header) - len(m.group(1) or "")) + 1:]
+    return text[:m.start()] + f"{indent}[profiles.{_k(new)}]{tail}" + text[m.end():]
+
+
+def set_profile_flag(text, name, key, value):
+    """Set `key = true/false` in [profiles.name]; value None deletes the line. None when the section is missing."""
+    m = _profile_header(name).search(text)
+    if m is None:
+        return None
+    start = _line_end(text, m.end())
+    end = _section_end(text, m)
+    km = re.compile(rf"^([ \t]*{re.escape(key)}[ \t]*=[ \t]*)[^#\n]*?([ \t]*#[^\n]*)?$", re.M).search(text, start, end)
+    if value is None:
+        if km is None:
+            return text
+        return text[:km.start()] + text[_line_end(text, km.end()):]
+    lit = "true" if value else "false"
+    if km is not None:
+        return text[:km.start()] + km.group(1) + lit + (km.group(2) or "") + text[km.end():]
+    prefix = text[:start] if text[:start].endswith("\n") else text[:start] + "\n"
+    return prefix + f"{key} = {lit}\n" + text[start:]
+
+
+def _cut_section(text, s, e):
+    """Remove text[s:e] and leave at most one blank line between the neighbours."""
+    before, after = text[:s], text[e:]
+    gap = before.endswith("\n\n") or after.startswith("\n") or text[s:e].endswith("\n\n")
+    before = before.rstrip("\n")
+    after = after.lstrip("\n")
+    if not before:
+        return after
+    if not after:
+        return before + "\n"
+    return before + ("\n\n" if gap else "\n") + after
+
+
+def remove_profile(text, name):
+    """Drop [profiles.name] with the comment lines directly above it; None when it isn't there."""
+    m = _profile_header(name).search(text)
+    if m is None:
+        return None
+    s = m.start()
+    while s > 0:
+        ps = text.rfind("\n", 0, s - 1) + 1
+        if not text[ps:s].lstrip().startswith("#"):
+            break
+        s = ps
+    return _cut_section(text, s, _section_end(text, m))
+
+
+def append_section(text, section):
+    """Append a section at the end of the file, separated by one blank line."""
+    body = section.strip("\n") + "\n"
+    head = text.rstrip("\n")
+    return body if not head else head + "\n\n" + body
+
+
+def remove_table(text, header):
+    """Drop the whole [header] table (to the next table header); None when it isn't there."""
+    m = _table_header(header).search(text)
+    if m is None:
+        return None
+    return _cut_section(text, m.start(), _section_end(text, m))
