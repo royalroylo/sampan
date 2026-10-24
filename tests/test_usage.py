@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import subprocess
@@ -97,6 +98,13 @@ class ClaudeUsageTest(Base):
         self.assertIsNone(usage.claude_usage(self.cfg, "alice"))
 
 
+class BadResetTest(unittest.TestCase):
+    def test_unrepresentable_resets_at_is_no_window(self):
+        for bad in (1e20, float("nan"), SOON * 1000, float("inf")):
+            self.assertIsNone(usage._window(42, bad), bad)
+        self.assertIsNotNone(usage._window(42, SOON))
+
+
 class CodexUsageTest(Base):
     def rollout(self, name, lines, mtime=None):
         d = self.cfg.home / ".codex" / "sessions" / "2026" / "10" / "24"
@@ -135,6 +143,25 @@ class CodexUsageTest(Base):
         self.assertEqual(u.five_hour.used, 60.0)
         self.assertIsNone(u.week)
 
+    def test_codex_bad_resets_at_never_raises(self):
+        good = {"used_percent": 27.0, "window_minutes": 300, "resets_at": SOON}
+        bad = {"used_percent": 36.0, "window_minutes": 10080, "resets_at": LATER * 1000}  # milliseconds
+        self.rollout("rollout-a.jsonl", [codex_line("2026-10-24T02:00:00Z", "codex", good, bad)])
+        u = usage.codex_usage(self.profile())
+        self.assertEqual((u.five_hour.used, u.week), (27.0, None))
+        self.rollout("rollout-a.jsonl", [codex_line("2026-10-24T02:00:00Z", "codex", dict(good, resets_at=1e20),
+                                                    dict(bad, resets_at=float("nan")))])
+        self.assertIsNone(usage.codex_usage(self.profile()))
+
+    def test_claude_bad_resets_at_never_raises(self):
+        data = claude_data(five_reset=1e20, week_reset=SOON * 1000)
+        usage.record_claude(self.cfg, "alice", data, NOW)
+        self.assertFalse(usage.usage_path(self.cfg, "alice").exists())
+        path = usage.usage_path(self.cfg, "alice")
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"at": NOW.isoformat(), "five_hour": {"used": 1, "resets_at": 1e20}, "week": None}))
+        self.assertIsNone(usage.claude_usage(self.cfg, "alice"))
+
     def test_codex_no_rollout(self):
         self.assertIsNone(usage.codex_usage(self.profile()))
         self.rollout("rollout-a.jsonl", [codex_line("2026-10-24T02:00:00Z", "premium", None, None)])
@@ -142,50 +169,65 @@ class CodexUsageTest(Base):
 
 
 class StatuslineTest(Base):
+    def setUp(self):
+        super().setUp()
+        self.so, self.se = io.BytesIO(), io.BytesIO()
+
+    def sl(self, *a, **kw):
+        return usage.cmd_statusline(*a, stdout=self.so, stderr=self.se, **kw)
+
     def env(self):
         return {}  # no CLAUDE_CONFIG_DIR: the default profile
 
     def test_wrapped_command_output_and_exit_code_pass_through(self):
         run = Fake({"npx": (3, b"X\n", b"")})
         stdin = json.dumps(claude_data()).encode()
-        rc = usage.cmd_statusline(self.cfg, self.msgs.append, ["npx", "-y", "ccstatusline@latest"], stdin=stdin,
+        rc = self.sl(self.cfg, self.msgs.append, ["npx", "-y", "ccstatusline@latest"], stdin=stdin,
                                   env=self.env(), run_wrapped=run, now=NOW)
         self.assertEqual(rc, 3)
-        self.assertEqual(self.msgs, ["X"])
+        self.assertEqual((self.msgs, self.so.getvalue()), ([], b"X\n"))
         argv, kw = run.calls[0]
         self.assertEqual(argv, ["npx", "-y", "ccstatusline@latest"])
         self.assertEqual(kw["input"], stdin)
         self.assertTrue(usage.usage_path(self.cfg, "alice").exists())
 
+    def test_wrapped_output_is_byte_exact_and_stderr_forwarded(self):
+        raw = b"\x1b[31m\xff\xfe bad utf-8, no newline"
+        run = Fake({"npx": (0, raw, b"warn\xff\n")})
+        self.sl(self.cfg, self.msgs.append, ["npx"], stdin=b"{}", env=self.env(), run_wrapped=run, now=NOW)
+        self.assertEqual(self.so.getvalue(), raw)
+        self.assertEqual(self.se.getvalue(), b"warn\xff\n")
+        self.assertEqual(self.msgs, [])
+
     def test_bad_stdin_still_runs_wrapped_command(self):
         run = Fake({"npx": (0, b"Y\n", b"")})
-        rc = usage.cmd_statusline(self.cfg, self.msgs.append, ["npx"], stdin=b"not json", env=self.env(),
+        rc = self.sl(self.cfg, self.msgs.append, ["npx"], stdin=b"not json", env=self.env(),
                                   run_wrapped=run, now=NOW)
         self.assertEqual(rc, 0)
-        self.assertEqual(self.msgs, ["Y"])
+        self.assertEqual(self.so.getvalue(), b"Y\n")
         self.assertEqual(run.calls[0][1]["input"], b"not json")
         self.assertFalse((self.cfg.state_dir / "usage").exists())
 
     def test_profile_from_config_dir_and_unknown_dir(self):
         stdin = json.dumps(claude_data()).encode()
         env = {"CLAUDE_CONFIG_DIR": str(self.cfg.home / ".claude-profiles" / "work")}
-        usage.cmd_statusline(self.cfg, self.msgs.append, ["npx"], stdin=stdin, env=env, run_wrapped=Fake({}), now=NOW)
+        self.sl(self.cfg, self.msgs.append, ["npx"], stdin=stdin, env=env, run_wrapped=Fake({}), now=NOW)
         self.assertTrue(usage.usage_path(self.cfg, "work").exists())
         self.assertFalse(usage.usage_path(self.cfg, "alice").exists())
-        usage.cmd_statusline(self.cfg, self.msgs.append, ["npx"], stdin=stdin, env={"CLAUDE_CONFIG_DIR": "/elsewhere"},
+        self.sl(self.cfg, self.msgs.append, ["npx"], stdin=stdin, env={"CLAUDE_CONFIG_DIR": "/elsewhere"},
                              run_wrapped=Fake({}), now=NOW)
         self.assertFalse(usage.usage_path(self.cfg, "alice").exists())
 
     def test_no_config_still_runs_wrapped(self):
         run = Fake({"npx": (0, b"Z", b"")})
-        rc = usage.cmd_statusline(None, self.msgs.append, ["npx"], stdin=b"{}", env={}, run_wrapped=run, now=NOW)
-        self.assertEqual((rc, self.msgs), (0, ["Z"]))
+        rc = self.sl(None, self.msgs.append, ["npx"], stdin=b"{}", env={}, run_wrapped=run, now=NOW)
+        self.assertEqual((rc, self.so.getvalue()), (0, b"Z"))
 
     def test_missing_wrapped_command(self):
         def run(argv, **kw):
             raise FileNotFoundError(argv[0])
         with mock.patch.object(usage, "_err") as err:
-            rc = usage.cmd_statusline(self.cfg, self.msgs.append, ["nope"], stdin=b"{}", env={}, run_wrapped=run,
+            rc = self.sl(self.cfg, self.msgs.append, ["nope"], stdin=b"{}", env={}, run_wrapped=run,
                                       now=NOW)
         self.assertEqual(rc, 127)
         self.assertEqual(self.msgs, [])  # the error goes to stderr, never into the status line
@@ -195,7 +237,7 @@ class StatuslineTest(Base):
         run = Fake({"git": (0, b"main\n", b"")})
         stdin = json.dumps(claude_data()).encode()
         with local_tz("Asia/Taipei"):
-            rc = usage.cmd_statusline(self.cfg, self.msgs.append, [], stdin=stdin, env=self.env(), run_wrapped=run,
+            rc = self.sl(self.cfg, self.msgs.append, [], stdin=stdin, env=self.env(), run_wrapped=run,
                                       now=NOW)
         self.assertEqual(rc, 0)
         self.assertEqual(self.msgs, ["Opus · /w/proj（main）· context 37% · 5h 42%・週 18%（12:00）"])
@@ -207,12 +249,12 @@ class StatuslineTest(Base):
         run = Fake({"git": (128, b"", b"fatal")})
         data = {"model": {"display_name": "Opus"}, "cwd": str(self.cfg.home / "x"),
                 "context_window": {"used_percentage": None}}
-        usage.cmd_statusline(self.cfg, self.msgs.append, [], stdin=json.dumps(data).encode(), env=self.env(),
+        self.sl(self.cfg, self.msgs.append, [], stdin=json.dumps(data).encode(), env=self.env(),
                              run_wrapped=run, now=NOW)
         self.assertEqual(self.msgs, ["Opus · ~/x"])
 
     def test_own_line_never_raises_on_garbage(self):
-        rc = usage.cmd_statusline(self.cfg, self.msgs.append, [], stdin=b"\xff\xfe", env=self.env(),
+        rc = self.sl(self.cfg, self.msgs.append, [], stdin=b"\xff\xfe", env=self.env(),
                                   run_wrapped=Fake({}), now=NOW)
         self.assertEqual(rc, 0)
 

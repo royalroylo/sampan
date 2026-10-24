@@ -32,12 +32,16 @@ def usage_path(cfg, profile):
 
 
 def _window(used, resets_at):
-    """A Window from a percent and an epoch-seconds reset time; None unless both are numbers."""
+    """A Window from a percent and an epoch-seconds reset time; None unless both are numbers and the time is one a
+    datetime can hold (external data: a huge, NaN or millisecond value is no window, never an exception)."""
     if isinstance(used, bool) or isinstance(resets_at, bool):
         return None
     if not isinstance(used, (int, float)) or not isinstance(resets_at, (int, float)):
         return None
-    return Window(float(used), datetime.fromtimestamp(resets_at, timezone.utc))
+    try:
+        return Window(float(used), datetime.fromtimestamp(resets_at, timezone.utc))
+    except (OverflowError, ValueError, OSError):
+        return None
 
 
 def _dump_window(raw):
@@ -167,21 +171,25 @@ def _err(msg):
         pass
 
 
-def _run_wrapped(out, wrapped, stdin, run_wrapped):
-    """Run the user's own status-line command on the same stdin; its stdout goes out as it is, its exit code is ours."""
+def _pass_through(data, sink):
+    if data:
+        sink.write(data)
+        sink.flush()
+
+
+def _run_wrapped(wrapped, stdin, run_wrapped, stdout, stderr):
+    """Run the user's own status-line command on the same stdin; its stdout and stderr go out byte for byte, its
+    exit code is ours."""
     try:
         r = run_wrapped(wrapped, input=stdin, capture_output=True)
     except OSError as e:
         _err(f"sampan statusline：無法執行 {wrapped[0]}（{e}）")
         return 127
-    if r.stdout:
-        out(r.stdout.decode(errors="replace").removesuffix("\n"))
-    if r.stderr:
-        try:
-            sys.stderr.buffer.write(r.stderr)
-            sys.stderr.flush()
-        except Exception:
-            pass
+    _pass_through(r.stdout, stdout if stdout is not None else sys.stdout.buffer)
+    try:
+        _pass_through(r.stderr, stderr if stderr is not None else sys.stderr.buffer)
+    except Exception:
+        pass  # a lost stderr must not change the status line or its exit code
     return r.returncode
 
 
@@ -219,10 +227,11 @@ def _own_line(cfg, profile, data, run_wrapped, now):
     return line
 
 
-def cmd_statusline(cfg, out, wrapped, *, stdin, env, run_wrapped=subprocess.run, now=None):
+def cmd_statusline(cfg, out, wrapped, *, stdin, env, run_wrapped=subprocess.run, now=None, stdout=None, stderr=None):
     """Claude Code's status-line command. Records the 額度 (every error swallowed: cfg None = the config did not
-    load, record nothing), then runs `wrapped` on the same stdin and passes its output and exit code through; with
-    no wrapped command, prints its own one line. Never raises and never prints a sampan error on stdout."""
+    load, record nothing), then runs `wrapped` on the same stdin and passes its output (byte-exact, to the binary
+    stdout/stderr; default sys.stdout.buffer / sys.stderr.buffer) and exit code through; with no wrapped command,
+    prints its own one line through out. Never raises and never prints a sampan error on stdout."""
     profile, data = None, {}
     now = now or datetime.now(timezone.utc)
     try:
@@ -237,7 +246,7 @@ def cmd_statusline(cfg, out, wrapped, *, stdin, env, run_wrapped=subprocess.run,
         pass
     if wrapped:
         try:
-            return _run_wrapped(out, wrapped, stdin, run_wrapped)
+            return _run_wrapped(wrapped, stdin, run_wrapped, stdout, stderr)
         except Exception as e:
             _err(f"sampan statusline：{e}")
             return 1
