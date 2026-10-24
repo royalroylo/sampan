@@ -145,6 +145,30 @@ class SyncCmdTest(unittest.TestCase):
         self.assertEqual(r.calls, [])
         self.assertFalse(self.cfg.profiles["work"].config_dir.exists())
 
+    def test_unchanged_versions_are_not_listed(self):
+        alice = self.cfg.profiles["alice"]
+        pids = list(alice.plugins)
+        write_plugins(self.cfg, "alice", known=GOOD_KNOWN,
+                      installed={pid: [("user", "2.6.119", "")] for pid in pids})
+        cmd_sync(self.cfg, FakeRunner(), self.msgs.append, profile="alice")
+        self.assertFalse([m for m in self.msgs if "2.6.119 → 2.6.119" in m], self.msgs)
+        self.assertIn("  沒有變動", self.msgs)
+        self.assertFalse([m for m in self.msgs if "要生效需整個重開" in m])
+
+    def test_changed_version_listed_with_restart_hint(self):
+        pids = list(self.cfg.profiles["alice"].plugins)
+        write_plugins(self.cfg, "alice", known=GOOD_KNOWN, installed={pid: [("user", "1.0.0", "")] for pid in pids})
+
+        def bump(_args):
+            write_plugins(self.cfg, "alice", known=GOOD_KNOWN,
+                          installed={pid: [("user", "2.0.0" if pid == pids[0] else "1.0.0", "")] for pid in pids})
+            return cp()
+        cmd_sync(self.cfg, FakeRunner().on(["claude", "plugin"], bump), self.msgs.append, profile="alice")
+        self.assertIn(f"  {pids[0]}：1.0.0 → 2.0.0", self.msgs)
+        self.assertFalse([m for m in self.msgs if "1.0.0 → 1.0.0" in m])
+        self.assertNotIn("  沒有變動", self.msgs)
+        self.assertTrue([m for m in self.msgs if "要生效需整個重開" in m])
+
     def test_dry_run(self):
         r = FakeRunner()
         cmd_sync(self.cfg, r, self.msgs.append, dry_run=True)

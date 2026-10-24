@@ -163,7 +163,7 @@ def cmd_sync(cfg, run, out, *, profile=None, dry_run=False, prune=False):
         out(f"❌ 未知的 profile：{profile}")
         return 2
     targets = [cfg.profiles[profile]] if profile else list(cfg.profiles.values())
-    failures = []
+    failures, changed = [], False
     for p in targets:
         out(f"== {p.name}")
         if not Path(p.config_dir).is_dir():
@@ -184,9 +184,13 @@ def cmd_sync(cfg, run, out, *, profile=None, dry_run=False, prune=False):
                 failures.append(f"{p.name}：{shlex.join(c)} 失敗：{redact((r.stderr or r.stdout).strip())[:300]}")
         if not dry_run:
             after = read_state(p).installed
-            for pid in p.plugins:
-                b, a = before.installed.get(pid), after.get(pid)
+            diffs = [(pid, before.installed.get(pid), after.get(pid)) for pid in p.plugins]
+            diffs = [(pid, b, a) for pid, b, a in diffs if b != a]
+            for pid, b, a in diffs:
                 out(f"  {pid}：{b or '未裝'} → {a or '未裝'}")
+            if not diffs:
+                out("  沒有變動")
+            changed = changed or bool(diffs)
         if prune:
             pcmds, skipped = plan_prune(cfg, p, before if dry_run else read_state(p))
             for s in skipped:
@@ -201,7 +205,8 @@ def cmd_sync(cfg, run, out, *, profile=None, dry_run=False, prune=False):
                     failures.append(f"{p.name}：{shlex.join(c)} 失敗：{redact((r.stderr or r.stdout).strip())[:300]}")
                 else:
                     out(f"  移除：{shlex.join(c[2:])}{where}")
-    if not dry_run:
+                    changed = True
+    if changed:
         out("要生效需整個重開該 profile 的 session：sampan stop --profile <p> && sampan restore"
             "（不要用 /reload-plugins）")
     for f in failures:
