@@ -371,6 +371,11 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
         if set_cfg_fn is not None:
             set_cfg_fn(cfg)
 
+    def _refresh():
+        """Re-read the config only when config.toml changed since the last read (so a broken file warns once)."""
+        if _stamp() != seen:
+            _reload()
+
     def _attach_row(names, rows, kw):
         name = names[0]
         r = next((x for x in rows if x.name == name), None)
@@ -469,8 +474,7 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
     if hint:
         out(hint)  # --plain: mention once at the start (cache only)
     while True:
-        if _stamp() != seen:
-            _reload()
+        _refresh()  # the list and the account lines are drawn with the config as it is now
         try:
             rows = rows_fn(cfg, run)
         except RegistryError as e:
@@ -484,6 +488,7 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
         if action == "invalid":
             rc, go = 1, None
         else:
+            _refresh()  # picker_fn waits for keys: the config may have been edited elsewhere meanwhile
             kw, want = {}, []
             if prompt_fn is not None:
                 on_prompt, want = recording(prompt_fn)

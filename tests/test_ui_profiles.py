@@ -280,21 +280,39 @@ class ConfigReloadTest(Base):
         it = iter(actions)
         return lambda rows, current: next(it)
 
-    def test_config_edited_on_disk_is_seen_by_the_next_action(self):
-        seen, pushed = [], []
+    def test_config_edited_while_the_list_is_shown_is_seen_by_the_very_next_action(self):
+        seen, pushed, picks = [], [], []
+        path = self.cfg.path
 
-        def save(cfg, run, out):
-            seen.append(cfg)
-            if len(seen) == 1:  # edited elsewhere (another terminal) while the list is shown
-                cfg.path.write_text(cfg.path.read_text().replace("[profiles.work]", "[profiles.job]"))
-            return 0
-        rc = cmd_ui(self.cfg, FakeRunner(), [].append, loop=True, rows_fn=lambda c, r: [], save_fn=save,
-                    picker_fn=self.picker(("save", []), ("save", []), ("quit", [])), set_cfg_fn=pushed.append)
+        def picker(rows, current):
+            picks.append(1)
+            if len(picks) == 1:  # edited in another terminal while sampan waits for a key
+                path.write_text(path.read_text().replace("[profiles.work]", "[profiles.job]"))
+                return ("save", [])
+            return ("quit", [])
+        msgs = []
+        rc = cmd_ui(self.cfg, FakeRunner(), msgs.append, loop=True, rows_fn=lambda c, r: [],
+                    save_fn=lambda cfg, run, out: seen.append(cfg) or 0, picker_fn=picker, set_cfg_fn=pushed.append)
         self.assertEqual(rc, 0)
-        self.assertIn("work", seen[0].profiles)
-        self.assertIn("job", seen[1].profiles)
-        self.assertNotIn("work", seen[1].profiles)
-        self.assertEqual([list(c.profiles) for c in pushed], [["alice", "job"]])
+        self.assertEqual(len(seen), 1)
+        self.assertIn("job", seen[0].profiles)
+        self.assertNotIn("work", seen[0].profiles)
+        self.assertEqual([list(c.profiles) for c in pushed], [["alice", "job"]])  # reloaded and pushed once
+
+    def test_broken_edit_warns_once(self):
+        path = self.cfg.path
+        picks = []
+
+        def picker(rows, current):
+            picks.append(1)
+            if len(picks) == 1:
+                path.write_text("not toml [")
+            return ("save", []) if len(picks) < 3 else ("quit", [])
+        msgs, seen = [], []
+        cmd_ui(self.cfg, FakeRunner(), msgs.append, loop=True, rows_fn=lambda c, r: [],
+               save_fn=lambda cfg, run, out: seen.append(cfg) or 0, picker_fn=picker)
+        self.assertEqual(sum("設定檔讀取失敗" in m for m in msgs), 1)
+        self.assertTrue(all(c is self.cfg for c in seen))
 
     def test_unchanged_config_is_not_reread(self):
         seen = []
