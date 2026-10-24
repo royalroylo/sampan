@@ -139,12 +139,15 @@ class MessageWrapTest(unittest.TestCase):
         self.assertTrue(shown[-1].rstrip().endswith("…"))
 
     def test_continuation_indent_is_two_cells_when_wrap_breaks_at_a_space(self):
-        msgs = ["⚠ " + "字" * 37 + " " + "字" * 20]  # the break lands on the space at width 80-1
+        from sampan.ui.text import text_width
+        head = "⚠ "
+        msgs = [head + "a" * (79 - text_width(head)) + " " + "Z" * 20]  # first line fills width-1; the space overflows
         segs = render(title="sampan", left=LEFT, cursor=0, card=CARD, messages=msgs, prompt=None, help="h", width=80,
                       height=30)
-        text = ["".join(t for t, _ in seg) for seg in segs if "字" in "".join(t for t, _ in seg)]
-        self.assertEqual(len(text), 2)
-        self.assertTrue(text[1].startswith("   字"), text[1])
+        text = ["".join(t for t, _ in seg) for seg in segs if "Z" in "".join(t for t, _ in seg)]
+        self.assertEqual(len(text), 1)
+        self.assertTrue(text[0].startswith("   Z"), text[0])  # gutter + exactly two spaces
+        self.assertFalse(text[0].startswith("    Z"), text[0])
 
     def test_wrapped_lines_count_against_the_height_limit(self):
         msgs = ["⚠ " + "字" * 100] * 3
