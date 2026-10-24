@@ -95,6 +95,9 @@ def build_parser():
     pg = pf.add_parser("forget", help="從設定檔拿掉已停用的 profile，連同登記表裡它的 session（目錄不動，會印出手動接回的指令）")
     pg.add_argument("name")
 
+    sl = sub.add_parser("statusline", help="Claude Code 的狀態列：記下 5h／週額度，再交給 -- 後面原本的狀態列指令（沒有就自己印一行）")
+    sl.add_argument("rest", nargs=argparse.REMAINDER, help="[-- 原本的狀態列指令…]")
+
     hk = sub.add_parser("hook")  # called by Claude Code's SessionStart hook, not listed in the help
     hk.add_argument("event", choices=["session-start"])
     sub._choices_actions = [a for a in sub._choices_actions if a.dest != "hook"]
@@ -115,6 +118,26 @@ def _hook_session_start():
     except BaseException:
         pass
     sys.exit(0)
+
+
+def _statusline(rest):
+    """sampan statusline [-- cmd…]: run by Claude Code on every status-line refresh. Light imports only; a config
+    that does not load still runs the wrapped command (only the 額度 is not recorded). The wrapped command's stdout
+    goes to stdout unchanged; sampan's own errors only ever go to stderr."""
+    import os
+
+    from .usage import cmd_statusline
+    if rest[:1] == ["--"]:
+        rest = rest[1:]
+    try:
+        cfg = load_config(paths.config_path(), state_dir=paths.state_dir())
+    except Exception:
+        cfg = None
+    try:
+        stdin = sys.stdin.buffer.read() if sys.stdin is not None else b""
+    except Exception:
+        stdin = b""
+    return cmd_statusline(cfg, out, list(rest), stdin=stdin, env=os.environ)
 
 
 def _current_tmux_session(run):
@@ -208,6 +231,9 @@ def main(argv=None):
         # old command: whatever arguments follow, only show the rename notice
         out("❌ sampan start 已改名為 sampan restore（sampan restore [名稱…] [--all] [--dry-run]）")
         return 2
+    if argv[:1] == ["statusline"] and argv[1:] not in (["-h"], ["--help"]):
+        # handled before argparse: the wrapped command's own --flags pass through unchanged
+        return _statusline(argv[1:])
     if not argv:
         args = argparse.Namespace(cmd="ui", plain=False)
     elif argv[0] in ("claude", "codex") and argv[1:] != ["-h"] and argv[1:] != ["--help"]:

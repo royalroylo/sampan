@@ -243,6 +243,30 @@ class ListTest(Base):
         self.assertEqual(envs, {None, str(self.cfg.home / ".claude-profiles" / "work")})
         self.assertEqual(r.called(["codex", "login", "status"])[0]["env"]["CODEX_HOME"], str(self.cfg.home / ".codex"))
 
+    def test_list_shows_usage(self):
+        from datetime import datetime, timedelta, timezone
+
+        from sampan import usage
+        from tests.helpers import local_tz
+        now = datetime(2026, 10, 24, 4, 0, tzinfo=timezone.utc)
+        later = int((now + timedelta(days=2)).timestamp())
+        usage.record_claude(self.cfg, "alice", {"rate_limits": {
+            "five_hour": {"used_percentage": 42, "resets_at": later},
+            "seven_day": {"used_percentage": 18, "resets_at": later}}}, now - timedelta(days=1))
+        d = self.cfg.home / ".codex" / "sessions" / "2026" / "10" / "24"
+        d.mkdir(parents=True)
+        (d / "rollout-x.jsonl").write_text(json.dumps({"timestamp": "2026-10-24T03:48:49Z", "type": "event_msg",
+            "payload": {"type": "token_count", "rate_limits": {"limit_id": "codex",
+                "primary": {"used_percent": 27.0, "window_minutes": 300, "resets_at": later},
+                "secondary": None}}}) + "\n")
+        with mock.patch.object(profile_ops, "status_rows", return_value=[]), local_tz("Asia/Taipei"):
+            profile_ops.cmd_profile_list(self.cfg, self.runner(), self.msgs.append, now=now)
+        self.assertEqual(self.msgs, [
+            "alice  claude  ~/.claude  a@example.com  使用中（預設）  0 個執行中  plugin 2  5h 42%・週 18%（10/23 12:00）",
+            "work  claude  ~/.claude-profiles/work  a@example.com  使用中  0 個執行中  plugin 1",
+            "codex  codex  ~/.codex  Logged in using ChatGPT  使用中  0 個執行中  5h 27%（11:48）",
+        ])
+
     def test_unreadable_account_and_disabled(self):
         self.cfg.path.write_text(set_profile_flag(TOML, "work", "disabled", True))
         self.cfg = self.reload()

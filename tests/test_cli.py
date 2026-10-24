@@ -136,6 +136,27 @@ class CliTest(unittest.TestCase):
         self.assertEqual(fg.call_args_list[1].args[3], "b")
         self.assertFalse(fg.call_args_list[1].kwargs["dry_run"])
 
+    def test_statusline_passes_wrapped_command_and_stdin(self):
+        stdin = mock.Mock()
+        stdin.buffer.read.return_value = b'{"x": 1}'
+        with mock.patch("sampan.usage.cmd_statusline", return_value=3) as sl, mock.patch("sys.stdin", stdin):
+            self.assertEqual(cli.main(["statusline", "--", "npx", "-y", "ccstatusline@latest"]), 3)
+            cfg, _out, wrapped = sl.call_args.args
+            self.assertIs(cfg, self.cfg)
+            self.assertEqual(wrapped, ["npx", "-y", "ccstatusline@latest"])
+            self.assertEqual(sl.call_args.kwargs["stdin"], b'{"x": 1}')
+            cli.main(["statusline"])
+            self.assertEqual(sl.call_args.args[2], [])
+
+    def test_statusline_runs_wrapped_even_when_config_fails(self):
+        stdin = mock.Mock()
+        stdin.buffer.read.return_value = b"{}"
+        with mock.patch("sampan.cli.load_config", side_effect=cli.ConfigError("bad")), \
+                mock.patch("sampan.usage.cmd_statusline", return_value=0) as sl, mock.patch("sys.stdin", stdin):
+            self.assertEqual(cli.main(["statusline", "--", "echo", "hi"]), 0)
+        self.assertIsNone(sl.call_args.args[0])
+        self.assertEqual(sl.call_args.args[2], ["echo", "hi"])
+
     def test_session_group_is_gone(self):
         with self.assertRaises(SystemExit), mock.patch("sys.stderr", io.StringIO()):
             cli.main(["session", "save"])

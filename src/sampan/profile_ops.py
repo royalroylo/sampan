@@ -3,9 +3,10 @@ import os
 import shutil
 import tomllib
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from pathlib import Path
 
-from . import actionlog, registry
+from . import actionlog, registry, usage
 from .clock import now_iso, now_stamp
 from .config import ConfigError, load_config
 from .config_edit import NAME_RE, _k, _s, append_section, remove_profile, remove_table, rename_profile, set_profile_flag
@@ -133,20 +134,27 @@ def profile_rows(cfg, run, rows, *, env=None):
     return result
 
 
-def _line(cfg, pr):
+def _line(cfg, pr, usage_str=""):
     state = "停用" if pr.disabled else ("使用中（預設）" if pr.default else "使用中")
     parts = [pr.name, pr.agent, _disp(pr.config_dir, cfg.home), pr.account, state, f"{pr.running} 個執行中"]
     if pr.plugins is not None:
         parts.append(f"plugin {pr.plugins}")
+    if usage_str:
+        parts.append(usage_str)
     return "  ".join(parts)
 
 
-def cmd_profile_list(cfg, run, out, *, env=None):
+def _usage(cfg, p):
+    return usage.codex_usage(p) if p.agent == "codex" else usage.claude_usage(cfg, p.name)
+
+
+def cmd_profile_list(cfg, run, out, *, env=None, now=None):
+    now = now or datetime.now(timezone.utc)
     rows = status_rows(cfg, run)
     if getattr(rows, "warning", None):
         out(f"⚠ {rows.warning}；執行中數字不準")
     for pr in profile_rows(cfg, run, rows, env=env):
-        out(_line(cfg, pr))
+        out(_line(cfg, pr, usage.usage_text(_usage(cfg, cfg.all_profiles[pr.name]), now)))
     return 0
 
 
