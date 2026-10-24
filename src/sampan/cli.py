@@ -126,6 +126,8 @@ def _statusline(rest):
     goes to stdout unchanged; sampan's own errors only ever go to stderr."""
     import os
 
+    if rest[:1] in (["install"], ["uninstall"]):
+        return _statusline_setup(rest[0], rest[1:])
     from .usage import cmd_statusline
     if rest[:1] == ["--"]:
         rest = rest[1:]
@@ -138,6 +140,39 @@ def _statusline(rest):
     except Exception:
         stdin = b""
     return cmd_statusline(cfg, out, list(rest), stdin=stdin, env=os.environ)
+
+
+def _statusline_setup(action, rest):
+    """sampan statusline install|uninstall [--profile P] [--yes]: interactive, so normal imports are fine."""
+    from . import statusline_setup
+    from .doctor import current_sampan
+    ap = argparse.ArgumentParser(prog=f"sampan statusline {action}")
+    ap.add_argument("--profile", action="append", default=[], help="只處理這個 profile（可重複）；預設全部使用中的 Claude profile")
+    ap.add_argument("--yes", "-y", action="store_true", help="不再問確定")
+    args = ap.parse_args(rest)
+    try:
+        cfg = load_config(paths.config_path(), state_dir=paths.state_dir())
+    except ConfigError as e:
+        print(f"❌ {e}", file=sys.stderr)
+        return 2
+    unknown = [n for n in args.profile if n not in cfg.profiles]
+    if unknown:
+        out(f"❌ 找不到使用中的 Claude profile：{', '.join(unknown)}")
+        return 2
+    profiles = [cfg.profiles[n] for n in args.profile] or list(cfg.profiles.values())
+
+    def ask(prompt):
+        try:
+            return input(prompt)
+        except EOFError:
+            return ""
+    try:
+        if action == "install":
+            return statusline_setup.install(cfg, out, ask, profiles, current_sampan(), yes=args.yes)
+        return statusline_setup.uninstall(cfg, out, ask, profiles, yes=args.yes)
+    except KeyboardInterrupt:
+        out("\n已取消")
+        return 130
 
 
 def _current_tmux_session(run):

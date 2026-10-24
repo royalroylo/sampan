@@ -427,8 +427,19 @@ def cmd_init(cfg_path, state_dir, run, out, ask, *, home, sampan_path, env=None,
     else:
         _offer_launchd(run, out, ask, home=home, state_dir=state_dir, sampan_path=sampan_path, first=first, uid=uid,
                        env=sampan_env(env))
+    _offer_statusline(cfg, ask, out, sampan_path)
     _path_hint(out, home, env)
     return 0
+
+
+def _offer_statusline(cfg, ask, out, sampan_path):
+    from . import statusline_setup
+    present = [p for p in cfg.profiles.values() if Path(p.config_dir).is_dir()]
+    if all(statusline_setup.planned(cfg, p, sampan_path)[0] == statusline_setup.planned(cfg, p, sampan_path)[1]
+           for p in present):
+        return
+    if _yes(ask, "要安裝 sampan 狀態列嗎？（記下 Claude 的 5h／週額度；原本的狀態列照常顯示）(y/N): ", False):
+        statusline_setup.install(cfg, out, ask, present, sampan_path, yes=True)
 
 
 # ---------- profile add ----------

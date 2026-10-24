@@ -222,6 +222,26 @@ def _hooks(cfg):
     return out
 
 
+def _statusline(cfg, now):
+    from . import statusline_setup as sl
+    from .usage import claude_usage, usage_text
+    out = []
+    for p in _present(cfg):
+        data, _why = sl._read(p)
+        if data is None:
+            continue
+        toks = sl._tokens(sl._command(data) or "")
+        if toks is None:
+            out.append(Check("info", f"{p.name}：沒有安裝 sampan 狀態列",
+                             "要記下 Claude 的 5h／週額度：sampan statusline install"))
+        elif os.path.isabs(toks[0]) and not Path(toks[0]).exists():
+            out.append(Check("warn", f"{p.name}：狀態列指向的 sampan 已不存在（{toks[0]}）",
+                             "重新安裝：sampan statusline install"))
+        else:
+            out.append(Check("info", f"{p.name}：狀態列已接上（額度 {usage_text(claude_usage(cfg, p), now) or '還沒有資料'}）"))
+    return out
+
+
 def _codex(cfg):
     if not cfg.codex.enabled:
         return []
@@ -281,7 +301,7 @@ def run_checks(cfg, run, *, now, uid, sampan_path=None, proc_root=PROC_ROOT, whi
     current = current or update_mod.current_version()
     latest_fn = latest_fn or (lambda: update_mod.check(cfg.state_dir, run=run)[0])
     return (_version(current, latest_fn) + _deps(cfg, which, env, platform) + _profile_dirs(cfg) + _owners(cfg, uid) + _plugins(cfg) + _auth(cfg, run) + _stale(cfg, run)
-            + _hooks(cfg) + _codex(cfg) + _multi_agent(cfg, run, proc_root) + _action_log(cfg)
+            + _hooks(cfg) + _statusline(cfg, now) + _codex(cfg) + _multi_agent(cfg, run, proc_root) + _action_log(cfg)
             + (_launchd(cfg, run, sampan_path) + _save_log(cfg, now) if platform == "darwin" else
                [Check("info", "這台不是 macOS，沒有自動存檔排程（需要時自己跑 sampan save，或用 cron／systemd timer）")]))
 
