@@ -4,6 +4,7 @@ import tomllib
 import unittest
 from pathlib import Path
 
+from sampan import actionlog
 from sampan.plugin_apply import apply_changes
 from sampan.plugin_view import Change, snapshot
 from tests.fakes import FakeRunner, cp
@@ -688,6 +689,9 @@ class RedactTest(unittest.TestCase):
         apply_changes(cfg, run, out.append, PID, [Change("work", True, True, False)], stamp=lambda: "S")
         self.assertFalse(any("SECRET" in line for line in out))
         self.assertIn("https://***@github.com/o/r", "\n".join(out))
+        log = actionlog.log_path(cfg).read_text()
+        self.assertIn(f"[plugin 存檔 {PID}] ❌ work：", log)
+        self.assertNotIn("SECRET", log)
 
 
 if __name__ == "__main__":

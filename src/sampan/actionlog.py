@@ -1,0 +1,51 @@
+"""actions.log under the state dir: every message a plugin / marketplace / restart / forget / switch action printed,
+one line each with the time and the action, so an earlier action's messages can be read back (the screen keeps only
+the last one). Tokens in URLs are redacted; a log that can't be written never fails the action."""
+import os
+from datetime import datetime
+
+from .config import redact
+from .fsutil import PRIVATE_FILE, private_dir, try_chmod
+
+LOG_NAME = "actions.log"
+MAX_BYTES = 1 << 20  # past this the log becomes actions.log.1 (one old copy is kept)
+
+
+def log_path(cfg):
+    return cfg.state_dir / LOG_NAME
+
+
+def _now():
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def append(cfg, label, lines, *, now=_now):
+    if getattr(cfg, "state_dir", None) is None:  # a stand-in cfg (tests) has nowhere to log
+        return
+    path = log_path(cfg)
+    try:
+        private_dir(path.parent)
+        if path.exists() and path.stat().st_size >= MAX_BYTES:
+            os.replace(path, path.with_name(LOG_NAME + ".1"))
+        with os.fdopen(os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, PRIVATE_FILE), "a",
+                       encoding="utf-8") as fh:
+            try_chmod(fh.fileno(), PRIVATE_FILE)
+            stamp = now()
+            fh.writelines(f"{stamp} [{label}] {redact(line)}\n" for line in lines)
+    except OSError:
+        pass
+
+
+def tee(cfg, label, out, *, now=_now):
+    """out that also appends each non-empty line to actions.log under label. An out that already logs is returned
+    as it is, so an action run inside another one is logged once, under the outer label."""
+    if getattr(out, "actionlog", False):
+        return out
+
+    def logged(line=""):
+        out(line)
+        lines = [s for s in str(line).split("\n") if s.strip()]
+        if lines:
+            append(cfg, label, lines, now=now)
+    logged.actionlog = True
+    return logged

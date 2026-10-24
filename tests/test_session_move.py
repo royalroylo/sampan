@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from sampan import actionlog
 from sampan.registry import Row, load_rows, write_rows
 from sampan.session_run import cmd_move, cmd_switch
 from tests.fakes import FakeRunner, cp, pane_line, ps_line
@@ -674,6 +675,8 @@ class SwitchTest(MoveFixture):
         text = "\n".join(self.msgs)
         self.assertIn("已把逐字稿搬到 work", text)
         self.assertIn("✔ 994-monitor 已換到 work", text)
+        log = actionlog.log_path(self.cfg).read_text()
+        self.assertIn("[switch 994-monitor → work] ✔ 994-monitor 已換到 work", log)
 
     def test_shared_projects_moves_nothing(self):
         work = self.cfg.profiles["work"].config_dir

@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace as NS
 from unittest import mock
 
+from sampan import actionlog
 from sampan.config import SOURCE_RULE
 from sampan.plugin_apply import Applied
 from sampan.plugin_view import CatalogEntry, Change, ProfileChoice, profile_choices, snapshot
@@ -251,13 +252,16 @@ class FlowTest(unittest.TestCase):
         self.assertEqual(rc, 3)
         self.assertEqual(keys, ["要生效需重開 work 的 session（2 個）：按 R 立刻重開，其他鍵稍後"])
         self.assertEqual(calls, [(["work"], {"own_pane": "%1", "on_prompt": None})])
-        self.assertIn(keys[0], self.out)
+        self.assertNotIn(keys[0], self.out)  # shown once, as getkey's prompt
         self.out.clear()
         rc = pa.restart_offer(self.cfg, None, self.out.append, None, ["work"], lambda p: "x",
                               rows_fn=lambda c, r: rows, restart_fn=restart)
         self.assertEqual(rc, 0)
         self.assertEqual(len(calls), 1)
         self.assertEqual(self.out[-1], "稍後要生效：sampan stop --profile work 後 sampan restore")
+        log = actionlog.log_path(self.cfg).read_text().splitlines()
+        self.assertTrue(log[-2].endswith("[重開] 要生效需重開 work 的 session（2 個）：按 R 立刻重開，其他鍵稍後 → 稍後"))
+        self.assertTrue(log[-1].endswith("[重開] 稍後要生效：sampan stop --profile work 後 sampan restore"))
         self.out.clear()
         rc = pa.restart_offer(self.cfg, None, self.out.append, None, ["work"], lambda p: "R",
                               rows_fn=lambda c, r: [], restart_fn=restart)

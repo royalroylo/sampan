@@ -9,7 +9,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import config_edit
+from . import actionlog, config_edit
 from .clock import now_stamp
 from .config import SOURCE_RULE, redact, same_source, strip_credentials, usable_source, valid_source
 from .fsutil import atomic_write
@@ -114,6 +114,7 @@ def _commands(pid, ch, source):
 
 
 def apply_changes(cfg, run, out, pid, changes, *, new_source=None, stamp=now_stamp):
+    out = actionlog.tee(cfg, f"plugin 存檔 {pid}", out)
     mkt, short = _mkt(pid), pid.split("@", 1)[0]
     text = cfg.path.read_text()  # read now: the file may have been edited since the screen opened
     source = new_source or cfg.marketplaces.get(mkt)
@@ -209,6 +210,7 @@ def apply_market(cfg, run, out, ask, name, changes, *, source, stamp=now_stamp):
 
     name is None when adding a new source: it is learned from the first profile that added it. source is the source
     to add (None for a marketplace outside the config; such a one can only be removed)."""
+    out = actionlog.tee(cfg, f"來源 {name or source}", out)
     text = cfg.path.read_text()
     if any(ch.add for ch in changes):
         refusal = refuse_credentials(source)
@@ -267,6 +269,7 @@ def apply_market(cfg, run, out, ask, name, changes, *, source, stamp=now_stamp):
 
 def update_markets(cfg, run, out, names=None):
     """`claude plugin marketplace update <name>` in each profile that has the marketplace (names None: all of them)."""
+    out = actionlog.tee(cfg, "來源更新", out)
     for prof in cfg.profiles.values():
         env = prof.env(os.environ)
         for m in sorted(read_state(prof).marketplaces):
@@ -299,6 +302,7 @@ def plan_update(snap, pids=None):
 
 def update_plugins(cfg, run, out, pids=None):
     """Run plan_update; report only versions that really changed. Returns the profiles with a change."""
+    out = actionlog.tee(cfg, "plugin 更新", out)
     plan = plan_update(snapshot(cfg), pids)
     changed = []
     for name, cmds in plan.items():
@@ -322,6 +326,7 @@ def update_plugins(cfg, run, out, pids=None):
 
 def check_latest(cfg, run, out, snap):
     """Refresh each profile's marketplace clones (network), then read the newest version of every installed plugin."""
+    out = actionlog.tee(cfg, "檢查新版", out)
     result = {}
     for name, st in snap.states.items():
         if name in snap.missing:
@@ -357,6 +362,7 @@ def restart_hint(counts):
 
 def restart_profiles(cfg, run, out, ask, profiles, *, own_pane=None, on_prompt=None, stop_fn=None, restore_fn=None):
     """Stop idle sessions of the profiles and restore exactly those; busy / own-pane ones are listed once. Returns the worst rc."""
+    out = actionlog.tee(cfg, "重開", out)
     from . import restore, session_run  # lazy: session_run imports a lot
     stop_fn = stop_fn or session_run.cmd_stop
     restore_fn = restore_fn or restore.cmd_restore

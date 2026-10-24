@@ -4,6 +4,7 @@ import time
 import uuid
 from pathlib import Path
 
+from . import actionlog
 from .claude_state import move_transcript, transcript_carry, transcript_problem
 from .clock import now_iso
 from .codex_state import _is_codex, codex_pid_in_pane, find_rollout
@@ -210,6 +211,8 @@ def cmd_rename(cfg, run, out, old, new):
 def cmd_forget(cfg, run, out, name, *, dry_run=False):
     """Remove a row from the registry. Only for a session that is not in tmux; the transcript, the rollout and
     the tmux server are never touched, and the previous registry stays in history/."""
+    if not dry_run:
+        out = actionlog.tee(cfg, f"forget {name}", out)
     with lock(cfg.state_dir):
         rows = _load(cfg, out)
         if rows is None:
@@ -657,6 +660,8 @@ def cmd_switch(cfg, run, out, name, profile, *, dry_run=False, own_pane=None, on
     CLAUDE_CONFIG_DIR → trust only that directory → save. A stopped one gets its registry row changed and is restored
     under the new profile right away. A transcript the new profile cannot see is moved to it, never copied, so there is
     only ever one copy of the conversation."""
+    if not dry_run:
+        out = actionlog.tee(cfg, f"switch {name} → {profile}", out)
     rows = _load(cfg, out)
     if rows is None:
         return 2

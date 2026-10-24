@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from sampan import actionlog
 from sampan.registry import Row, load_rows, write_rows
 from sampan.session_run import cmd_forget, cmd_new, cmd_rename, cmd_set_state
 from tests.fakes import FakeRunner, cp, pane_line, ps_line
@@ -267,6 +268,9 @@ class ForgetTest(Base):
         self.assertIn("  對話還在：", self.msgs[1])
         self.assertIn(f"--resume {A}", self.msgs[1])
         self.assertEqual(r.called(["tmux", "-u", "kill-session"]), [])
+        log = actionlog.log_path(self.cfg).read_text()
+        self.assertIn("[forget u] ✔ 已從登記表移除 u", log)
+        self.assertIn("[forget u]   對話還在：", log)
 
     def test_forget_prints_id_when_it_cannot_be_resumed(self):
         self.registry([Row("u", "claude", "gone", "not-a-uuid", str(self.cwd), "retired", "t", "srv", None)])

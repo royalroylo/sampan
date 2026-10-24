@@ -2,6 +2,7 @@
 Also the --plain plugin menu (plain_plugins)."""
 import re
 
+from .. import actionlog
 from ..config import SOURCE_RULE, ConfigError, load_config, usable_source
 from ..marketplace_view import build_market_rows, market_choices, market_preview, plan_market
 from ..plugin_apply import (
@@ -149,16 +150,19 @@ def market_add_flow(out, ask):
 
 
 def restart_offer(cfg, run, out, ask, changed, getkey, *, own_pane=None, on_prompt=None, rows_fn=status_rows, **fns):
-    """Offer to restart the running sessions of the changed profiles; only the R key restarts.
+    """Offer to restart the running sessions of the changed profiles; only the R key restarts. getkey(prompt) shows
+    the hint and returns the key.
     fns: restart_fn (default restart_profiles) and anything else it takes (stop_fn, restore_fn)."""
     restart_fn = fns.pop("restart_fn", restart_profiles)
+    out = actionlog.tee(cfg, "重開", out)
     counts = running_counts(rows_fn(cfg, run), changed)
     if not counts:
         out("（這些 profile 目前沒有執行中的 session）")
         return 0
     hint = restart_hint(counts)
-    out(hint)
-    if getkey(hint) == "R":
+    key = getkey(hint)  # getkey shows the hint as its prompt: printing it as well showed it twice
+    actionlog.append(cfg, "重開", [f"{hint} → {'R' if key == 'R' else '稍後'}"])
+    if key == "R":
         return restart_fn(cfg, run, out, ask, list(counts), own_pane=own_pane, on_prompt=on_prompt, **fns)
     for p in counts:
         out(f"稍後要生效：sampan stop --profile {p} 後 sampan restore")
