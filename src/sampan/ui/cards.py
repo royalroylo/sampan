@@ -97,9 +97,9 @@ def row_keys(row, info):
     """The keys available for this row (last line of the info card)."""
     state, live = row.state, (info or {}).get("panes", 0) > 0
     if state is State.RETIRED:
-        keys = (["Enter 接上"] if live else []) + ["a activate"]
+        keys = (["Enter 接上"] if live else []) + ["a activate", "X 移除"]
     elif state is State.STOPPED:
-        keys = ["Enter 接回"] + (["P 換 profile"] if row.agent == "claude" else []) + ["e 改名", "r retire"]
+        keys = ["Enter 接回"] + (["P 換 profile"] if row.agent == "claude" else []) + ["e 改名", "r retire", "X 移除"]
     elif state is State.RUNNING:
         keys = ["Enter 接上", "s 停掉", "m 搬"] + (["P 換 profile"] if row.agent == "claude" else []) + ["e 改名", "r retire"]
     else:

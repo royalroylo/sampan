@@ -37,7 +37,7 @@ callable (`runner.py`). That is what makes the suite fast and safe: tests pass a
 - sampan presses no key the user did not choose. The only automatic answer is `sampan move` pressing "trust" when the
   prompt's path is exactly the destination. A prompt that cannot be read gets no keys.
 - `save` (and so the schedule) never restores, starts, moves or stops anything.
-- The registry never deletes a row by itself. A session whose tmux is gone becomes "stopped", not removed. If tmux itself
+- The registry never deletes a row by itself; only `sampan forget` (or `X`), which the user confirms, removes one. A session whose tmux is gone becomes "stopped", not removed. If tmux itself
   cannot be read, the state is "unknown", never "stopped".
 - Every write is atomic, and the previous registry is copied to `history/` first. Everything written under the
   state dir is private (files `600`, directories `700`, whatever the umask; best-effort where chmod is refused), and the

@@ -37,6 +37,7 @@ class UiTest(unittest.TestCase):
             move_fn=lambda cfg, run, out, name, dest, **kw: self.calls.append(("move", name, dest, kw)) or 0,
             switch_fn=lambda cfg, run, out, name, prof, **kw: self.calls.append(("switch", name, prof, kw)) or 0,
             rename_fn=lambda cfg, run, out, old, new: self.calls.append(("rename", old, new)) or 0,
+            forget_fn=lambda cfg, run, out, name: self.calls.append(("forget", name)) or 0,
             restore_fn=lambda cfg, run, out, ask, **kw: self.calls.append(("restore", kw)) or 0,
             restore_picker_fn=restore_picker,
             adopt_fn=lambda cfg, run, out, ask, **kw: self.calls.append(("adopt", kw)) or 0,
@@ -590,6 +591,7 @@ class PickerTest(unittest.TestCase):
 
     def test_w_is_save_even_with_empty_list(self):
         self.assertEqual(self.p.key("w"), ("save", []))
+        self.assertEqual(Picker(ROWS).key("X"), ("forget", ["a"]))
         self.assertEqual(Picker([]).key("w"), ("save", []))
 
     def test_capital_r_is_restore(self):
@@ -804,8 +806,13 @@ class PickerJumpSearchTest(unittest.TestCase):
 class InteractiveUiTest(UiTest):
     def ui_keys(self, action, answers=(), current=None):
         answers = iter(answers)
+        self.asked = []
+
+        def ask(p):
+            self.asked.append(p)
+            return next(answers)
         return cmd_ui(
-            self.cfg, self.r, self.msgs.append, lambda _p: next(answers),
+            self.cfg, self.r, self.msgs.append, ask,
             current_session=current, own_pane="%9", rows_fn=lambda c, r: ROWS,
             picker_fn=lambda rows, cur: action,
             exec_fn=lambda *a: self.execs.append(a),
@@ -815,6 +822,7 @@ class InteractiveUiTest(UiTest):
             move_fn=lambda cfg, run, out, name, dest, **kw: self.calls.append(("move", name, dest)) or 0,
             switch_fn=lambda cfg, run, out, name, prof, **kw: self.calls.append(("switch", name, prof, kw)) or 0,
             rename_fn=lambda cfg, run, out, old, new: self.calls.append(("rename", old, new)) or 0,
+            forget_fn=lambda cfg, run, out, name: self.calls.append(("forget", name)) or 0,
             restore_fn=lambda cfg, run, out, ask, **kw: self.calls.append(("restore",)) or 0,
             adopt_fn=lambda cfg, run, out, ask, **kw: self.calls.append(("adopt",)) or 0,
             save_fn=lambda cfg, run, out, **kw: self.calls.append(("save",)) or 0,
@@ -848,6 +856,20 @@ class InteractiveUiTest(UiTest):
     def test_move_confirms_first(self):
         self.ui_keys(("move", ["a"]), ["/tmp", "y"])
         self.assertEqual(self.calls, [("move", "a", str(Path("/tmp").resolve()))])
+
+    def test_ui_X_confirms_then_forgets(self):
+        self.ui_keys(("forget", ["old"]), ["y"])
+        self.assertEqual(self.calls, [("forget", "old")])
+        self.assertIn("從登記表移除 old？之後不會再列出，也不會被 R 接回；對話紀錄不刪 (y/N)", "\n".join(self.asked))
+
+    def test_ui_X_n_cancels(self):
+        self.ui_keys(("forget", ["old"]), ["n"])
+        self.assertEqual(self.calls, [])
+        self.assertIn("已取消", self.msgs)
+
+    def test_plain_X_picks_by_number(self):
+        self.ui(["X", "3", "y"])
+        self.assertEqual(self.calls, [("forget", "old")])
 
     def test_state_and_new_and_quit(self):
         self.ui_keys(("retired", ["a"]))

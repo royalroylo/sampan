@@ -180,6 +180,8 @@ class Picker:
             return ("switch", [self._here()])
         if k == "e":
             return ("rename", [self._here()])
+        if k == "X":
+            return ("forget", [self._here()])
         if k in ("r", "a"):
             return ("retired" if k == "r" else "active", [self._here()])
         return None

@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from sampan.registry import Row, load_rows, write_rows
-from sampan.session_run import cmd_new, cmd_rename, cmd_set_state
+from sampan.session_run import cmd_forget, cmd_new, cmd_rename, cmd_set_state
 from tests.fakes import FakeRunner, cp, pane_line, ps_line
 from tests.helpers import make_env
 from tests.test_claude_state import write_session
@@ -244,6 +244,57 @@ class NewAndStateTest(Base):
         self.assertEqual(self.cfg.registry_path.read_text(), before)
         self.assertTrue(any("bogus" in m for m in self.msgs))
 
+
+
+class ForgetTest(Base):
+    def setUp(self):
+        super().setUp()
+        self.live = set()
+        self.registry([Row("u", "claude", "alice", A, str(self.cwd), "retired", "t", "srv", None),
+                       Row("other", "claude", "alice", B, str(self.cwd), "active", "t", "srv", None)])
+
+    def runner(self):
+        r = super().runner()
+        r.on(["tmux", "-u", "has-session"], lambda a: cp(rc=0 if a[-1].lstrip("=") in self.live else 1))
+        return r
+
+    def test_forget_removes_row_keeps_history_and_prints_resume_line(self):
+        r = self.runner()
+        self.assertEqual(cmd_forget(self.cfg, r, self.msgs.append, "u"), 0)
+        self.assertEqual([x.tmux for x in load_rows(self.cfg.registry_path)], ["other"])
+        self.assertTrue(any("u" in [x.tmux for x in load_rows(f)] for f in self.cfg.history_dir.iterdir()))
+        self.assertEqual(self.msgs[0], "✔ 已從登記表移除 u")
+        self.assertIn("  對話還在：", self.msgs[1])
+        self.assertIn(f"--resume {A}", self.msgs[1])
+        self.assertEqual(r.called(["tmux", "-u", "kill-session"]), [])
+
+    def test_forget_prints_id_when_it_cannot_be_resumed(self):
+        self.registry([Row("u", "claude", "gone", "not-a-uuid", str(self.cwd), "retired", "t", "srv", None)])
+        self.assertEqual(cmd_forget(self.cfg, self.runner(), self.msgs.append, "u"), 0)
+        self.assertEqual(self.msgs[1], "  對話 id not-a-uuid")
+
+    def test_forget_refuses_running_and_missing(self):
+        before = self.cfg.registry_path.read_text()
+        self.live = {"u"}
+        self.assertEqual(cmd_forget(self.cfg, self.runner(), self.msgs.append, "u"), 1)
+        self.assertEqual(self.msgs[-1], "❌ u 還在 tmux 裡；先 sampan stop u")
+        self.assertEqual(cmd_forget(self.cfg, self.runner(), self.msgs.append, "nope"), 2)
+        self.assertEqual(self.msgs[-1], "❌ 登記表沒有 nope")
+        self.assertEqual(self.cfg.registry_path.read_text(), before)
+
+    def test_forget_refuses_when_tmux_unreadable(self):
+        before = self.cfg.registry_path.read_text()
+        r = self.runner()
+        r.on(["tmux", "-u", "list-panes"], cp(rc=1, err="boom"))
+        self.assertEqual(cmd_forget(self.cfg, r, self.msgs.append, "u"), 2)
+        self.assertEqual(self.cfg.registry_path.read_text(), before)
+
+    def test_forget_dry_run_changes_nothing(self):
+        before = self.cfg.registry_path.read_text()
+        self.assertEqual(cmd_forget(self.cfg, self.runner(), self.msgs.append, "u", dry_run=True), 0)
+        self.assertEqual(self.cfg.registry_path.read_text(), before)
+        self.assertIn("u", self.msgs[0])
+        self.assertNotIn("✔", self.msgs[0])
 
 
 class RenameTest(Base):

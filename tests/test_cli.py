@@ -126,6 +126,16 @@ class CliTest(unittest.TestCase):
         kw = sw.call_args.kwargs
         self.assertEqual((kw["dry_run"], kw["timeout"], kw["own_pane"], kw["on_prompt"]), (True, 5, "%4", None))
 
+    def test_cli_forget_parses(self):
+        with mock.patch("sampan.session_run.cmd_forget", return_value=0) as fg, \
+                mock.patch("sys.stdin.isatty", return_value=False):
+            self.assertEqual(cli.main(["forget", "a", "--dry-run"]), 0)
+            self.assertEqual(cli.main(["forget", "b"]), 0)
+        self.assertEqual(fg.call_args_list[0].args[3], "a")
+        self.assertTrue(fg.call_args_list[0].kwargs["dry_run"])
+        self.assertEqual(fg.call_args_list[1].args[3], "b")
+        self.assertFalse(fg.call_args_list[1].kwargs["dry_run"])
+
     def test_session_group_is_gone(self):
         with self.assertRaises(SystemExit), mock.patch("sys.stderr", io.StringIO()):
             cli.main(["session", "save"])

@@ -14,7 +14,7 @@ from ..tmux import TMUX, Tmux
 from .dirpick import recent_dirs, sessions_by_dir
 from .state import row_text
 
-HELP = ("編號 = 接上／切過去（已停止的先接回）；s 停掉　m 搬目錄　P 換 profile　e 改名　R 接回　A 接手 tmux 外的　r retire　a activate"
+HELP = ("編號 = 接上／切過去（已停止的先接回）；s 停掉　m 搬目錄　P 換 profile　e 改名　R 接回　A 接手 tmux 外的　r retire　a activate　X 移除"
         "　n 開新 session　w 立即存檔　p plugin 管理　/文字 搜尋　q 離開")
 
 
@@ -204,6 +204,14 @@ def _rename(cfg, run, out, ask, name, rename_fn):
     return rename_fn(cfg, run, out, name, new)
 
 
+def _forget(cfg, run, out, ask, name, forget_fn):
+    """X: confirm, then remove the row from the registry (the conversation itself is not deleted)."""
+    if (_ask(ask, f"從登記表移除 {name}？之後不會再列出，也不會被 R 接回；對話紀錄不刪 (y/N): ") or "").lower() != "y":
+        out("已取消")
+        return 0
+    return forget_fn(cfg, run, out, name)
+
+
 def _plain_search(ask, out, rows, query):
     """/text: case-insensitive substring match on the name. One hit attaches; several are listed with their original numbers and one is asked for."""
     hits = [(i, r) for i, r in enumerate(rows, 1) if query and query.lower() in r.name.lower()]
@@ -243,6 +251,9 @@ def _plain_action(ask, out, rows, current):
     if choice == "P":
         picked = _pick(ask, out, rows, "要換哪一個的 profile？(編號): ", many=False)
         return ("switch", picked) if picked else ("quit" if picked is None else "invalid", [])
+    if choice == "X":
+        picked = _pick(ask, out, rows, "要從登記表移除哪一個？(編號): ", many=False)
+        return ("forget", picked) if picked else ("quit" if picked is None else "invalid", [])
     if c == "n":
         return ("new", [])
     if choice == "p":
@@ -320,7 +331,7 @@ def _first_opened(out, opened, verb):
 def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, picker_fn=None,
            rows_fn=status_rows, exec_fn=os.execvp, stop_fn=session_run.cmd_stop,
            new_fn=session_run.cmd_new, set_state_fn=session_run.cmd_set_state, move_fn=session_run.cmd_move,
-           rename_fn=session_run.cmd_rename, switch_fn=session_run.cmd_switch,
+           rename_fn=session_run.cmd_rename, switch_fn=session_run.cmd_switch, forget_fn=session_run.cmd_forget,
            restore_fn=restore_mod.cmd_restore, restore_picker_fn=None,
            adopt_fn=adopt_mod.cmd_adopt, adopt_picker_fn=None, save_fn=save_mod.cmd_save, loop=False,
            attach_fn=None, choose_dir_fn=None, updater=None, update_fn=update_mod.do_update, argv=(), prompt_fn=None, plugins_fn=None):
@@ -404,6 +415,7 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
         "rename": lambda names, rows, kw: (_rename(cfg, run, out, ask, names[0], rename_fn), None),
         "move": _move_row,
         "switch": _switch_row,
+        "forget": lambda names, rows, kw: (_forget(cfg, run, out, ask, names[0], forget_fn), None),
         "plugins": _plugins,
         "retired": lambda names, rows, kw: (set_state_fn(cfg, out, names[0], "retired"), None),
         "active": lambda names, rows, kw: (set_state_fn(cfg, out, names[0], "active"), None),

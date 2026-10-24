@@ -207,6 +207,38 @@ def cmd_rename(cfg, run, out, old, new):
     return 0
 
 
+def cmd_forget(cfg, run, out, name, *, dry_run=False):
+    """Remove a row from the registry. Only for a session that is not in tmux; the transcript, the rollout and
+    the tmux server are never touched, and the previous registry stays in history/."""
+    with lock(cfg.state_dir):
+        rows = _load(cfg, out)
+        if rows is None:
+            return 2
+        row = next((r for r in rows if r.tmux == name), None)
+        if row is None:
+            out(f"❌ 登記表沒有 {name}")
+            return 2
+        tmux = Tmux(run)
+        try:
+            tmux.require_panes()
+        except TmuxUnreadable as e:
+            out(f"❌ {e}；不知道 {name} 還在不在 tmux 裡，什麼都沒移除")
+            return 2
+        if tmux.has_session(name):
+            out(f"❌ {name} 還在 tmux 裡；先 sampan stop {name}")
+            return 1
+        if dry_run:
+            out(f"（dry-run）會從登記表移除 {name}，什麼都沒改")
+        else:
+            write_rows(cfg.registry_path, [r for r in rows if r is not row], now_iso(), cfg.history_dir)
+            out(f"✔ 已從登記表移除 {name}")
+    try:
+        out(f"  對話還在：{launch_line(cfg, row.agent, row.profile, resume=row.session_id, cwd=row.cwd)}")
+    except (ValueError, KeyError):
+        out(f"  對話 id {row.session_id}")
+    return 0
+
+
 def cmd_stop(cfg, run, out, *, names=(), profile=None, force=False, dry_run=False, keep_tmux=False,
              sleep=time.sleep, timeout=90, own_pane=None, kill=os.kill, proc_root=Path("/proc"),
              stopped=None, left=None):

@@ -179,7 +179,7 @@ class CardTest(unittest.TestCase):
         self.assertIn("已停止", text)
         self.assertNotIn("該跑沒跑", text)
         self.assertNotIn("tmux ", text)
-        self.assertIn("Enter 接回　P 換 profile　e 改名　r retire", text)
+        self.assertIn("Enter 接回　P 換 profile　e 改名　r retire　X 移除", text)
 
     def test_codex_card_has_no_profile(self):
         text = "\n".join(self.card(row("cx", agent="codex", profile="", sid=TID), windows=1, panes=2))
@@ -191,6 +191,12 @@ class CardTest(unittest.TestCase):
         text = "\n".join(self.card(row("old", state=State.RETIRED, agent_status="-"), windows=0, panes=0))
         self.assertIn("a activate", text)
         self.assertNotIn("Enter", text)
+
+    def test_card_keys_show_X_for_stopped_and_retired(self):
+        self.assertEqual(row_keys(row("x", state=State.STOPPED), {"panes": 0}),
+                         "Enter 接回　P 換 profile　e 改名　r retire　X 移除")
+        self.assertEqual(row_keys(row("x", state=State.RETIRED), {"panes": 0}), "a activate　X 移除")
+        self.assertNotIn("X 移除", row_keys(row("x", state=State.RUNNING), {"panes": 1}))
 
     def test_show_state_and_keys(self):
         self.assertEqual(show_state(row("x", State.STOPPED)), "已停止")
