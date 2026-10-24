@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-25
+
 ### Added
 - Profile management: `sampan profile list | rename | disable | enable | forget`, and `profile add [--dir D] [--codex]` now also adds Codex accounts. Disabled profiles are hidden, cannot start sessions and are skipped by `plugins sync`; `restore` explains why their rows are not resumed. sampan still never deletes a profile directory; the usage guide says how to remove one by hand.
 - `[profiles.X]` accepts `agent = "codex"` and `disabled = true`. An old `[codex]` table acts as an implicit Codex profile and is converted to `[profiles.<name>]` by the first `sampan profile rename / disable / enable / forget / add --codex`; once any Codex profile is in the file `[codex]` is ignored, and `[codex] enabled = false` means Codex is off.
@@ -12,6 +14,7 @@ All notable changes to this project are documented here. The format follows
 - Account lines at the top of the main list (running sessions, 5h and weekly quota; Codex quota is read from its newest rollout), and an accounts screen on `o` (rename, disable / enable, forget, install the status line, add).
 
 ### Changed
+- Documentation: release pins move to v0.8.0.
 - Codex is now a profile like Claude's. Multi-account Codex (choosing the account for a new session, switching between Codex accounts) is not supported yet: sampan uses the first enabled Codex profile.
 - `actions.log` also records profile actions.
 - `sampan codex` refuses to start when there is no enabled Codex profile, instead of running `codex` anyway.
@@ -283,7 +286,8 @@ First public release. Versions up to 0.5.3 were released privately under the nam
 ### Security
 - Credentials in git URLs are no longer shown in output.
 
-[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.7.3...HEAD
+[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/royalroylo/sampan/releases/tag/v0.8.0
 [0.7.3]: https://github.com/royalroylo/sampan/releases/tag/v0.7.3
 [0.7.2]: https://github.com/royalroylo/sampan/releases/tag/v0.7.2
 [0.7.1]: https://github.com/royalroylo/sampan/releases/tag/v0.7.1

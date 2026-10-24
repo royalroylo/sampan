@@ -26,7 +26,7 @@ curl -fsSL https://raw.githubusercontent.com/royalroylo/sampan/main/install.sh |
 或手動兩行：
 
 ```
-uv tool install git+https://github.com/royalroylo/sampan@v0.7.3
+uv tool install git+https://github.com/royalroylo/sampan@v0.8.0
 sampan init
 ```
 
