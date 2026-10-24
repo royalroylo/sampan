@@ -5,11 +5,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-24
+
 ### Added
 - `actions.log` in the state directory: the messages printed by plugin saves, `u` / `U`, `r`, marketplace changes,
   restarts (each step, and the sessions left on the old version), `forget` and `switch`, one line each with the time
   and the action (previews and cancelled actions are not logged). User names and tokens in URLs, GitHub tokens and
   `…TOKEN=` style assignments are masked; the file is 0600 and rotates to `actions.log.1` at 1 MB.
+
+### Changed
+- Documentation: release pins move to v0.7.1.
 
 ### Fixed
 - The restart question after a plugin save was shown twice.
@@ -246,7 +251,8 @@ First public release. Versions up to 0.5.3 were released privately under the nam
 ### Security
 - Credentials in git URLs are no longer shown in output.
 
-[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/royalroylo/sampan/releases/tag/v0.7.1
 [0.7.0]: https://github.com/royalroylo/sampan/releases/tag/v0.7.0
 [0.6.5]: https://github.com/royalroylo/sampan/releases/tag/v0.6.5
 [0.6.4]: https://github.com/royalroylo/sampan/releases/tag/v0.6.4
