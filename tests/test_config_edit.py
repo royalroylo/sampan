@@ -50,10 +50,21 @@ class RemovePluginTest(unittest.TestCase):
         self.assertIsNone(remove_plugin(t, "work", "z@m"))
         self.assertIsNone(remove_plugin(t, "bare", "a@m"))
 
+    def test_remove_keeps_comments(self):
+        def t(arr):
+            return f"[profiles.w]\nplugins = {arr}\n"
+        cases = [('["a", # note\n "b"]', "b", '["a" # note\n]'),
+                 ('["a", "b", # n\n "c"]', "b", '["a", # n\n "c"]'),
+                 ('["a", "b",]', "b", '["a",]'),
+                 ('[ "a" ]', "a", "[]")]
+        for arr, pid, want in cases:
+            self.assertEqual(remove_plugin(t(arr), "w", pid), t(want))
+
     def test_add_then_remove_round_trips(self):
         inline = '[profiles.work]\nplugins = ["a@m", "b@m"]\n'
         empty = "[profiles.work]\nplugins = []\n"
-        for t in (MULTI, inline, empty):
+        nocomma = '[profiles.work]\nplugins = [\n  "a@m",\n  "b@m"\n]\n'
+        for t in (MULTI, inline, empty, nocomma):
             added = add_plugin(t, "work", "x@m")
             self.assertIn("x@m", plugin_lists(added)["work"])
             self.assertEqual(remove_plugin(added, "work", "x@m"), t)

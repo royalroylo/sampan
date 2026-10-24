@@ -74,7 +74,10 @@ def _append_plugins(text, name, pids):
     comma = "" if text[last] == "," else ","
     nl = text.rfind("\n", last, close_i)
     if nl != -1:
+        # keep the array's own style: a trailing comma only if the last item already had one
         items = "".join(f"\n  {_s(p)}," for p in pids)
+        if comma:
+            items = items[:-1]
         return text[:last + 1] + comma + text[last + 1:nl] + items + text[nl:]
     return text[:last + 1] + comma + " " + ", ".join(_s(p) for p in pids) + text[last + 1:]
 
@@ -87,8 +90,6 @@ def _add_marketplaces(text, new):
     pos = _line_end(text, m.end())
     prefix = text[:pos] if text[:pos].endswith("\n") else text[:pos] + "\n"
     return prefix + entries + text[pos:]
-
-
 
 
 def add_plugin(text, profile, pid):
@@ -156,15 +157,50 @@ def remove_plugin(text, profile, pid):
     if idx is None:
         return None
     start, end, _v = items[idx]
+    own = _comma_after(text, end, close_i)
+    own = own if own is not None and own < _next_start(items, idx, close_i) else None
+    prev = None
+    if idx > 0 and own is None and idx == len(items) - 1:
+        prev = _comma_after(text, items[idx - 1][1], start)  # last item: its predecessor's comma goes too
     ls = text.rfind("\n", 0, start) + 1
     tail = _LINE_TAIL.match(text, end)
     if not text[ls:start].strip() and tail and tail.end() <= close_i and tail.group(0).endswith("\n"):
-        return text[:ls] + text[tail.end():]
-    if len(items) == 1:
-        return text[:open_i + 1] + text[close_i:]
-    if idx < len(items) - 1:
-        return text[:start] + text[items[idx + 1][0]:]
-    return text[:items[idx - 1][1]] + text[end:]
+        out = text[:ls] + text[tail.end():]
+        return out if prev is None else out[:prev] + out[prev + 1:]
+    lo, hi = start, end
+    if own is not None:
+        hi = own + 1
+    if own is not None or prev is not None or len(items) == 1:
+        while lo > open_i + 1 and text[lo - 1] in " \t":
+            lo -= 1
+    if own is not None and idx < len(items) - 1:
+        lo = start
+        while hi < close_i and text[hi] in " \t":
+            hi += 1
+    elif len(items) == 1:
+        while hi < close_i and text[hi] in " \t":
+            hi += 1
+    elif prev is None and own is None:
+        lo = start
+    out = text[:lo] + text[hi:]
+    return out if prev is None else out[:prev] + out[prev + 1:]
+
+
+def _comma_after(text, pos, limit):
+    """Index of the comma following pos (whitespace and comments skipped), or None."""
+    i = pos
+    while i < limit:
+        if text[i] == "#":
+            i = _line_end(text, i)
+        elif text[i].isspace():
+            i += 1
+        else:
+            return i if text[i] == "," else None
+    return None
+
+
+def _next_start(items, idx, close_i):
+    return items[idx + 1][0] if idx + 1 < len(items) else close_i
 
 
 def remove_marketplace(text, name):
