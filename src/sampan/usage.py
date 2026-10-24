@@ -67,6 +67,19 @@ def record_claude(cfg, profile, data, now):
     atomic_write(path, text + "\n", mode=PRIVATE_FILE)
 
 
+def move_usage(cfg, old, new):
+    """Follow a profile rename (new) or forget (new None) with sampan's own usage/<old>.json; returns an error or None."""
+    path = usage_path(cfg, old)
+    try:
+        if new is None:
+            path.unlink(missing_ok=True)
+        elif path.exists():
+            os.replace(path, usage_path(cfg, new))
+    except OSError as e:
+        return str(e)
+    return None
+
+
 def _load_window(raw):
     return _window(raw.get("used"), raw.get("resets_at")) if isinstance(raw, dict) else None
 

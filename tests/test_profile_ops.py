@@ -62,6 +62,16 @@ class RenameTest(Base):
         # every profile action is logged
         self.assertIn("[profile rename alice] ✔ 已把 profile alice 改名為 amy", (self.cfg.state_dir / "actions.log").read_text())
 
+    def test_rename_moves_usage_record(self):
+        from datetime import datetime, timezone
+
+        from sampan import usage
+        usage.record_claude(self.cfg, "alice", {"rate_limits": {"five_hour": {"used_percentage": 7, "resets_at": 4102444800}}},
+                            datetime(2026, 10, 24, tzinfo=timezone.utc))
+        self.assertEqual(self.rename("alice", "amy"), 0)
+        self.assertFalse(usage.usage_path(self.cfg, "alice").exists())
+        self.assertEqual(usage.claude_usage(self.cfg, "amy").five_hour.used, 7)
+
     def test_rename_refused_while_running(self):
         before = self.cfg.path.read_bytes()
         rc = self.rename("alice", "amy", running=["a"])
@@ -283,6 +293,29 @@ class ListTest(Base):
             profile_ops.cmd_profile_list(self.cfg, r, self.msgs.append)
         self.assertIn("work  claude  ~/.claude-profiles/work  （讀不到）  停用  0 個執行中  plugin 1", self.msgs)
 
+    def test_list_registry_error(self):
+        from sampan.registry import RegistryError
+        with mock.patch.object(profile_ops, "status_rows", side_effect=RegistryError("登記表壞了")):
+            rc = profile_ops.cmd_profile_list(self.cfg, self.runner(), self.msgs.append)
+        self.assertEqual(rc, 2)
+        self.assertEqual(self.msgs, ["❌ 登記表壞了"])
+
+    def test_account_lookups_have_a_timeout(self):
+        r = self.runner()
+        profile_ops.profile_rows(self.cfg, r, [])
+        looked = r.called(["claude", "auth", "status"]) + r.called(["codex", "login", "status"])
+        self.assertEqual(len(looked), 3)
+        self.assertTrue(all(c["timeout"] == 5 for c in looked))
+        r = FakeRunner(strict=True)
+        r.on(["claude", "auth", "status"], cp(rc=124, err="timeout"))
+        r.on(["codex", "login", "status"], cp(rc=124, err="timeout"))
+        self.assertEqual({p.account for p in profile_ops.profile_rows(self.cfg, r, [])}, {"（讀不到）"})
+
+    def test_runner_timeout_is_rc_124(self):
+        from sampan.runner import run
+        self.assertEqual(run(["sleep", "5"], timeout=0.2).returncode, 124)
+        self.assertEqual(run(["true"], timeout=5).returncode, 0)
+
     def test_codex_account_from_stderr(self):
         r = FakeRunner(strict=True)
         r.on(["claude", "auth", "status"], cp(rc=1))
@@ -354,16 +387,50 @@ class DisableTest(Base):
 class ForgetTest(Base):
     toml = set_profile_flag(TOML, "work", "disabled", True) + CODEX_SECTION
 
-    def forget(self, name, answer=None, running=()):
+    def forget(self, name, answer=None, running=(), live=(), unreadable=False):
         asked = []
 
         def ask(q):
             asked.append(q)
             return name if answer is None else answer
 
+        r = FakeRunner(strict=True)
+        r.on(["tmux", "-u", "list-panes"], cp(rc=1, err="permission denied") if unreadable else cp())
+        r.on(["tmux", "-u", "has-session"], lambda a: cp(rc=0 if a[-1].lstrip("=") in live else 1))
         with mock.patch.object(profile_ops, "running_sessions", return_value=list(running)):
-            rc = profile_ops.cmd_profile_forget(self.cfg, FakeRunner(strict=True), self.msgs.append, ask, name)
+            rc = profile_ops.cmd_profile_forget(self.cfg, r, self.msgs.append, ask, name)
         return rc, asked
+
+    def test_forget_refused_while_rows_are_still_in_tmux(self):
+        self.write_registry([Row("w1", "claude", "work", A, "/c", "active"),
+                             Row("w2", "claude", "work", B, "/c", "retired"),
+                             Row("w3", "claude", "work", B, "/c", "active")])
+        before, reg = self.cfg.path.read_bytes(), self.cfg.registry_path.read_bytes()
+        rc, _ = self.forget("work", live=("w1", "w3"))
+        self.assertEqual(rc, 1)
+        self.assertIn("❌ 這些還在 tmux 裡：w1、w3；先 sampan stop", self.msgs)
+        self.assertEqual(self.cfg.path.read_bytes(), before)
+        self.assertEqual(self.cfg.registry_path.read_bytes(), reg)
+        self.assertEqual(self.backups(), [])
+
+    def test_forget_refused_when_tmux_unreadable(self):
+        self.write_registry([Row("w1", "claude", "work", A, "/c", "active")])
+        before = self.cfg.path.read_bytes()
+        rc, _ = self.forget("work", unreadable=True)
+        self.assertEqual(rc, 2)
+        self.assertTrue(any(m.startswith("❌ 讀不到 tmux") and "什麼都沒改" in m for m in self.msgs), self.msgs)
+        self.assertEqual(self.cfg.path.read_bytes(), before)
+
+    def test_forget_deletes_usage_record(self):
+        from datetime import datetime, timezone
+
+        from sampan import usage
+        usage.record_claude(self.cfg, "work", {"rate_limits": {"five_hour": {"used_percentage": 1, "resets_at": 4102444800}}},
+                            datetime(2026, 10, 24, tzinfo=timezone.utc))
+        self.assertTrue(usage.usage_path(self.cfg, "work").exists())
+        rc, _ = self.forget("work")
+        self.assertEqual(rc, 0)
+        self.assertFalse(usage.usage_path(self.cfg, "work").exists())
 
     def test_forget_requires_disabled_and_confirmation(self):
         before = self.cfg.path.read_bytes()

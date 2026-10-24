@@ -19,6 +19,7 @@ from .status import State, status_rows
 from .tmux import Tmux, TmuxUnreadable
 
 UNKNOWN_ACCOUNT = "（讀不到）"
+ACCOUNT_TIMEOUT = 5  # seconds for `claude auth status` / `codex login status`; slower counts as unreadable
 
 
 @dataclass(frozen=True)
@@ -120,8 +121,13 @@ def _codex_account(run, config_dir, base):
 
 
 def profile_rows(cfg, run, rows, *, env=None):
-    """One ProfileRow per profile in config order; rows = status.status_rows (counts the running sessions)."""
+    """One ProfileRow per profile in config order; rows = status.status_rows (counts the running sessions).
+    Each account lookup gets ACCOUNT_TIMEOUT seconds (rc 124 then: shown as （讀不到）)."""
     base = os.environ if env is None else env
+    outer = run
+
+    def run(args, *, env=None, cwd=None):
+        return outer(args, env=env, cwd=cwd, timeout=ACCOUNT_TIMEOUT)
     result = []
     for p in cfg.all_profiles.values():
         running = sum(1 for r in rows if r.state == State.RUNNING and r.profile == p.name and r.agent == p.agent)
@@ -150,7 +156,11 @@ def _usage(cfg, p):
 
 def cmd_profile_list(cfg, run, out, *, env=None, now=None):
     now = now or datetime.now(timezone.utc)
-    rows = status_rows(cfg, run)
+    try:
+        rows = status_rows(cfg, run)
+    except registry.RegistryError as e:
+        out(f"❌ {e}")
+        return 2
     if getattr(rows, "warning", None):
         out(f"⚠ {rows.warning}；執行中數字不準")
     for pr in profile_rows(cfg, run, rows, env=env):
@@ -211,6 +221,9 @@ def cmd_profile_rename(cfg, run, out, old, new, *, proc_root=PROC_ROOT):
             except OSError as e:
                 return _undo_config(cfg, out, backups[0], e)
     out(f"✔ 已把 profile {old} 改名為 {new}（登記表 {len(hit)} 列一起改）")
+    err = usage.move_usage(cfg, old, new)
+    if err:
+        out(f"⚠ 額度紀錄 {usage.usage_path(cfg, old)} 搬不過去（{err}）")
     return 0
 
 
@@ -324,10 +337,21 @@ def cmd_profile_forget(cfg, run, out, ask, name, *, proc_root=PROC_ROOT):
         except registry.RegistryError as e:
             out(f"❌ {e}")
             return 1
+        hit = [r for r in rows if cfg.owner(r.agent, r.profile) is p]
+        if hit:
+            tmux = Tmux(run)
+            try:
+                tmux.require_panes()
+            except TmuxUnreadable as e:
+                out(f"❌ {e}；不知道 profile {name} 的 session 還在不在 tmux 裡，什麼都沒改")
+                return 2
+            live = [r.tmux for r in hit if tmux.has_session(r.tmux)]
+            if live:
+                out(f"❌ 這些還在 tmux 裡：{'、'.join(live)}；先 sampan stop")
+                return 1
         backups = []
         if edit_config(cfg, out, lambda text: _forget_text(text, name, p.agent), backups=backups) is None:
             return 1
-        hit = [r for r in rows if cfg.owner(r.agent, r.profile) is p]
         if hit:
             keep = [r for r in rows if all(r is not h for h in hit)]
             try:
@@ -335,6 +359,9 @@ def cmd_profile_forget(cfg, run, out, ask, name, *, proc_root=PROC_ROOT):
             except OSError as e:
                 return _undo_config(cfg, out, backups[0], e)
     out(f"✔ 已從設定檔拿掉 profile {name}（目錄 {_disp(p.config_dir, cfg.home)} 保留；登記表 {len(hit)} 列一起移除）")
+    err = usage.move_usage(cfg, name, None)
+    if err:
+        out(f"⚠ 額度紀錄 {usage.usage_path(cfg, name)} 刪不掉（{err}）")
     for r in hit:
         out(_resume_line(cfg, p, r))
     return 0
