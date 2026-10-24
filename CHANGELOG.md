@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-10-24
+
+### Changed
+- Documentation: release pins move to v0.7.3.
+
 ### Added
 - `actions.log` also records the answer to each startup prompt (trust, update, hooks review) during a restart or
   `switch`, and `sampan doctor` shows where the log is and when it was last written.
@@ -267,7 +272,8 @@ First public release. Versions up to 0.5.3 were released privately under the nam
 ### Security
 - Credentials in git URLs are no longer shown in output.
 
-[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.7.3...HEAD
+[0.7.3]: https://github.com/royalroylo/sampan/releases/tag/v0.7.3
 [0.7.2]: https://github.com/royalroylo/sampan/releases/tag/v0.7.2
 [0.7.1]: https://github.com/royalroylo/sampan/releases/tag/v0.7.1
 [0.7.0]: https://github.com/royalroylo/sampan/releases/tag/v0.7.0
