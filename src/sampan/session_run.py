@@ -1,4 +1,5 @@
 import os
+import re
 import signal
 import time
 import uuid
@@ -275,7 +276,7 @@ def cmd_stop(cfg, run, out, *, names=(), profile=None, force=False, dry_run=Fals
     def wanted(session, prof):
         return (not names or session in names) and (not profile or prof is None or prof == profile)
 
-    busy, busy_names, sent, skipped_self, unknown, worktrees = [], [], [], [], [], []
+    busy, busy_names, sent, skipped_self, unknown, worktrees, blind = [], [], [], [], [], [], []
     multi_hit = sorted(s for s in multi if wanted(s, None))
     for pane in panes:
         if pane.session in multi:
@@ -294,6 +295,16 @@ def cmd_stop(cfg, run, out, *, names=(), profile=None, force=False, dry_run=Fals
             busy.append(f"{pane.session}（{lc.status}）")
             busy_names.append(pane.session)
             continue
+        if _in_worktree(lc):
+            # already at the question (an earlier stop): /exit + Enter would confirm the highlighted option, and
+            # "Remove worktree" deletes the branch's commits; a screen we can't read gets no keys either
+            screen = tmux.capture(pane.pane_id)
+            if not screen.strip():
+                blind.append(pane.session)
+                continue
+            if _worktree_question(screen):
+                worktrees.append(pane.session)
+                continue
         if dry_run:
             out(f"[dry-run] {pane.session}：送 {EXIT_TEXT[lc.agent]}")
             continue
@@ -312,38 +323,46 @@ def cmd_stop(cfg, run, out, *, names=(), profile=None, force=False, dry_run=Fals
         for pid, (pane, lc) in list(waiting.items()):
             # a session that created its worktree in this run asks Keep / Remove worktree on /exit, and a wrong
             # choice deletes the branch's commits: never answer it, leave it at the question for the user
-            if lc.agent == "claude" and WORKTREE_MARK in lc.cwd and _worktree_question(tmux.capture(pane.pane_id)):
+            if _in_worktree(lc) and _worktree_question(tmux.capture(pane.pane_id)):
                 worktrees.append(waiting.pop(pid)[0].session)
         if waiting and waited % 10 == 0:
-            names = "、".join(sorted(p.session for p, _lc in waiting.values()))
-            out(f"  … 還在等 {names}（{waited}／{timeout} 秒）")
+            still = "、".join(sorted(p.session for p, _lc in waiting.values()))
+            out(f"  … 還在等 {still}（{waited}／{timeout} 秒）")
+    for pid, (pane, lc) in list(waiting.items()):  # the question may have come up after the last look
+        if _in_worktree(lc) and _worktree_question(tmux.capture(pane.pane_id)):
+            worktrees.append(waiting.pop(pid)[0].session)
     timed_out = list(waiting.values())
     if stopped is not None:
         stopped.extend(done)
     if left is not None:
-        left.extend(busy_names + worktrees + multi_hit + unknown + skipped_self + [p.session for p, _lc in timed_out])
+        left.extend(busy_names + worktrees + blind + multi_hit + unknown + skipped_self
+                    + [p.session for p, _lc in timed_out])
     if why is not None:
         why.update({s: "忙碌中" for s in busy_names} | {s: "在問要不要保留 worktree" for s in worktrees}
                    | {s: "同一個 tmux session 有多個 agent" for s in multi_hit} | {s: "無法判斷是否閒置" for s in unknown}
-                   | {s: "sampan 自己所在的 pane" for s in skipped_self}
+                   | {s: "sampan 自己所在的 pane" for s in skipped_self} | {s: "worktree，讀不到畫面" for s in blind}
                    | {p.session: f"{timeout} 秒內沒結束" for p, _lc in timed_out})
     closed, kept = _close_sessions(tmux, done) if done and not keep_tmux else ([], [])
     if force and timed_out:
         procs = list_procs(run)
         for pane, lc in timed_out:
-            if _alive(procs, lc.pid, lc.agent) and is_descendant(procs, lc.pid, pane.pane_pid):
+            if _in_worktree(lc):  # it may be at the worktree question by now; what SIGTERM does there is unknown
+                out(f"  ↷ {pane.session}：worktree session，不送 SIGTERM；請進去看看")
+            elif _alive(procs, lc.pid, lc.agent) and is_descendant(procs, lc.pid, pane.pane_pid):
                 kill(lc.pid, signal.SIGTERM)
                 out(f"  SIGTERM → {pane.session}（pid {lc.pid}）")
             else:
                 out(f"  ↷ {pane.session}：pid {lc.pid} 已不是這個 pane 的 {lc.agent}，不送 SIGTERM")
-    out(f"sampan stop：已結束 {len(done)}、忙碌中略過 {len(busy)}、worktree {len(worktrees)}、"
+    out(f"sampan stop：已結束 {len(done)}、忙碌中略過 {len(busy)}、worktree {len(worktrees) + len(blind)}、"
         f"多個 agent {len(multi_hit)}、無法判斷 {len(unknown)}、逾時 {len(timed_out)}")
     for s in closed:
         out(f"  ✔ {s}：已結束，tmux session 已關閉（sampan restore {s} 可接回）")
     for s in kept:
         out(f"  ⧉ {s}：已結束；tmux 裡還有其他視窗或 pane，保留 session")
     for s in worktrees:
-        out(f"  ⎇ {s}：/exit 後在問要不要保留 worktree，sampan 沒有替你選；請進去選「Keep worktree」，再 sampan restore {s}")
+        out(f"  ⎇ {s}：在問要不要保留 worktree，sampan 沒有替你選；請進去選「Keep worktree」，再 sampan restore {s}")
+    for s in blind:
+        out(f"  ⎇ {s}：worktree session，讀不到畫面，沒送 /exit；請自己進去 /exit")
     for b in busy:
         out(f"  ⏸ {b}：忙碌中，沒動它，請自己處理或稍後再跑一次")
     for s in multi_hit:
@@ -354,12 +373,22 @@ def cmd_stop(cfg, run, out, *, names=(), profile=None, force=False, dry_run=Fals
         out(f"  ⌛ {pane.session}：{timeout} 秒內沒結束{'' if force else '，可加 --force'}")
     for s in skipped_self:
         out(f"  ↷ {s}：這是執行 sampan 的 pane（自己），跳過；完整關機請在一般終端機執行")
-    return 1 if busy or unknown or timed_out or worktrees or multi_hit else 0
+    return 1 if busy or unknown or timed_out or worktrees or blind or multi_hit else 0
+
+
+def _in_worktree(lc):
+    return lc.agent == "claude" and WORKTREE_MARK in lc.cwd
+
+
+_KEEP_RE = re.compile(r"^\W*\d+\.\s+Keep worktree")
+_REMOVE_RE = re.compile(r"^\W*\d+\.\s+Remove worktree")
 
 
 def _worktree_question(screen):
-    """Whether the pane shows Claude's Keep / Remove worktree question (asked on /exit of a worktree it created)."""
-    return "Keep worktree" in screen and "Remove worktree" in screen
+    """Whether the bottom of the pane shows Claude's Keep / Remove worktree menu (asked on /exit of a worktree that
+    run created). Only numbered option lines near the bottom count, so the words in the scrollback don't."""
+    tail = [line.strip() for line in screen.splitlines() if line.strip()][-12:]
+    return any(_KEEP_RE.match(x) for x in tail) and any(_REMOVE_RE.match(x) for x in tail)
 
 
 def _close_sessions(tmux, sessions):
@@ -499,7 +528,7 @@ def cmd_move(cfg, run, out, name, dest, *, dry_run=False, sleep=time.sleep, time
             out(f"❌ {name} 忙碌中（{lc.status}），等它閒置再{'換' if switching else '搬'}")
             return 1
         if agent == "claude" and WORKTREE_MARK in lc.cwd:
-            out(f"❌ {name} 是 worktree session（/exit 會問要不要保留 worktree），請手動處理")
+            out(f"❌ {name} 是 worktree session（/exit 可能會問要不要保留 worktree），請手動 /exit 後再處理")
             return 1
         if lc.session_id is None:
             out(f"❌ {name}：Codex 還沒有對話（沒送出第一個 prompt），沒有可接回的，不動")

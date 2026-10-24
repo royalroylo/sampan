@@ -191,16 +191,21 @@ class StopTest(unittest.TestCase):
         self.stop(r, own_pane=None)
         self.assertEqual({a[0] for a in self.sent(r)}, {"%1", "%3"})
 
-    def worktree(self, screen=""):
+    PROMPT = "❯ "
+    QUESTION = "Exiting worktree session\n\n❯ 1. Keep worktree\n  2. Remove worktree\n"
+
+    def worktree(self, *screens):
+        """a runs in a worktree; each capture shows the next of screens (the last one repeats)."""
         write_session(self.cfg, "alice", 200, sid=A, tmux="a:@1.%1", status="idle",
                       cwd="/Users/u/proj/.claude/worktrees/feature-schedule")
         r = self.runner()
-        r.on(["tmux", "-u", "capture-pane"], lambda a: cp(out=screen))
+        seq = list(screens)
+        r.on(["tmux", "-u", "capture-pane"], lambda a: cp(out=seq.pop(0) if len(seq) > 1 else seq[0]))
         return r
 
     def test_worktree_session_without_the_question_exits_like_any_other(self):
         # a resumed session in a worktree it did not create this run: /exit just ends it (Mac mini, 2026-10-24)
-        r = self.worktree()
+        r = self.worktree(self.PROMPT)
         stopped, left = [], []
         rc = self.stop(r, names=("a",), stopped=stopped, left=left)
         self.assertEqual(self.sent(r), [["%1", "C-u"], ["%1", "/exit", "Enter"]])
@@ -209,17 +214,54 @@ class StopTest(unittest.TestCase):
     def test_worktree_question_after_exit_is_left_to_the_user(self):
         # Task 14 real-machine test: a --worktree session receiving /exit pops up a Keep/Remove worktree confirmation
         self.exit_on_keys = False
-        r = self.worktree("Exiting worktree session\n❯ 1. Keep worktree\n  2. Remove worktree\n")
+        r = self.worktree(self.PROMPT, self.PROMPT, self.QUESTION)  # shows up on the second look, not the first
         stopped, left, why = [], [], {}
         rc = self.stop(r, names=("a",), stopped=stopped, left=left, why=why)
         self.assertEqual(self.sent(r), [["%1", "C-u"], ["%1", "/exit", "Enter"]])  # nothing pressed on the question
         self.assertEqual((rc, stopped, left), (1, [], ["a"]))
         self.assertEqual(why, {"a": "在問要不要保留 worktree"})
         text = "\n".join(self.msgs)
-        self.assertIn("  ⎇ a：/exit 後在問要不要保留 worktree，sampan 沒有替你選；請進去選「Keep worktree」，再 sampan restore a",
-                      text)
-        self.assertNotIn("逾時", text.split("sampan stop：")[0])
+        self.assertIn("  ⎇ a：在問要不要保留 worktree，sampan 沒有替你選；請進去選「Keep worktree」，再 sampan restore a", text)
+        self.assertNotIn("逾時 1", text)
         self.assertIn("worktree 1", text)
+
+    def test_question_already_showing_gets_no_keys(self):
+        # a second stop while the first one's question is still open: /exit + Enter would confirm the highlighted option
+        r = self.worktree(self.QUESTION)
+        why = {}
+        self.assertEqual(self.stop(r, names=("a",), why=why), 1)
+        self.assertEqual(self.sent(r), [])
+        self.assertEqual(why, {"a": "在問要不要保留 worktree"})
+
+    def test_unreadable_worktree_screen_gets_no_keys(self):
+        r = self.worktree("")
+        why = {}
+        self.assertEqual(self.stop(r, names=("a",), why=why), 1)
+        self.assertEqual(self.sent(r), [])
+        self.assertEqual(why, {"a": "worktree，讀不到畫面"})
+        self.assertIn("  ⎇ a：worktree session，讀不到畫面，沒送 /exit；請自己進去 /exit", self.msgs)
+
+    def test_worktree_timeout_with_force_sends_no_sigterm(self):
+        self.exit_on_keys = False
+        r = self.worktree(self.PROMPT)
+        self.assertEqual(self.stop(r, names=("a",), force=True, timeout=4), 1)
+        self.assertEqual(self.killed, [])
+        self.assertIn("  ↷ a：worktree session，不送 SIGTERM；請進去看看", self.msgs)
+
+    def test_question_words_in_the_scrollback_do_not_count(self):
+        talk = "we print 1. Keep worktree and 2. Remove worktree in the docs\n" + "\n".join(f"line {i}" for i in range(20))
+        r = self.worktree(talk + "\n" + self.PROMPT)
+        stopped = []
+        self.assertEqual(self.stop(r, names=("a",), stopped=stopped), 0)
+        self.assertEqual(stopped, ["a"])
+
+    def test_restart_list_names_the_worktree_reason_end_to_end(self):
+        from sampan.plugin_apply import restart_profiles
+        r = self.worktree(self.QUESTION)
+        out = []
+        restart_profiles(self.cfg, r, out.append, None, ["alice"], own_pane="%3",
+                         stop_fn=lambda *a, **k: cmd_stop(*a, sleep=lambda _: None, proc_root=NO_PROC, **k))
+        self.assertEqual(out[-1], "⚠ 這些還在跑舊版，處理後再重開：a（在問要不要保留 worktree）、me（sampan 自己所在的 pane）")
 
     def test_left_sessions_carry_their_reason(self):
         r = self.runner()
