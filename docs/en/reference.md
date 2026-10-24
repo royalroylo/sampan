@@ -11,13 +11,13 @@ For migration or conversion scripts. A version sampan does not understand is nev
 | `version` | integer, must be `1` |
 | `[restore] recent_days` | non-negative integer, default 7; `restore` pre-checks only sessions active within this many days |
 | `[ui] start_dir` | path where the directory chooser of `n` (start new work) starts; default `~/Projects` if it exists, else `~` |
-| `[codex] enabled` | boolean, default `true`. With no `agent = "codex"` profile, `[codex]` acts in memory as an implicit Codex profile, converted to `[profiles.<name>]` by the first profile command that writes the config; `false` means Codex is off (no Codex profile), and forgetting the last Codex profile writes it |
-| `[codex] home` | Codex folder; default `$CODEX_HOME`, else `~/.codex` |
+| `[codex] enabled` | boolean, default `true`. With no `agent = "codex"` profile, `[codex]` acts in memory as an implicit Codex profile, converted to `[profiles.<name>]` by the first `sampan profile rename / disable / enable / forget / add --codex`; once any `agent = "codex"` profile exists, all of `[codex]` is ignored; `false` means Codex is off (no Codex profile), and forgetting the last Codex profile writes it |
+| `[codex] home` | Codex folder; default `$CODEX_HOME`, else `~/.codex` (only used for the implicit Codex profile) |
 | `[marketplaces] <name> = "owner/repo"` | plugin source: GitHub `owner/repo` or a git URL (`https://…`, `ssh://…`, `git@host:path`, e.g. a self-hosted Gitea). Local directories are not supported |
 | `[profiles.<name>] config_dir` | required path (`~/` allowed) |
 | `[profiles.<name>] default` | exactly one profile is `true` (it starts without `CLAUDE_CONFIG_DIR`) |
 | `[profiles.<name>] label` | display text, e.g. an account e-mail |
-| `[profiles.<name>] agent` | `"claude"` (default) or `"codex"`; for a Codex profile `config_dir` is its `CODEX_HOME`, and it has no `plugins` |
+| `[profiles.<name>] agent` | `"claude"` (default) or `"codex"`; for a Codex profile `config_dir` is its `CODEX_HOME`, and it has no `plugins`. With several Codex profiles, sampan starts Codex with the first enabled one and attributes every running Codex session to it (multi-account is not supported yet) |
 | `[profiles.<name>] disabled` | boolean; `true` disables it (hidden, cannot start sessions, skipped by plugins sync); the default profile cannot be disabled |
 | `[profiles.<name>] plugins` | list of `plugin@marketplace`; the marketplace must be in `[marketplaces]` |
 

@@ -131,9 +131,9 @@
 2. 看目錄裡有沒有連到別處的捷徑（`projects/`、`commands/` 常是 symlink，指向其他 profile 共用的資料）：`find <目錄> -maxdepth 1 -type l -ls`。
 3. 只刪目錄裡面的東西；對 symlink 只刪捷徑本身，不要跟進去刪它指向的地方。確認無誤後才刪目錄。
 
-**設定檔裡的樣子**：見[設定檔格式](reference.md)。`[profiles.<名稱>]` 多了 `agent = "codex"` 和 `disabled = true` 兩個鍵。舊的 `[codex]` 設定在記憶體裡會被當成一個隱含的 Codex profile；第一次執行會寫設定檔的 profile 指令時，才轉成 `[profiles.<名稱>]` 寫進去（訊息會印出它的目錄）；整個 `[codex]` 表會被移除，自訂的 `[codex] home` 成為新 profile 的 `config_dir`。`[codex] enabled = false` 表示不用 Codex（沒有 Codex profile）；forget 掉最後一個 Codex profile 時 sampan 會寫入這一行。
+**設定檔裡的樣子**：見[設定檔格式](reference.md)。`[profiles.<名稱>]` 多了 `agent = "codex"` 和 `disabled = true` 兩個鍵。舊的 `[codex]` 設定在記憶體裡會被當成一個隱含的 Codex profile；第一次執行 `sampan profile rename`／`disable`／`enable`／`forget`／`add --codex`（或在 `o` 帳號畫面做同樣的事）時，才轉成 `[profiles.<名稱>]` 寫進去（訊息會印出它的目錄）；整個 `[codex]` 表會被移除，自訂的 `[codex] home` 成為新 profile 的 `config_dir`。新增 Claude profile（`sampan profile add` 不加 `--codex`）和 `sampan init` 不會轉換。設定檔裡只要有任何 `agent = "codex"` 的 profile，`[codex]` 就整個不再作用（`add --codex` 會順手拿掉留下的 `[codex]`）。`[codex] enabled = false` 表示不用 Codex（沒有 Codex profile）；forget 掉最後一個 Codex profile 時 sampan 會寫入這一行。
 
-**Codex 多帳號還不支援**：目前不能替新 session 挑 Codex 帳號，也不能在 Codex 帳號之間切換；sampan 用第一個使用中的 Codex profile。另外 Claude 與 Codex 的對話格式不同，不能互相切換（`P` 只在 Claude 帳號之間換）。
+**Codex 多帳號還不支援**：目前不能替新 session 挑 Codex 帳號，也不能在 Codex 帳號之間切換；sampan 用第一個使用中的 Codex profile。有不只一個 Codex profile 時，所有執行中的 Codex session 都算在第一個使用中的 Codex profile 名下（登記表、帳號行的執行中數字都是）。另外 Claude 與 Codex 的對話格式不同，不能互相切換（`P` 只在 Claude 帳號之間換）。
 
 ### 狀態列（讓 sampan 知道 Claude 的額度）
 
@@ -141,7 +141,7 @@ Claude Code 只在狀態列指令的輸入裡提供 5h／週額度，所以要�
 
 - `sampan statusline install [--profile P] [--yes]`：對每個使用中的 Claude profile（或只指定的）改它的 `settings.json` 的 `statusLine`。你原本已有狀態列指令時，會包成 `<sampan> statusline -- sh -c '<原指令>'`，原指令的輸出照舊顯示；沒有時 sampan 自己印一行（模型・目錄・context・額度）。改之前先列出會怎麼改並確認（`--yes` 不問），並備份成 `settings.json.bak-<時間>`，只動 `statusLine` 這個鍵；`settings.json` 不是合法的 JSON 物件時拒絕。`sampan init` 也會問要不要裝。
 - `sampan statusline uninstall [--profile P] [--yes]`：還原成原指令（原本沒有就拿掉這個鍵）。
-- 原指令是在 `sh` 下執行的，所以 bash 才有的寫法（`[[ ]]`、陣列、`<(…)` 等）可能要自己改成 `bash -c '…'`。
+- 原指令是在 `sh` 下執行的（Linux 上通常是 dash，不是 bash），所以 bash 才有的寫法（`[[ ]]`、陣列、`<(…)` 等）要自己改成 `bash -c '…'`。
 - **專案層的 `.claude/settings.json`／`settings.local.json` 若有 `statusLine`，會蓋過使用者層的設定**，那個專案裡的 session 因此不經過 sampan，不會記下額度。要在該專案也記，得自己把專案層的指令同樣包起來，或拿掉它。
 - 額度記在狀態目錄的 `usage/<profile>.json`（只有你讀得到）。`sampan doctor` 會回報每個 Claude profile 的狀態列有沒有接上、最近一筆額度。
 
