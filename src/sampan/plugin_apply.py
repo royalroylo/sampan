@@ -363,6 +363,7 @@ def restart_hint(counts):
 def restart_profiles(cfg, run, out, ask, profiles, *, own_pane=None, on_prompt=None, stop_fn=None, restore_fn=None):
     """Stop idle sessions of the profiles and restore exactly those; busy / own-pane ones are listed once. Returns the worst rc."""
     out = actionlog.tee(cfg, "重開", out)
+    on_prompt = actionlog.logged_prompt(cfg, "重開", on_prompt)
     from . import restore, session_run  # lazy: session_run imports a lot
     stop_fn = stop_fn or session_run.cmd_stop
     restore_fn = restore_fn or restore.cmd_restore

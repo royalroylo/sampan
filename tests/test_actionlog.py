@@ -83,6 +83,40 @@ class ActionLogTest(unittest.TestCase):
         labels = [line.split("] ")[0].split(" [", 1)[1] for line in self.lines()]
         self.assertEqual(labels, ["plugin 更新", "重開"])
 
+    def test_prompt_answers_are_logged(self):
+        from sampan.prompts import ATTACH, SKIP
+        p = NS(question="Do you trust the files in this folder?", options=("Yes, I trust this folder", "No, exit"))
+        answers = iter([0, ATTACH, SKIP, None])
+        ask = actionlog.logged_prompt(self.cfg, "重開", lambda name, agent, prompt: next(answers), now=lambda: STAMP)
+        self.assertEqual([ask("a", "claude", p) for _ in range(4)], [0, ATTACH, SKIP, None])
+        self.assertEqual(self.lines(), [
+            f"{STAMP} [重開] a（claude）提示「Do you trust the files in this folder?」→ 1. Yes, I trust this folder",
+            f"{STAMP} [重開] a（claude）提示「Do you trust the files in this folder?」→ 進去自己操作",
+            f"{STAMP} [重開] a（claude）提示「Do you trust the files in this folder?」→ 先不管，之後再處理",
+            f"{STAMP} [重開] a（claude）提示「Do you trust the files in this folder?」→ None"])
+        self.assertIsNone(actionlog.logged_prompt(self.cfg, "重開", None))
+
+    def test_restart_logs_prompt_answers(self):
+        from sampan import plugin_apply as pa
+        seen = {}
+
+        def restore_fn(cfg, run, out, ask, **kw):
+            seen["answer"] = kw["on_prompt"]("s1", "claude", NS(question="Q?", options=("A",)))
+            return 0
+        pa.restart_profiles(self.cfg, None, self.shown.append, None, ["p"], on_prompt=lambda *a: 0,
+                            stop_fn=lambda *a, **k: k["stopped"].append("s1") or 0, restore_fn=restore_fn)
+        self.assertEqual(seen["answer"], 0)
+        self.assertTrue(self.lines()[-1].endswith("[重開] s1（claude）提示「Q?」→ 1. A"))
+
+    def test_doctor_names_the_log(self):
+        from sampan.doctor import _action_log
+        c = _action_log(self.cfg)[0]
+        self.assertEqual((c.level, c.title), ("info", f"操作紀錄：{actionlog.log_path(self.cfg)}（還沒有紀錄）"))
+        self.tee("重開")("x")
+        c = _action_log(self.cfg)[0]
+        from sampan.clock import fmt_local, parse_iso
+        self.assertEqual(c.title, f"操作紀錄：{actionlog.log_path(self.cfg)}（最後一筆 {fmt_local(parse_iso(STAMP))}）")
+
     def test_rotates_when_large(self):
         out = self.tee("重開")
         out("first")

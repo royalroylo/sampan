@@ -5,6 +5,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `actions.log` also records the answer to each startup prompt (trust, update, hooks review) during a restart or
+  `switch`, and `sampan doctor` shows where the log is and when it was last written.
+
 ## [0.7.2] - 2026-10-24
 
 ### Changed

@@ -55,6 +55,31 @@ def append(cfg, label, lines, *, now=_now):
         pass
 
 
+def logged_prompt(cfg, label, on_prompt, *, now=_now):
+    """on_prompt (prompts.Relay's question to the user) that also logs which answer was given; None stays None."""
+    if on_prompt is None or getattr(cfg, "state_dir", None) is None:
+        return on_prompt
+    from .prompts import prompt_choices  # lazy: prompts pulls in the screen parsers
+
+    def ask(name, agent, p):
+        choice = on_prompt(name, agent, p)
+        answer = next((text for text, value in prompt_choices(p) if value == choice and choice is not None), str(choice))
+        append(cfg, label, [f"{name}（{agent}）提示「{p.question or '（認不出問題）'}」→ {answer}"], now=now)
+        return choice
+    return ask
+
+
+def last_stamp(cfg):
+    """The time at the start of the log's last line, or None (no log, or unreadable)."""
+    try:
+        with open(log_path(cfg), "rb") as fh:
+            fh.seek(max(0, os.fstat(fh.fileno()).st_size - 4096))
+            last = fh.read().decode("utf-8", "replace").strip().splitlines()[-1]
+    except (OSError, IndexError):
+        return None
+    return last.split(" ", 1)[0]
+
+
 def tee(cfg, label, out, *, now=_now):
     """out that also appends each non-empty line to actions.log under label. An out that already logs is returned
     as it is, so an action run inside another one is logged once, under the outer label."""

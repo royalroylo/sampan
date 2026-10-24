@@ -703,6 +703,7 @@ def cmd_switch(cfg, run, out, name, profile, *, dry_run=False, own_pane=None, on
     only ever one copy of the conversation."""
     if not dry_run:
         out = actionlog.tee(cfg, f"switch {name} → {profile}", out)
+        on_prompt = actionlog.logged_prompt(cfg, f"switch {name} → {profile}", on_prompt)
     rows = _load(cfg, out)
     if rows is None:
         return 2
