@@ -97,10 +97,6 @@ class MarketplaceTest(unittest.TestCase):
         self.assertIsNone(plugin_lists("not toml ["))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 PROF = '''version = 1
 
 # the a profile
@@ -181,3 +177,7 @@ class ProfileSectionTest(unittest.TestCase):
         self.assertTrue(new.endswith('config_dir = "~/c"\n'))
         self.assertIsNone(remove_table(PROF, "nope"))
         self.assertIsNone(remove_table("[[codex]]\nx = 1\n", "codex"))
+
+
+if __name__ == "__main__":
+    unittest.main()
