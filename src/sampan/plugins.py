@@ -15,6 +15,7 @@ class ProfilePluginState:
     marketplaces: dict
     extra_marketplaces: set
     scoped: list = field(default_factory=list)  # [(plugin id, scope, projectPath)], installs other than user scope
+    commits: dict = field(default_factory=dict)  # plugin id -> gitCommitSha of the user-scope entry
 
 
 def _json(path):
@@ -37,11 +38,13 @@ def source_of(src):
 
 def read_state(profile):
     pd = Path(profile.config_dir) / "plugins"
-    installed, project_scoped, scoped = {}, [], []
+    installed, project_scoped, scoped, commits = {}, [], [], {}
     for pid, entries in ((_json(pd / "installed_plugins.json") or {}).get("plugins") or {}).items():
         for e in entries:
             if e.get("scope") == "user":
                 installed[pid] = str(e.get("version") or "?")
+                if e.get("gitCommitSha"):
+                    commits[pid] = str(e["gitCommitSha"])
             else:
                 where = f" {e['projectPath']}" if e.get("projectPath") else ""
                 project_scoped.append(f"{pid}（{e.get('scope')}{where}）")
@@ -53,7 +56,7 @@ def read_state(profile):
     settings = _json(Path(profile.config_dir) / "settings.json") or {}
     enabled = {k for k, v in (settings.get("enabledPlugins") or {}).items() if v}
     extra = set((settings.get("extraKnownMarketplaces") or {}).keys())
-    return ProfilePluginState(installed, project_scoped, enabled, marketplaces, extra, scoped)
+    return ProfilePluginState(installed, project_scoped, enabled, marketplaces, extra, scoped, commits)
 
 
 def missing_dir_message(profile):
