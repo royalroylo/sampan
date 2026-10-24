@@ -5,7 +5,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-10-24
+
 ### Changed
+- Documentation: release pins move to v0.7.2.
 - `sampan stop` (and `R` restarts) send `/exit` to sessions in a `.claude/worktrees/` directory too, instead of always
   skipping them. Claude asks Keep / Remove worktree only when that run created the worktree; when the question shows up,
   sampan presses nothing and leaves it to you. A resumed session in a worktree now restarts like any other. A worktree
@@ -260,7 +263,8 @@ First public release. Versions up to 0.5.3 were released privately under the nam
 ### Security
 - Credentials in git URLs are no longer shown in output.
 
-[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/royalroylo/sampan/releases/tag/v0.7.2
 [0.7.1]: https://github.com/royalroylo/sampan/releases/tag/v0.7.1
 [0.7.0]: https://github.com/royalroylo/sampan/releases/tag/v0.7.0
 [0.6.5]: https://github.com/royalroylo/sampan/releases/tag/v0.6.5

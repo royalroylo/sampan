@@ -16,7 +16,7 @@ What it does (it asks before installing anything; `--yes` answers yes to everyth
 - If uv is missing: asks, then runs uv's official installer (`curl -LsSf https://astral.sh/uv/install.sh | sh`). It does not edit your shell startup files.
 - If tmux is missing: on macOS with Homebrew it asks to run `brew install tmux`; without Homebrew it only prints the Homebrew install command and stops (it never installs Homebrew). On Linux it uses apt, dnf, pacman or zypper (with sudo unless you are root); for any other package manager it lists what to install and stops.
 - On Linux it also makes sure `ps`, `lsof` and `git` exist, asking once for everything that is missing.
-- Runs `uv tool install --reinstall git+https://github.com/royalroylo/sampan@<version>` (default: the latest `v*` tag, or `v0.7.1` if it cannot be looked up). If sampan is already installed this upgrades it in place.
+- Runs `uv tool install --reinstall git+https://github.com/royalroylo/sampan@<version>` (default: the latest `v*` tag, or `v0.7.2` if it cannot be looked up). If sampan is already installed this upgrades it in place.
 - If Claude Code (`claude`) is missing it does **not** install it: it prints `curl -fsSL https://claude.ai/install.sh | bash` and tells you to run `claude` once and log in. sampan is still installed, but `sampan init` is skipped (init stops without claude).
 - If `~/.local/bin` is not on your PATH it prints the exact line to add for your shell (zsh, bash or fish); it never edits rc files.
 - Finally it runs `sampan init` (interactive; answers are read from `/dev/tty`, because under `curl | sh` stdin is the pipe. With no terminal it skips init and tells you to run it) and prints `sampan --version`.
@@ -46,7 +46,7 @@ brew install tmux uv
 # 3. Claude Code (run claude once afterwards and log in)
 curl -fsSL https://claude.ai/install.sh | bash
 # 4. sampan
-uv tool install git+https://github.com/royalroylo/sampan@v0.7.1
+uv tool install git+https://github.com/royalroylo/sampan@v0.7.2
 sampan init
 ```
 
@@ -67,7 +67,7 @@ sudo apt-get update && sudo apt-get install -y tmux procps lsof git
 sudo dnf install -y tmux procps-ng lsof git
 # uv, then sampan
 curl -LsSf https://astral.sh/uv/install.sh | sh
-uv tool install git+https://github.com/royalroylo/sampan@v0.7.1
+uv tool install git+https://github.com/royalroylo/sampan@v0.7.2
 sampan init
 ```
 
