@@ -61,6 +61,7 @@ sampan init
 | `R` | 一次接回好幾個 |
 | `m` | 換工作目錄 |
 | `p` | 開 plugin 管理畫面（各 profile 的 plugin 與 marketplace 來源） |
+| `o` | 帳號畫面（各帳號額度、改名、停用、新增、裝狀態列） |
 | `X` | 把已停止或 retired 的 session 從登記表移除（對話不刪） |
 | `U` | 更新 sampan（已知有新版就直接更新；還不知道時當下重新查，已是最新時只告知；要重裝用 `sampan update --force`） |
 | `q` | 離開 |

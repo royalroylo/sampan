@@ -35,6 +35,7 @@ list. Press `q` to quit.
 | Bring Claude agents running outside tmux (in any terminal program) into tmux | `A` | Pick which, name each; you type `/exit` in the original terminal, sampan waits, then resumes the same conversation in tmux and takes you in |
 | Rename | `e` | tmux and registry together; the agent keeps running |
 | Remove an unused session from the registry | `X` (stopped or retired rows only) | Confirms at the bottom of the screen (it will no longer be listed or resumed by `R`); afterwards prints the command to resume it by hand. The conversation files are never deleted; the previous registry stays in `history/` |
+| See each account's quota, rename, disable, add, install the status line | `o` | Opens the accounts screen, see "Account management" below. The top of the list has one line per account (`name N running・5h …・week …(time)`) |
 | Manage plugins and marketplace sources | `p` | Opens the plugin management screen, see "The plugin management screen" below |
 | Continue on another account (e.g. its quota ran out) | `P` (Claude only) | Lists the profiles; after you confirm, claude exits and the same conversation resumes under the new profile in the same directory, trusting that directory automatically the first time (same rule as `m`). A stopped session is reattached under the new profile directly. Plugins the new profile does not list are named first, but do not block the switch. If claude does not exit (e.g. it sits at a quota menu), sampan presses nothing else and asks you to press Esc and type `/exit` yourself, then press `P` again |
 | Change working directory | `m` | Directory chooser (starting at its current directory; if that directory is gone, at `[ui] start_dir`, as for `n`); after you confirm, the agent exits and resumes the same conversation in the new directory |
@@ -105,6 +106,56 @@ Press `a` on this tab to add a source (it asks for `owner/repo` or a git URL); i
 
 For scripts and schedules do not use this screen; keep using `sampan plugins sync` (see "Commands").
 
+## Account management
+
+A profile is one account (a Claude config directory, or a Codex `CODEX_HOME`). The top of the list has one line for each enabled account: `name N 個執行中・5h 42%・週 18%（17:20）`, where the time in brackets is when that quota was read; refreshed at most every 60 seconds. Where the quota comes from: for Claude you must install the status line first (below); for Codex it reads the newest rollout file. sampan never reads account credentials and never goes online for quota.
+
+Press `o` for the accounts screen:
+
+| Key | Action |
+|---|---|
+| Up / Down | Move |
+| `r` | Rename (config and registry only, the directory stays; refused while the account has running sessions) |
+| `d` | Disable / enable. Disabling asks y/N |
+| `f` | Forget: remove a disabled account from the config, together with its sessions in the registry |
+| `i` | Install (or remove) the status line for the Claude account under the cursor |
+| `a` | Add an account |
+| `q` | Back to the list |
+
+**Commands** (for `--plain` and scripts):
+
+| To do this | Command |
+|---|---|
+| List all profiles | `sampan profile list` (type, directory, account, enabled / disabled, running sessions) |
+| Account management | `sampan profile list｜add｜rename｜disable｜enable｜forget` (`add <name> [--dir D] [--codex]`), see "Account management"; `o` in the ui |
+| Let sampan see Claude's quota | `sampan statusline install｜uninstall [--profile P] [--yes]`, see "Account management" |
+| Add a Codex account | `sampan profile add <name> --codex` (creates `~/.codex-profiles/<name>` and logs in with `codex login`); `--dir` as above |
+| Rename | `sampan profile rename <old> <new>` |
+| Disable / enable | `sampan profile disable <name>`, `sampan profile enable <name>` |
+| Remove from the config | `sampan profile forget <name>` (disabled ones only; also removes its sessions from the registry) |
+
+**Disabling**: a disabled account is hidden from the list and menus, cannot start sessions, and `sampan plugins sync` skips it; `sampan restore` does not resume rows that belong to it and says why (they come back after `sampan profile enable`). The default profile cannot be disabled. A profile with running sessions cannot be renamed or disabled; run `sampan stop` first.
+
+**sampan never deletes a directory.** Forget only removes the account from the config and the registry; the directory and its conversations stay, and the command to resume by hand is printed. To delete an account's directory for real, do it yourself, in this order:
+
+1. `sampan profile disable <name>`, then `sampan profile forget <name>`.
+2. Check the directory for links pointing elsewhere (`projects/` and `commands/` are often symlinks to data shared with other profiles): `find <dir> -maxdepth 1 -type l -ls`.
+3. Remove only what is inside the directory; for a symlink remove the link itself and never follow it into what it points to. Remove the directory last, once you are sure.
+
+**In the config file**: see [the config format](reference.md). `[profiles.<name>]` gains two keys, `agent = "codex"` and `disabled = true`. An old `[codex]` table is treated in memory as an implicit Codex profile; only the first profile command that writes the config converts it into `[profiles.<name>]` (the message prints its directory). `[codex] enabled = false` means Codex is off (no Codex profile); forgetting the last Codex profile writes that line.
+
+**Codex multi-account is not supported yet**: you cannot choose a Codex account for a new session or switch between Codex accounts; sampan uses the first enabled Codex profile. Claude and Codex conversations also use different formats and cannot be switched into each other (`P` only moves between Claude accounts).
+
+### The status line (how sampan learns Claude's quota)
+
+Claude Code supplies the 5h / weekly quota only in the input of a status-line command, so for sampan to see it, it has to sit on the status line:
+
+- `sampan statusline install [--profile P] [--yes]`: edits the `statusLine` in `settings.json` of every enabled Claude profile (or only the ones named). If you already have a status-line command it is wrapped as `<sampan> statusline -- sh -c '<original>'` and its output is shown as before; if not, sampan prints a line itself (model, directory, context, quota). Before changing anything it shows the change and asks (`--yes` skips the question), backs the file up as `settings.json.bak-<stamp>` and touches only the `statusLine` key; a `settings.json` that is not a valid JSON object is refused. `sampan init` offers it too.
+- `sampan statusline uninstall [--profile P] [--yes]`: restores the original command (removes the key if there was none).
+- The original command runs under `sh`, so bash-only syntax (`[[ ]]`, arrays, `<(…)`, …) may need to become `bash -c '…'`.
+- **A `statusLine` in a project's `.claude/settings.json` / `settings.local.json` overrides the user-level one**, so sessions in that project do not pass through sampan and record no quota. To record there too, wrap the project's command the same way, or remove it.
+- Quota is stored in `usage/<profile>.json` in the state directory (readable only by you). `sampan doctor` reports whether each Claude profile's status line is hooked up and its latest reading.
+
 ## Common situations
 
 **Starting the day**: type `sampan`, press Enter on the one you want to work in. Press `n` for something new.
@@ -156,7 +207,8 @@ Every action also has a command, for scripts or when you prefer typing commands 
 | Remove a session that is not running from the registry | `sampan forget <name> [--dry-run]` (or `X` in the ui): only for a stopped or retired session (run `sampan stop` first if it is still in tmux); the ui asks first. Afterwards it prints the command to resume it by hand; the conversation files are never deleted and the previous registry stays in `history/` |
 | Plugin versions per profile | `sampan plugins status` (manage them interactively with `p` in the ui) |
 | New plugin version / remove a plugin | edit `config.toml`, then `sampan plugins sync` (kept for scripts); `sampan plugins sync --prune --dry-run` previews what would be removed |
-| Add a Claude account | `sampan profile add <name>` (creates `~/.claude-profiles/<name>` and logs in); `--dir <existing dir>` uses an existing directory (no creation, no login) |
+| Account management | `sampan profile list｜add｜rename｜disable｜enable｜forget` (`add <name> [--dir D] [--codex]`), see "Account management"; `o` in the ui |
+| Let sampan see Claude's quota | `sampan statusline install｜uninstall [--profile P] [--yes]`, see "Account management" |
 
 After a plugin changes version, restart that profile's Claude sessions completely for it to take effect (stop, then restore).
 

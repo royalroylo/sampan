@@ -32,6 +32,7 @@
 | 換工作目錄 | `m` | 用選目錄畫面挑新目錄（從它現在的目錄開始；那個目錄已經不在時，從 `[ui] start_dir` 開始，和 `n` 一樣），確認後 agent 結束、在新目錄接回同一段對話 |
 | 這件事做完了 | `r` | 標成 retired，之後不會出現在接回清單 |
 | 從登記表移除一個不用的 session | `X`（只有已停止或 retired 的列） | 在畫面底部問確定（之後不會再列出，也不會被 `R` 接回）；移除後印出手動接回的指令。對話紀錄不會刪，舊的登記表留在 `history/` |
+| 看各帳號的額度、改名、停用、新增、裝狀態列 | `o` | 開帳號畫面，見下面「帳號管理」。清單上方會有每個帳號一行（`名稱 N 個執行中・5h …・週 …（時間）`） |
 | 管理 plugin 與 marketplace 來源 | `p` | 進到 plugin 管理畫面，見下面「plugin 管理畫面」 |
 | 立刻存一次登記表 | `w` | 平常每個整點會自動存 |
 | 更新 sampan | `U`（有新版時按鍵說明上面會出現「有新版 v…（目前 …），按 U 更新」） | 在畫面底部問確定，跑 `uv tool upgrade sampan`（版本沒變再 `uv tool install --reinstall git+https://github.com/royalroylo/sampan@v<最新版>`），輸出顯示在訊息區；成功後自動重新開啟 sampan 回到清單，失敗就留在清單。不知道有新版時，`U` 會先當下重新查一次（不看快取）；仍是最新版（或查不到）只會告知，不會問；要重新安裝請用 `sampan update --force` |
@@ -94,6 +95,56 @@
 
 腳本或排程不要用這個畫面，繼續用 `sampan plugins sync`（見「指令一覽」）。
 
+## 帳號管理
+
+一個 profile 就是一個帳號（Claude 的設定目錄，或 Codex 的 `CODEX_HOME`）。清單最上方每個使用中的帳號一行：`名稱 N 個執行中・5h 42%・週 18%（17:20）`，括號裡是那筆額度讀到的時間；最多每 60 秒更新一次。額度的來源：Claude 要先裝狀態列（見下面）才有資料；Codex 讀它最新一份 rollout 檔裡的紀錄。sampan 不讀帳號憑證、也不為了額度連網。
+
+按 `o` 開帳號畫面：
+
+| 鍵 | 作用 |
+|---|---|
+| ↑↓ | 移動 |
+| `r` | 改名（只改設定檔與登記表，目錄不動；該帳號有 session 在跑時拒絕） |
+| `d` | 停用／恢復。停用會問 y/N |
+| `f` | forget：把已停用的帳號從設定檔拿掉，連同登記表裡它的 session |
+| `i` | 幫游標那個 Claude 帳號裝（或移除）狀態列 |
+| `a` | 新增帳號 |
+| `q` | 返回清單 |
+
+**指令**（`--plain` 與腳本用）：
+
+| 想做的事 | 指令 |
+|---|---|
+| 列出所有 profile | `sampan profile list`（類型、目錄、帳號、使用中／停用、執行中的 session 數） |
+| 帳號管理 | `sampan profile list｜add｜rename｜disable｜enable｜forget`（`add <名稱> [--dir D] [--codex]`），見「帳號管理」；ui 裡按 `o` |
+| 讓 sampan 看到 Claude 額度 | `sampan statusline install｜uninstall [--profile P] [--yes]`，見「帳號管理」 |
+| 新增 Codex 帳號 | `sampan profile add <名稱> --codex`（建立 `~/.codex-profiles/<名稱>` 並用 `codex login` 登入）；`--dir` 同上 |
+| 改名 | `sampan profile rename <舊> <新>` |
+| 停用／恢復 | `sampan profile disable <名稱>`、`sampan profile enable <名稱>` |
+| 從設定檔拿掉 | `sampan profile forget <名稱>`（只有已停用的；同時移除登記表裡它的 session） |
+
+**停用**：停用的帳號不出現在清單與選單、不能開新 session、`sampan plugins sync` 跳過它；`sampan restore` 遇到屬於它的列不會接回，並說明原因（`sampan profile enable` 後就可以）。預設的 profile 不能停用。有 session 在跑的 profile 不能改名或停用，先 `sampan stop`。
+
+**sampan 從不刪目錄。** forget 只是把帳號從設定檔和登記表拿掉，目錄與裡面的對話都還在，並印出手動接回的指令。要真的刪掉一個帳號的目錄，自己來，順序是：
+
+1. `sampan profile disable <名稱>`，再 `sampan profile forget <名稱>`。
+2. 看目錄裡有沒有連到別處的捷徑（`projects/`、`commands/` 常是 symlink，指向其他 profile 共用的資料）：`find <目錄> -maxdepth 1 -type l -ls`。
+3. 只刪目錄裡面的東西；對 symlink 只刪捷徑本身，不要跟進去刪它指向的地方。確認無誤後才刪目錄。
+
+**設定檔裡的樣子**：見[設定檔格式](reference.md)。`[profiles.<名稱>]` 多了 `agent = "codex"` 和 `disabled = true` 兩個鍵。舊的 `[codex]` 設定在記憶體裡會被當成一個隱含的 Codex profile；第一次執行會寫設定檔的 profile 指令時，才轉成 `[profiles.<名稱>]` 寫進去（訊息會印出它的目錄）。`[codex] enabled = false` 表示不用 Codex（沒有 Codex profile）；forget 掉最後一個 Codex profile 時 sampan 會寫入這一行。
+
+**Codex 多帳號還不支援**：目前不能替新 session 挑 Codex 帳號，也不能在 Codex 帳號之間切換；sampan 用第一個使用中的 Codex profile。另外 Claude 與 Codex 的對話格式不同，不能互相切換（`P` 只在 Claude 帳號之間換）。
+
+### 狀態列（讓 sampan 知道 Claude 的額度）
+
+Claude Code 只在狀態列指令的輸入裡提供 5h／週額度，所以要讓 sampan 看到額度，要把它接在狀態列上：
+
+- `sampan statusline install [--profile P] [--yes]`：對每個使用中的 Claude profile（或只指定的）改它的 `settings.json` 的 `statusLine`。你原本已有狀態列指令時，會包成 `<sampan> statusline -- sh -c '<原指令>'`，原指令的輸出照舊顯示；沒有時 sampan 自己印一行（模型・目錄・context・額度）。改之前先列出會怎麼改並確認（`--yes` 不問），並備份成 `settings.json.bak-<時間>`，只動 `statusLine` 這個鍵；`settings.json` 不是合法的 JSON 物件時拒絕。`sampan init` 也會問要不要裝。
+- `sampan statusline uninstall [--profile P] [--yes]`：還原成原指令（原本沒有就拿掉這個鍵）。
+- 原指令是在 `sh` 下執行的，所以 bash 才有的寫法（`[[ ]]`、陣列、`<(…)` 等）可能要自己改成 `bash -c '…'`。
+- **專案層的 `.claude/settings.json`／`settings.local.json` 若有 `statusLine`，會蓋過使用者層的設定**，那個專案裡的 session 因此不經過 sampan，不會記下額度。要在該專案也記，得自己把專案層的指令同樣包起來，或拿掉它。
+- 額度記在狀態目錄的 `usage/<profile>.json`（只有你讀得到）。`sampan doctor` 會回報每個 Claude profile 的狀態列有沒有接上、最近一筆額度。
+
 ## 常見情境
 
 **每天開工**：打 `sampan`，Enter 進到要做的那個。要做新的事就按 `n`。
@@ -132,7 +183,8 @@
 | 把沒在跑的 session 從登記表移除 | `sampan forget <名稱> [--dry-run]`（或 ui 按 X）：只限已停止或 retired 的（還在 tmux 裡的先 `sampan stop`）；ui 裡會先問確定。移除後印出手動接回的指令；對話紀錄永遠不刪，移除前的登記表留在 `history/` |
 | 看各 profile 的 plugin 版本 | `sampan plugins status`（互動管理在 ui 按 `p`） |
 | plugin 有新版／拿掉 plugin | 改 `config.toml` 後 `sampan plugins sync`（給腳本用，仍然可用）；`sampan plugins sync --prune --dry-run` 先看要移除什麼 |
-| 新增 Claude 帳號 | `sampan profile add <名稱>`（建立 `~/.claude-profiles/<名稱>` 並登入）；`--dir <既有目錄>` 用現成目錄（不建、不登入） |
+| 帳號管理 | `sampan profile list｜add｜rename｜disable｜enable｜forget`（`add <名稱> [--dir D] [--codex]`），見「帳號管理」；ui 裡按 `o` |
+| 讓 sampan 看到 Claude 額度 | `sampan statusline install｜uninstall [--profile P] [--yes]`，見「帳號管理」 |
 
 多數會動到 session 的指令都有 `--dry-run`。plugin 換版後，要把該 profile 的 Claude session 整個重開才會生效（stop 後再 restore）。
 
