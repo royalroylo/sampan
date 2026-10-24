@@ -157,6 +157,8 @@ class Picker:
             return ("update", [])
         if k == "p":
             return ("plugins", [])
+        if k == "o":
+            return ("profiles", [])
         if k == "/":
             self.query = ""
             return None
@@ -184,6 +186,28 @@ class Picker:
             return ("forget", [self._here()])
         if k in ("r", "a"):
             return ("retired" if k == "r" else "active", [self._here()])
+        return None
+
+
+PROFILE_KEYS = {"r": "rename", "d": "toggle", "f": "forget", "i": "statusline"}
+
+
+class ProfilePicker(Picker):
+    """Profile screen list (rows are profile_ops.ProfileRow): ↑↓ move; r/d/f/i act on the row under the cursor,
+    a adds, q / Esc go back."""
+
+    def key(self, k):
+        if k in ("q", "\x1b"):
+            return ("back", [])
+        if k == "a":
+            return ("add", [])
+        if not self.visible:
+            return None
+        if k in MOVES:
+            self.cursor = max(0, min(len(self.visible) - 1, self.cursor + MOVES[k]))
+            return None
+        if k in PROFILE_KEYS:
+            return (PROFILE_KEYS[k], [self._here()])
         return None
 
 

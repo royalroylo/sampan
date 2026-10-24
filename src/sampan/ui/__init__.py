@@ -14,12 +14,12 @@ longest name and the other columns follow right after), on the right is the info
 conversation id, last activity, context, number of tmux windows / panes, last message, the keys available for this row); when the terminal is narrower than
 100 columns the card goes under the list. When the row under the cursor has a tmux session, the card is replaced by a compact header plus a live preview
 of that session's agent pane (tmux capture-pane, read-only, no keys sent): captured as soon as the cursor moves there, re-captured every second while
-waiting for a key, and the list is re-read every 5 seconds (cursor and checkmarks are kept); question input and checklists are not affected. At the bottom
-are the message area (the result of the last action, live progress of long actions, the input line for questions such as y/N and names) and the key help.
+waiting for a key, and the list is re-read every 5 seconds (cursor and checkmarks are kept); question input and checklists are not affected. Under the list one
+line per enabled profile (sessions running, 5h／週額度); at the bottom are the message area (the result of the last action, live progress of long actions, the input line for questions such as y/N and names) and the key help.
 
 Keys: up/down move, space checks, Enter attaches (a stopped session is reattached first), s stops (confirmed in place), m moves to another directory,
 e renames, R reattaches, A adopts claude/codex running outside tmux, r retire, a activate, n new session, w save now, U update sampan,
-p opens the plugin screen, X removes a stopped or retired session from the registry, q / Esc quit.
+p opens the plugin screen, o opens the profile (帳號) screen, X removes a stopped or retired session from the registry, q / Esc quit.
 
 When a newer version exists (update.Checker checks in the background, cached for 6 hours, and re-checks in the idle time while waiting for a key) one more
 line appears above the key help saying a new version is available and to press U; U updates after an in-place confirmation, the output is shown live in the

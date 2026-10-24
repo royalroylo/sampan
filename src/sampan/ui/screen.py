@@ -27,6 +27,9 @@ from .plugin_actions import (
     update_flow,
 )
 from .plugin_state import CatalogPicker, PluginPicker, ProfileToggles
+from .profile_actions import PROFILE_COLS, account_lines, load_rows, profile_action, profile_cells, profile_usage
+from .profile_actions import TITLE as PROFILES_TITLE
+from .profile_actions import card_lines as profile_card
 from .render import (
     LIST_COLS,
     MARKET_COLS,
@@ -46,10 +49,10 @@ from .render import (
     tab_title,
     toggle_cells,
 )
-from .state import Checklist, Picker, _row_key
+from .state import Checklist, Picker, ProfilePicker, _row_key
 from .text import BACKSPACE, ENTER, MOVES, clean_capture, text_width
 
-KEYS_HELP = "↑↓ 移動　1-9 跳列　/ 搜尋　空白 勾選　Enter 接上　s 停掉　R 接回　A 接手　n 開新　w 存檔　p plugin　q 離開"
+KEYS_HELP = "↑↓ 移動　1-9 跳列　/ 搜尋　空白 勾選　Enter 接上　s 停掉　R 接回　A 接手　n 開新　w 存檔　p plugin　o 帳號　q 離開"
 RESTORE_HELP = "↑↓ 移動　空白 勾選　Enter 確認接回　q 取消"
 ADOPT_HELP = "↑↓ 移動　空白 勾選　Enter 確認接手　q 取消"
 PLUGINS_HELP = "↑↓ 移動　1-9 跳列　/ 搜尋　Enter 選 profile　u 更新這個　U 全部更新　a 新增　r 檢查新版　q 返回　Tab 切到來源"
@@ -57,9 +60,11 @@ MARKETS_HELP = "↑↓ 移動　1-9 跳列　/ 搜尋　Enter 選 profile　u �
 TOGGLE_HELP = "↑↓ 移動　空白 勾選／取消　s 儲存　Esc 返回"
 CATALOG_HELP = "↑↓ 移動　/ 搜尋　Enter 選這個　i 自己輸入　q 返回"
 PLUGINS_TITLE = "sampan · plugin 管理"
+PROFILES_HELP = "↑↓ 移動　r 改名　d 停用／恢復　f forget　i 裝狀態列　a 新增　q 返回"
 PROMPT_HELP = "↑↓ 選擇　Enter 送出　Esc 先不管"
 TICK_MS = 1000  # while the list waits for a key, re-capture the preview this often
 REFRESH_S = 5  # while the list waits for a key, re-read the session list (state, info cards) this often
+USAGE_S = 60  # the account lines' 額度 are re-read at most this often (and whenever the list is entered again)
 NO_SCREEN = "（看不到畫面）"
 SELF_SCREEN = "（sampan 自己就在這個 pane）"
 
@@ -73,8 +78,12 @@ class CursesScreen:
     scr only uses getmaxyx, erase, addstr, refresh, get_wch (tests use a fake object)."""
 
     def __init__(self, scr, cfg=None, run=None, now_fn=_now, *, clock=time.monotonic, rows_fn=status_rows,
-                 own_pane=None, updater=None):
+                 own_pane=None, updater=None, usage_fn=None, interactive=None, sampan_path=None):
         self.scr, self.cfg, self.run, self.now_fn = scr, cfg, run, now_fn
+        # usage_fn(cfg, profile) -> Usage | None for the account lines and profile cards (default: the files on disk);
+        # interactive(args, env) runs a login with the terminal (curses steps out); None = say what to run instead
+        self.usage_fn, self.interactive, self.sampan_path = usage_fn, interactive, sampan_path
+        self._usage = None  # (clock time, {profile: Usage}) behind the account lines; None = read again
         self.updater = updater  # update.Checker: the list screen shows a new-version hint, and re-checks in the idle time while waiting for a key once the cache has expired
         self.clock, self.rows_fn, self.own_pane = clock, rows_fn, own_pane
         self.messages = []
@@ -247,6 +256,18 @@ class CursesScreen:
         picker.reload(rows)  # keeps the search, the digit buffer and the cursor session
         return True
 
+    def _account_lines(self, rows):
+        """The account lines under the list. Usage (a Codex rollout scan, Claude record files) is cached for USAGE_S
+        seconds; the running counts follow rows on every draw."""
+        if self.cfg is None:
+            return []
+        if self._usage is None or self.clock() - self._usage[0] >= USAGE_S:
+            fn = self.usage_fn or profile_usage
+            self._usage = (self.clock(), {n: fn(self.cfg, p) for n, p in self.cfg.all_profiles.items()
+                                          if not p.disabled})
+        cache = self._usage[1]
+        return account_lines(self.cfg, rows, self.now_fn(), usage_fn=lambda cfg, p: cache.get(p.name))
+
     def pick(self, rows, current):
         """Arrow-key menu. While waiting for a key, re-capture the pane screen of the row under the cursor (a row with a tmux session) every TICK_MS and re-read the list every REFRESH_S seconds."""
         def load():
@@ -256,6 +277,7 @@ class CursesScreen:
         names = [r.name for r in rows]
         picker = Picker(rows, self.last_name if self.last_name in names else current, clock=self.clock)
         shot, tick, refreshed = (None, None), False, self.clock()
+        self._usage = None  # back on the list (after an action): read the 額度 again
         self._timeout(TICK_MS)
         try:
             while True:
@@ -279,7 +301,7 @@ class CursesScreen:
                 name_w = max((text_width(c[0]) for c in cells.values()), default=None)
                 self.view = dict(title=self.title, left=left, cursor=picker.cursor, card=card, preview=preview,
                                  help=KEYS_HELP, cols=list_cols(rows), empty=list_empty(rows, picker.query),
-                                 name_w=name_w,
+                                 name_w=name_w, accounts=self._account_lines(rows),
                                  notice=self.warning or (self.updater.hint() if self.updater is not None else None))
                 self.prompt = picker.prompt
                 self.draw()
@@ -466,6 +488,49 @@ class CursesScreen:
             self.prompt = None
             self.view = saved
 
+    def profiles(self, *, ask, **_kw):
+        """The profile (帳號) screen (o): the profiles on the left (disabled ones dim), the card of the one under the
+        cursor on the right; r/d/f/i/a act, the config and the list are re-read after every action. q returns 0.
+        The main list goes on with the config as it is afterwards (self.cfg)."""
+        cfg = reload_config(self.cfg, self.out)
+        usage_fn = self.usage_fn or profile_usage
+        prows = load_rows(cfg, self.run, self.out, self.rows_fn)
+        picker = ProfilePicker(prows, clock=self.clock)
+        saved, cards = self.view, {}
+        self._timeout(-1)
+        try:
+            while True:
+                here = picker.visible[picker.cursor] if picker.visible else None
+                if here is not None and here.name not in cards:
+                    cards[here.name] = profile_card(cfg, here, self.now_fn(), usage_fn)
+                self.view = dict(title=PROFILES_TITLE, left=[profile_cells(r) for r in picker.visible],
+                                 cursor=picker.cursor, card=cards.get(here.name, []) if here else [], preview=None,
+                                 help=PROFILES_HELP, cols=PROFILE_COLS, empty="目前沒有任何 profile（a 新增）",
+                                 notice=None, name_w=None)
+                self.draw()
+                k = self.key()
+                if k is None:
+                    continue
+                action = picker.key(k)
+                if action is None:
+                    continue
+                kind, names = action
+                if kind == "back":
+                    return 0
+                self.messages = []  # a new action: the message area holds only this action's result
+                goto = profile_action(cfg, self.run, self.out, ask, kind, names[0] if names else None,
+                                      interactive=self.interactive, login_outside=False,
+                                      sampan_path=self.sampan_path)
+                cfg = reload_config(cfg, self.out)
+                prows, cards = load_rows(cfg, self.run, self.out, self.rows_fn), {}
+                picker.reload(prows)  # the cursor stays on the same profile
+                if goto is not None:
+                    picker._goto(goto)
+        finally:
+            self.cfg = cfg
+            self.prompt = None
+            self.view = saved
+
     def _market_action(self, cfg, ask, kind, names, mrows):
         """One action of the 來源 tab. Returns (the source just added, to move the cursor to it, or None;
         the profiles that need a restart)."""
@@ -584,14 +649,14 @@ def curses_adopt_checklist(cands):
         return None
 
 
-def run_outside(scr, args):
-    """Temporarily hand the terminal to another program (tmux attach): curses steps out first, and when that program ends (detach) we return to the original screen."""
+def run_outside(scr, args, env=None):
+    """Temporarily hand the terminal to another program (tmux attach, a login): curses steps out first, and when that program ends (detach) we return to the original screen."""
     import curses
     import subprocess
     curses.def_prog_mode()
     curses.endwin()
     try:
-        return subprocess.call(args)
+        return subprocess.call(args, env=env)
     finally:
         curses.reset_prog_mode()
         scr.clear()
@@ -606,9 +671,10 @@ def curses_ui(cfg, run, out, *, current_session=None, own_pane=None, exec_fn=os.
 
     def main(scr):
         screen = box["screen"] = CursesScreen(scr, cfg, run, rows_fn=kw.get("rows_fn", status_rows), own_pane=own_pane,
-                                              updater=updater)
+                                              updater=updater, interactive=lambda args, env: run_outside(scr, args, env))
         opts = dict(picker_fn=screen.pick, restore_picker_fn=screen.restore_checklist, prompt_fn=screen.prompt_choice,
-                    adopt_picker_fn=screen.adopt_checklist, plugins_fn=screen.plugins, exec_fn=lambda f, args: pending.append((f, args)),
+                    adopt_picker_fn=screen.adopt_checklist, plugins_fn=screen.plugins, profiles_fn=screen.profiles,
+                    exec_fn=lambda f, args: pending.append((f, args)),
                     attach_fn=lambda args: run_outside(scr, args), loop=True,
                     choose_dir_fn=lambda start, *, allow_missing: screen.choose_dir(
                         start, home=str(cfg.home), allow_missing=allow_missing,

@@ -152,13 +152,14 @@ def _fit_messages(groups, n, width):
 
 
 def render(*, title, left, cursor, card, preview=None, messages=(), prompt=None, help="", width, height,
-           cols=LIST_COLS, empty=None, notice=None, extra=(), name_w=None):
+           cols=LIST_COLS, empty=None, notice=None, extra=(), name_w=None, accounts=()):
     """Turn one screen into [(text, style), …] lines that fit within height lines, each with display width at most width (styles: title / sel / dim / prompt / "").
     At width >= WIDE the info card sits to the right of the list, otherwise under it; when too small, lines are dropped from the top, keeping the message area and key help to the end.
     When preview (lines already through clean_capture) is not None, card is a compact header, followed by a separator line and the last lines of the pane screen.
     notice (e.g. the new-version hint) is a fixed line above the key help, kept to the end like the key help.
     extra ([(text, style)], e.g. the question and options of an agent startup prompt) goes under the message area and is also kept to the end.
-    name_w, when given, is the name column width to cap at instead of the widest name in left (a filtered list keeps the full list's columns)."""
+    name_w, when given, is the name column width to cap at instead of the widest name in left (a filtered list keeps the full list's columns).
+    accounts (the main list's one line per profile) sit between the list area and the message area, kept to the end like notice."""
     if width <= 0 or height <= 0:
         return []
     messages = list(messages)
@@ -167,7 +168,8 @@ def render(*, title, left, cursor, card, preview=None, messages=(), prompt=None,
     prompt_lines = [[(pad(" " + text, width), style)] for text, style in extra]
     prompt_lines += [[(pad(" " + prompt, width), "prompt")]] if prompt is not None else []
     prompt_lines += [[(pad(" " + notice, width), "attn")]] if notice else []
-    room = height - 3 - len(prompt_lines)  # title, separator line, key help
+    account_lines = [[(pad(" " + text, width), "muted")] for text in accounts]
+    room = height - 3 - len(prompt_lines) - len(account_lines)  # title, separator line, key help
     groups = [_wrap_message(m, width) for m in messages]
     wrapped = [piece for g in groups for piece in g]
     n_msg = min(len(wrapped), max(1, height // 3)) if wrapped else 0
@@ -196,7 +198,7 @@ def render(*, title, left, cursor, card, preview=None, messages=(), prompt=None,
             shown += [[(pad("", width), "")]] * (card_h - len(shown))
             body += [[("─" * width, "dim")]] + shown
         sep = "─" * width
-    lines = [title_line] + body + [[(sep, "dim")]] + msg_lines + prompt_lines + [help_line]
+    lines = [title_line] + body + [[(sep, "dim")]] + account_lines + msg_lines + prompt_lines + [help_line]
     return lines[-height:]
 
 

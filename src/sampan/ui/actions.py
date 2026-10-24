@@ -15,7 +15,7 @@ from .dirpick import recent_dirs, sessions_by_dir
 from .state import row_text
 
 HELP = ("編號 = 接上／切過去（已停止的先接回）；s 停掉　m 搬目錄　P 換 profile　e 改名　R 接回　A 接手 tmux 外的　r retire　a activate　X 移除"
-        "　n 開新 session　w 立即存檔　p plugin 管理　/文字 搜尋　q 離開")
+        "　n 開新 session　w 立即存檔　p plugin 管理　o 帳號　/文字 搜尋　q 離開")
 
 
 def _ask(ask, prompt):
@@ -258,6 +258,8 @@ def _plain_action(ask, out, rows, current):
         return ("new", [])
     if choice == "p":
         return ("plugins", [])
+    if choice == "o":
+        return ("profiles", [])
     if c == "s":
         picked = _pick(ask, out, rows, "要停掉哪些？(編號，可多個用空格分隔): ", many=True)
     elif c == "m":
@@ -334,7 +336,8 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
            rename_fn=session_run.cmd_rename, switch_fn=session_run.cmd_switch, forget_fn=session_run.cmd_forget,
            restore_fn=restore_mod.cmd_restore, restore_picker_fn=None,
            adopt_fn=adopt_mod.cmd_adopt, adopt_picker_fn=None, save_fn=save_mod.cmd_save, loop=False,
-           attach_fn=None, choose_dir_fn=None, updater=None, update_fn=update_mod.do_update, argv=(), prompt_fn=None, plugins_fn=None):
+           attach_fn=None, choose_dir_fn=None, updater=None, update_fn=update_mod.do_update, argv=(), prompt_fn=None, plugins_fn=None,
+           profiles_fn=None):
     """picker_fn(rows, current) returns (action, list of names); when None, use the plain-text menu where a number is typed.
     restore_picker_fn / adopt_picker_fn are the checklist interfaces for R / A; when None, restore / adopt ask in text themselves.
     loop=True: after an action return to the list, leaving only on q / Esc (or when an opened session is attached); False does just one action.
@@ -345,7 +348,9 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
     prompt_fn(name, agent, prompt): used when R reattach or m move waits for the agent (n and Enter-reattach of one do not wait, they go straight into tmux) and the agent stops at a startup menu (in curses it is
     CursesScreen.prompt_choice, with --plain prompts.plain_prompt); when "go in and handle it myself" is chosen, that session is attached when the action ends.
     None = do not look at prompts (as before).
-    plugins_fn(ask=…, own_pane=…, on_prompt=…) is the plugin screen for p (curses: CursesScreen.plugins); when None, the --plain plugin menu."""
+    plugins_fn(ask=…, own_pane=…, on_prompt=…) is the plugin screen for p (curses: CursesScreen.plugins); when None, the --plain plugin menu.
+    profiles_fn(ask=…) is the profile screen for o (curses: CursesScreen.profiles); when None, the --plain profile menu.
+    After it the config is re-read, so the list and n / P see renamed, disabled or added profiles."""
 
     def _attach_row(names, rows, kw):
         name = names[0]
@@ -401,6 +406,17 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
         from .plugin_actions import plain_plugins  # lazy: plugin_actions imports this module
         return plain_plugins(cfg, run, out, ask, own_pane=own_pane, on_prompt=kw.get("on_prompt")), None
 
+    def _profiles(names, rows, kw):
+        nonlocal cfg
+        from .plugin_actions import reload_config  # lazy: plugin_actions imports this module
+        if profiles_fn is not None:
+            rc = profiles_fn(ask=ask)
+        else:
+            from .profile_actions import plain_profiles
+            rc = plain_profiles(cfg, run, out, ask, rows_fn=rows_fn)
+        cfg = reload_config(cfg, out)
+        return rc, None
+
     # one handler per action: (names, rows, kw) -> (rc, session to attach to, or None);
     # an unknown action raises directly and is never written to the registry as a state
     handlers = {
@@ -417,6 +433,7 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
         "switch": _switch_row,
         "forget": lambda names, rows, kw: (_forget(cfg, run, out, ask, names[0], forget_fn), None),
         "plugins": _plugins,
+        "profiles": _profiles,
         "retired": lambda names, rows, kw: (set_state_fn(cfg, out, names[0], "retired"), None),
         "active": lambda names, rows, kw: (set_state_fn(cfg, out, names[0], "active"), None),
     }
