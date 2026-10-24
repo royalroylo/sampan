@@ -105,7 +105,7 @@ class NewAndStateTest(Base):
         self.assertEqual(self.events[:3], [["%50", "codex"], ("sleep", 1), ["%50", "Enter"]])
         self.assertEqual([(x.tmux, x.agent, x.profile, x.session_id, x.cwd, x.pid)
                           for x in load_rows(self.cfg.registry_path)],
-                         [("cx", "codex", "", TID, str(self.cwd.resolve()), 200)])
+                         [("cx", "codex", self.cfg.codex.profile, TID, str(self.cwd.resolve()), 200)])
 
     def test_new_without_wait_returns_right_after_launch(self):
         r = self.codex_runner(thread_after=99)
