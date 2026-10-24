@@ -67,9 +67,22 @@ class RenameTest(Base):
         rc = self.rename("alice", "amy", running=["a"])
         self.assertEqual(rc, 1)
         self.assertEqual(self.cfg.path.read_bytes(), before)
-        self.assertIn("a", self.out)
-        self.assertIn("在跑", self.out)
+        self.assertEqual(self.msgs, ["❌ profile alice 還有 session 在跑：a；先停掉再改名"])
         self.assertEqual(self.backups(), [])
+
+    def test_rename_undone_when_registry_write_fails(self):
+        self.write_registry([Row("a", "claude", "alice", A, "/c", "active")])
+        before = self.cfg.path.read_bytes()
+        reg_before = self.cfg.registry_path.read_bytes()
+        self.cfg.path.chmod(0o640)
+        with mock.patch.object(profile_ops.registry, "write_rows", side_effect=OSError("disk full")):
+            rc = self.rename("alice", "amy")
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.cfg.path.read_bytes(), before)
+        self.assertEqual(self.cfg.path.stat().st_mode & 0o777, 0o640)
+        self.assertEqual(self.cfg.registry_path.read_bytes(), reg_before)
+        self.assertIn("❌ 登記表寫入失敗（disk full），設定檔已還原，什麼都沒改", self.msgs)
+        self.assertNotIn("✔", self.out)
 
     def test_rename_refused_when_tmux_unreadable(self):
         before = self.cfg.path.read_bytes()

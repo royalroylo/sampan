@@ -52,11 +52,11 @@ def _convert_codex(cfg, text):
     return text, f"已把 [codex] 轉成 [profiles.{p.name}]（目錄 {disp}）"
 
 
-def edit_config(cfg, out, edit, *, stamp=now_stamp):
+def edit_config(cfg, out, edit, *, stamp=now_stamp, backups=None):
     """Apply edit(text) -> new text | None to config.toml as it is on disk now, after writing out an implicit Codex
     profile (first profile write only). The result is checked with load_config before anything is written, then the
     file is backed up (config.toml.bak-<stamp>, mode kept) and replaced atomically. Returns the new Config, or None
-    (the reason printed, the file untouched)."""
+    (the reason printed, the file untouched). backups: when given a list, receives the backup's path."""
     path = cfg.path
     try:
         text = path.read_text()
@@ -89,6 +89,8 @@ def edit_config(cfg, out, edit, *, stamp=now_stamp):
     except OSError as e:
         out(f"❌ 設定檔寫入失敗（{e}），設定檔沒改")
         return None
+    if backups is not None:
+        backups.append(backup)
     if note:
         out(note)
     return replace(new_cfg, path=path)
@@ -149,6 +151,19 @@ def cmd_profile_list(cfg, run, out, *, env=None):
 
 # ---------- rename ----------
 
+def _undo_config(cfg, out, backup, err):
+    """The registry could not follow a config edit: put the config back from its backup (mode kept), so the two never
+    disagree. Returns 1."""
+    try:
+        atomic_write(cfg.path, backup.read_text())
+    except OSError as e:
+        out(f"❌ 登記表寫入失敗（{err}），設定檔也還原不了（{e}）；請用 {backup} 手動還原")
+        return 1
+    backup.unlink(missing_ok=True)  # the file is back as it was: nothing to keep a backup of
+    out(f"❌ 登記表寫入失敗（{err}），設定檔已還原，什麼都沒改")
+    return 1
+
+
 def cmd_profile_rename(cfg, run, out, old, new, *, proc_root=PROC_ROOT):
     out = actionlog.tee(cfg, f"profile rename {old}", out)
     if not NAME_RE.match(new):
@@ -175,7 +190,8 @@ def cmd_profile_rename(cfg, run, out, old, new, *, proc_root=PROC_ROOT):
         except registry.RegistryError as e:
             out(f"❌ {e}")
             return 1
-        if edit_config(cfg, out, lambda text: rename_profile(text, old, new)) is None:
+        backups = []
+        if edit_config(cfg, out, lambda text: rename_profile(text, old, new), backups=backups) is None:
             return 1
         hit = [r for r in rows if r.profile == old and r.agent == agent]
         for r in hit:
@@ -184,7 +200,6 @@ def cmd_profile_rename(cfg, run, out, old, new, *, proc_root=PROC_ROOT):
             try:
                 registry.write_rows(cfg.registry_path, rows, now_iso(), cfg.history_dir)
             except OSError as e:
-                out(f"❌ 設定檔已改名，但登記表寫入失敗（{e}）；{len(hit)} 列還記著 {old}")
-                return 1
+                return _undo_config(cfg, out, backups[0], e)
     out(f"✔ 已把 profile {old} 改名為 {new}（登記表 {len(hit)} 列一起改）")
     return 0

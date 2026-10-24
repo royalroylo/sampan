@@ -13,8 +13,8 @@ from tests.helpers import make_env
 
 class CliTest(unittest.TestCase):
     def setUp(self):
-        cfg = make_env(Path(tempfile.mkdtemp()))
-        p = mock.patch("sampan.cli.load_config", return_value=cfg)
+        cfg = self.cfg = make_env(Path(tempfile.mkdtemp()))
+        p = mock.patch("sampan.cli.load_config", return_value=cfg)  # never the host's config
         p.start()
         self.addCleanup(p.stop)
         # Same result inside or outside tmux, and never a real `tmux display-message`.
@@ -218,6 +218,7 @@ class CliTest(unittest.TestCase):
             cli.main(["profile", "rename", "side", "other"])
         ls.assert_called_once()
         self.assertEqual(rn.call_args.args[3:], ("side", "other"))
+        self.assertIs(rn.call_args.args[0], self.cfg)  # setUp's temp config, not the host's
 
 
 class EntryPointTest(unittest.TestCase):
