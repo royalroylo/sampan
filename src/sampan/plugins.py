@@ -16,6 +16,7 @@ class ProfilePluginState:
     extra_marketplaces: set
     scoped: list = field(default_factory=list)  # [(plugin id, scope, projectPath)], installs other than user scope
     commits: dict = field(default_factory=dict)  # plugin id -> gitCommitSha of the user-scope entry
+    market_info: dict = field(default_factory=dict)  # marketplace name -> {"updated": lastUpdated or None, "auto": autoUpdate or None}
 
 
 def _json(path):
@@ -49,14 +50,16 @@ def read_state(profile):
                 where = f" {e['projectPath']}" if e.get("projectPath") else ""
                 project_scoped.append(f"{pid}（{e.get('scope')}{where}）")
                 scoped.append((pid, e.get("scope"), e.get("projectPath")))
-    marketplaces = {}
+    marketplaces, market_info = {}, {}
     for name, v in (_json(pd / "known_marketplaces.json") or {}).items():
-        src = (v or {}).get("source") or {}
-        marketplaces[name] = source_of(src)
+        v = v if isinstance(v, dict) else {}
+        marketplaces[name] = source_of(v.get("source") or {})
+        upd, auto = v.get("lastUpdated"), v.get("autoUpdate")
+        market_info[name] = {"updated": upd if isinstance(upd, str) else None, "auto": auto if isinstance(auto, bool) else None}
     settings = _json(Path(profile.config_dir) / "settings.json") or {}
     enabled = {k for k, v in (settings.get("enabledPlugins") or {}).items() if v}
     extra = set((settings.get("extraKnownMarketplaces") or {}).keys())
-    return ProfilePluginState(installed, project_scoped, enabled, marketplaces, extra, scoped, commits)
+    return ProfilePluginState(installed, project_scoped, enabled, marketplaces, extra, scoped, commits, market_info)
 
 
 def missing_dir_message(profile):
