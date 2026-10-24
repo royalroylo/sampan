@@ -107,7 +107,7 @@
 | `r` | 改名（只改設定檔與登記表，目錄不動；該帳號有 session 在跑時拒絕） |
 | `d` | 停用／恢復。停用會問 y/N |
 | `f` | forget：把已停用的帳號從設定檔拿掉，連同登記表裡它的 session |
-| `i` | 幫游標那個 Claude 帳號裝（或移除）狀態列 |
+| `i` | 幫游標那個 Claude 帳號裝狀態列（已接上時不動作；移除用 `sampan statusline uninstall`） |
 | `a` | 新增帳號 |
 | `q` | 返回清單 |
 
@@ -123,7 +123,7 @@
 | 停用／恢復 | `sampan profile disable <名稱>`、`sampan profile enable <名稱>` |
 | 從設定檔拿掉 | `sampan profile forget <名稱>`（只有已停用的；同時移除登記表裡它的 session） |
 
-**停用**：停用的帳號不出現在清單與選單、不能開新 session、`sampan plugins sync` 跳過它；`sampan restore` 遇到屬於它的列不會接回，並說明原因（`sampan profile enable` 後就可以）。預設的 profile 不能停用。有 session 在跑的 profile 不能改名或停用，先 `sampan stop`。
+**停用**：停用的帳號不出現在清單與選單、不能開新 session、`sampan plugins sync` 跳過它；`sampan restore` 遇到屬於它的列不會接回，並說明原因（`sampan profile enable` 後就可以）。預設的 profile 不能停用。有 session 在跑的 profile 不能改名、停用或 forget，先 `sampan stop`。
 
 **sampan 從不刪目錄。** forget 只是把帳號從設定檔和登記表拿掉，目錄與裡面的對話都還在，並印出手動接回的指令。要真的刪掉一個帳號的目錄，自己來，順序是：
 
@@ -131,7 +131,7 @@
 2. 看目錄裡有沒有連到別處的捷徑（`projects/`、`commands/` 常是 symlink，指向其他 profile 共用的資料）：`find <目錄> -maxdepth 1 -type l -ls`。
 3. 只刪目錄裡面的東西；對 symlink 只刪捷徑本身，不要跟進去刪它指向的地方。確認無誤後才刪目錄。
 
-**設定檔裡的樣子**：見[設定檔格式](reference.md)。`[profiles.<名稱>]` 多了 `agent = "codex"` 和 `disabled = true` 兩個鍵。舊的 `[codex]` 設定在記憶體裡會被當成一個隱含的 Codex profile；第一次執行會寫設定檔的 profile 指令時，才轉成 `[profiles.<名稱>]` 寫進去（訊息會印出它的目錄）。`[codex] enabled = false` 表示不用 Codex（沒有 Codex profile）；forget 掉最後一個 Codex profile 時 sampan 會寫入這一行。
+**設定檔裡的樣子**：見[設定檔格式](reference.md)。`[profiles.<名稱>]` 多了 `agent = "codex"` 和 `disabled = true` 兩個鍵。舊的 `[codex]` 設定在記憶體裡會被當成一個隱含的 Codex profile；第一次執行會寫設定檔的 profile 指令時，才轉成 `[profiles.<名稱>]` 寫進去（訊息會印出它的目錄）；整個 `[codex]` 表會被移除，自訂的 `[codex] home` 成為新 profile 的 `config_dir`。`[codex] enabled = false` 表示不用 Codex（沒有 Codex profile）；forget 掉最後一個 Codex profile 時 sampan 會寫入這一行。
 
 **Codex 多帳號還不支援**：目前不能替新 session 挑 Codex 帳號，也不能在 Codex 帳號之間切換；sampan 用第一個使用中的 Codex profile。另外 Claude 與 Codex 的對話格式不同，不能互相切換（`P` 只在 Claude 帳號之間換）。
 

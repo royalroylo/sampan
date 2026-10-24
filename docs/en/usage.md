@@ -118,7 +118,7 @@ Press `o` for the accounts screen:
 | `r` | Rename (config and registry only, the directory stays; refused while the account has running sessions) |
 | `d` | Disable / enable. Disabling asks y/N |
 | `f` | Forget: remove a disabled account from the config, together with its sessions in the registry |
-| `i` | Install (or remove) the status line for the Claude account under the cursor |
+| `i` | Install the status line for the Claude account under the cursor (does nothing if already installed; to remove it use `sampan statusline uninstall`) |
 | `a` | Add an account |
 | `q` | Back to the list |
 
@@ -134,7 +134,7 @@ Press `o` for the accounts screen:
 | Disable / enable | `sampan profile disable <name>`, `sampan profile enable <name>` |
 | Remove from the config | `sampan profile forget <name>` (disabled ones only; also removes its sessions from the registry) |
 
-**Disabling**: a disabled account is hidden from the list and menus, cannot start sessions, and `sampan plugins sync` skips it; `sampan restore` does not resume rows that belong to it and says why (they come back after `sampan profile enable`). The default profile cannot be disabled. A profile with running sessions cannot be renamed or disabled; run `sampan stop` first.
+**Disabling**: a disabled account is hidden from the list and menus, cannot start sessions, and `sampan plugins sync` skips it; `sampan restore` does not resume rows that belong to it and says why (they come back after `sampan profile enable`). The default profile cannot be disabled. A profile with running sessions cannot be renamed, disabled or forgotten; run `sampan stop` first.
 
 **sampan never deletes a directory.** Forget only removes the account from the config and the registry; the directory and its conversations stay, and the command to resume by hand is printed. To delete an account's directory for real, do it yourself, in this order:
 
@@ -142,7 +142,7 @@ Press `o` for the accounts screen:
 2. Check the directory for links pointing elsewhere (`projects/` and `commands/` are often symlinks to data shared with other profiles): `find <dir> -maxdepth 1 -type l -ls`.
 3. Remove only what is inside the directory; for a symlink remove the link itself and never follow it into what it points to. Remove the directory last, once you are sure.
 
-**In the config file**: see [the config format](reference.md). `[profiles.<name>]` gains two keys, `agent = "codex"` and `disabled = true`. An old `[codex]` table is treated in memory as an implicit Codex profile; only the first profile command that writes the config converts it into `[profiles.<name>]` (the message prints its directory). `[codex] enabled = false` means Codex is off (no Codex profile); forgetting the last Codex profile writes that line.
+**In the config file**: see [the config format](reference.md). `[profiles.<name>]` gains two keys, `agent = "codex"` and `disabled = true`. An old `[codex]` table is treated in memory as an implicit Codex profile; only the first profile command that writes the config converts it into `[profiles.<name>]` (the message prints its directory); the whole `[codex]` table is removed and a custom `[codex] home` becomes the new profile's `config_dir`. `[codex] enabled = false` means Codex is off (no Codex profile); forgetting the last Codex profile writes that line.
 
 **Codex multi-account is not supported yet**: you cannot choose a Codex account for a new session or switch between Codex accounts; sampan uses the first enabled Codex profile. Claude and Codex conversations also use different formats and cannot be switched into each other (`P` only moves between Claude accounts).
 
