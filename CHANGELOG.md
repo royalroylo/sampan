@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.5] - 2026-10-24
+
 ### Added
 - Switch a Claude session to another profile (another account, e.g. when one has used up its quota) and continue the
   same conversation: `P` in the ui, `sampan switch <name> <profile> [--dry-run]` on the command line. A running session
@@ -12,6 +14,9 @@ All notable changes to this project are documented here. The format follows
   stopped one is reattached under the new profile directly. Plugins the new profile does not list are named first. If
   the new profile cannot see the transcript, it is moved there (never copied, so there is one copy only); an existing
   transcript of the same conversation in the new profile is never overwritten.
+
+### Changed
+- Documentation: release pins move to v0.6.5.
 
 ## [0.6.4] - 2026-10-23
 
@@ -204,7 +209,8 @@ First public release. Versions up to 0.5.3 were released privately under the nam
 ### Security
 - Credentials in git URLs are no longer shown in output.
 
-[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.6.4...HEAD
+[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.6.5...HEAD
+[0.6.5]: https://github.com/royalroylo/sampan/releases/tag/v0.6.5
 [0.6.4]: https://github.com/royalroylo/sampan/releases/tag/v0.6.4
 [0.6.3]: https://github.com/royalroylo/sampan/releases/tag/v0.6.3
 [0.6.2]: https://github.com/royalroylo/sampan/releases/tag/v0.6.2

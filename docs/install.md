@@ -16,7 +16,7 @@ curl -fsSL https://raw.githubusercontent.com/royalroylo/sampan/main/install.sh |
 - 缺 uv：問過後用 uv 官方安裝程式（`curl -LsSf https://astral.sh/uv/install.sh | sh`）安裝；不會幫你改 shell 設定檔。
 - 缺 tmux：macOS 有 Homebrew 就問你要不要 `brew install tmux`；沒有 Homebrew 只印出 Homebrew 的安裝指令然後停止（不替你裝 Homebrew）。Linux 用 apt、dnf、pacman 或 zypper（不是 root 時用 sudo）；認不得的套件管理員就列出要裝什麼然後停止。
 - Linux 另外確認 `ps`、`lsof`、`git`，缺的一起問、一起裝。
-- 用 `uv tool install --reinstall git+https://github.com/royalroylo/sampan@<版本>` 安裝（預設是最新的 `v*` tag，查不到時用 `v0.6.4`）；已經裝過 sampan 就是原地升級。
+- 用 `uv tool install --reinstall git+https://github.com/royalroylo/sampan@<版本>` 安裝（預設是最新的 `v*` tag，查不到時用 `v0.6.5`）；已經裝過 sampan 就是原地升級。
 - 沒有 Claude Code（`claude`）：**不會幫你裝**，只印出 `curl -fsSL https://claude.ai/install.sh | bash` 和「裝好後執行一次 `claude` 並登入」；sampan 照裝，但略過 `sampan init`（沒有 claude，init 會停下）。
 - `~/.local/bin` 不在 PATH：印出該加到你的 shell（zsh、bash、fish）的那一行，不會自己改設定檔。
 - 最後執行 `sampan init`（互動式，答案從終端機讀；`curl | sh` 的 stdin 是管線，所以改讀 `/dev/tty`；沒有終端機時略過並提示你自己跑），並印出 `sampan --version`。
@@ -45,7 +45,7 @@ brew install tmux uv
 # 3. Claude Code（裝好後執行一次 claude 並登入）
 curl -fsSL https://claude.ai/install.sh | bash
 # 4. sampan
-uv tool install git+https://github.com/royalroylo/sampan@v0.6.4
+uv tool install git+https://github.com/royalroylo/sampan@v0.6.5
 sampan init
 ```
 
@@ -64,7 +64,7 @@ sudo apt-get update && sudo apt-get install -y tmux procps lsof git
 sudo dnf install -y tmux procps-ng lsof git
 # uv，然後 sampan
 curl -LsSf https://astral.sh/uv/install.sh | sh
-uv tool install git+https://github.com/royalroylo/sampan@v0.6.4
+uv tool install git+https://github.com/royalroylo/sampan@v0.6.5
 sampan init
 ```
 
