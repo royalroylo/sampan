@@ -5,6 +5,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-25
+
+### Fixed
+- The profile screen (`o`) no longer cuts a two-digit running count: 「12 個執行中」 showed as 「12 個執行」. The column now widens to its widest row.
+- `sampan plugins sync` lists only plugins whose version or commit changed (a GitHub plugin that moved to a new commit without bumping its version shows `1.0.0（abc1234 → def5678）`), prints 「沒有變動」 for a profile where nothing changed and nothing failed, and shows the restart hint only when something changed or was removed.
+
 ## [0.8.0] - 2026-10-25
 
 ### Added
@@ -286,7 +292,8 @@ First public release. Versions up to 0.5.3 were released privately under the nam
 ### Security
 - Credentials in git URLs are no longer shown in output.
 
-[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/royalroylo/sampan/releases/tag/v0.8.1
 [0.8.0]: https://github.com/royalroylo/sampan/releases/tag/v0.8.0
 [0.7.3]: https://github.com/royalroylo/sampan/releases/tag/v0.7.3
 [0.7.2]: https://github.com/royalroylo/sampan/releases/tag/v0.7.2
