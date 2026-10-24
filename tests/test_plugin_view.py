@@ -1,3 +1,4 @@
+import json
 import shutil
 import subprocess
 import sys
@@ -7,16 +8,22 @@ from pathlib import Path
 
 from sampan.plugin_view import (
     STATES,
+    CatalogEntry,
     Change,
+    Latest,
     ProfileChoice,
     build_rows,
     card_lines,
+    catalog,
+    is_newer,
     mismatch,
+    newest,
     plan_changes,
     preview_lines,
     profile_choices,
     snapshot,
 )
+from tests.fakes import FakeRunner, cp
 from tests.helpers import make_env
 from tests.test_plugins import GOOD_KNOWN, write_plugins
 
@@ -151,3 +158,104 @@ class ViewTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def write_mkt(cfg, profile, mkt, plugins):
+    d = cfg.profiles[profile].config_dir / "plugins" / "marketplaces" / mkt / ".claude-plugin"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "marketplace.json").write_text(plugins if isinstance(plugins, str) else json.dumps({"plugins": plugins}))
+    return d.parent
+
+
+class CatalogTest(unittest.TestCase):
+    def setUp(self):
+        self.cfg = make_env(Path(tempfile.mkdtemp()))
+
+    def test_catalog_reads_local_marketplaces_dedup_and_first_line(self):
+        write_plugins(self.cfg, "alice", known=GOOD_KNOWN)
+        write_plugins(self.cfg, "work", known=GOOD_KNOWN)
+        write_mkt(self.cfg, "alice", "my-plugins", [{"name": "tools", "description": "First\nsecond"}, {"name": "b"}])
+        write_mkt(self.cfg, "work", "my-plugins", [{"name": "tools", "description": "other"}, {"name": "a", "description": "A"}])
+        write_mkt(self.cfg, "work", "broken", "{not json")
+        self.assertEqual(catalog(self.cfg, snapshot(self.cfg)), [
+            CatalogEntry("a@my-plugins", "A", "owner/my-plugins"),
+            CatalogEntry("b@my-plugins", "", "owner/my-plugins"),
+            CatalogEntry("tools@my-plugins", "First", "owner/my-plugins")])
+
+    def test_catalog_source_falls_back_to_profile_state_and_skips_missing_profile(self):
+        write_plugins(self.cfg, "alice", known={"zz": "o/zz"})
+        write_mkt(self.cfg, "alice", "zz", [{"name": "p"}])
+        shutil.rmtree(self.cfg.profiles["work"].config_dir)
+        self.assertEqual(catalog(self.cfg, snapshot(self.cfg)), [CatalogEntry("p@zz", "", "o/zz")])
+
+
+class NewestTest(unittest.TestCase):
+    def setUp(self):
+        self.cfg = make_env(Path(tempfile.mkdtemp()))
+        write_plugins(self.cfg, "alice", known=GOOD_KNOWN)
+
+    def test_newest_version_field_plugin_json_head_sha_and_external_sha(self):
+        clone = write_mkt(self.cfg, "alice", "m", [
+            {"name": "v", "version": "2.0.0", "source": "./plugins/v"},
+            {"name": "pj", "source": "./plugins/pj"},
+            {"name": "head", "source": "./plugins/head"},
+            {"name": "ext", "source": {"source": "github", "repo": "o/r", "sha": "deadbeefcafe1234"}},
+            {"name": "odd", "source": {"source": "url"}}])
+        pj = clone / "plugins" / "pj" / ".claude-plugin"
+        pj.mkdir(parents=True)
+        (pj / "plugin.json").write_text(json.dumps({"version": "3.1.0"}))
+        run = FakeRunner(strict=True).on(["git", "-C", str(clone), "rev-parse", "HEAD"], cp(out="abcdef1234567890\n"))
+        n = lambda name: newest(self.cfg.profiles["alice"], "m", name, run)  # noqa: E731
+        self.assertEqual(n("v"), Latest("2.0.0", None))
+        self.assertEqual(n("pj"), Latest("3.1.0", None))
+        self.assertEqual(n("head"), Latest("abcdef123456", None))
+        self.assertEqual(n("ext"), Latest(None, "deadbeefcafe1234"))
+        self.assertEqual(n("odd"), Latest(None, None))
+        self.assertEqual(n("nope"), Latest(None, None))
+        self.assertEqual(newest(self.cfg.profiles["alice"], "nomkt", "x", run), Latest(None, None))
+        self.assertEqual(len(run.calls), 1)
+
+    def test_newest_failed_git_is_unknown(self):
+        clone = write_mkt(self.cfg, "alice", "m", [{"name": "head", "source": "./plugins/head"}])
+        run = FakeRunner(strict=True).on(["git", "-C", str(clone), "rev-parse", "HEAD"], cp(rc=128, err="fatal"))
+        self.assertEqual(newest(self.cfg.profiles["alice"], "m", "head", run), Latest(None, None))
+
+    def test_is_newer_rules(self):
+        self.assertFalse(is_newer("abcdef123456XXXX", None, Latest("abcdef123456YYYY", None)))
+        self.assertTrue(is_newer("1.0.0", None, Latest("1.1.0", None)))
+        self.assertTrue(is_newer(None, "aaaaaaaaaaaa1", Latest(None, "bbbbbbbbbbbb2")))
+        self.assertFalse(is_newer(None, "aaaaaaaaaaaa1", Latest(None, "aaaaaaaaaaaa2")))
+        self.assertFalse(is_newer("1.0.0", None, Latest(None, None)))
+        self.assertFalse(is_newer(None, None, Latest("1.1.0", "bbbbbbbbbbbb")))
+        self.assertFalse(is_newer("1.0.0", None, Latest(None, "bbbbbbbbbbbb")))
+
+
+class NewerRowsTest(unittest.TestCase):
+    def setUp(self):
+        self.cfg = make_env(Path(tempfile.mkdtemp()))
+        for name in ("alice", "work"):
+            write_plugins(self.cfg, name, installed={TOOLS: [("user", "1.0.0", None)]}, known=GOOD_KNOWN)
+
+    def test_build_rows_with_latest_marks_newer_and_card_arrow(self):
+        snap = snapshot(self.cfg)
+        row = {r.pid: r for r in build_rows(self.cfg, snap, {("alice", TOOLS): Latest("1.1.0", None),
+                                                             ("work", TOOLS): Latest("1.0.0", None)})}[TOOLS]
+        self.assertEqual((row.state, row.newer), ("有新版", {"alice": "1.1.0"}))
+        self.assertIn("alice       1.0.0 → 1.1.0", card_lines(self.cfg, row))
+        self.assertIn("work        1.0.0", card_lines(self.cfg, row))
+        row = {r.pid: r for r in build_rows(self.cfg, snap, {("alice", TOOLS): Latest("1.0.0", None)})}[TOOLS]
+        self.assertEqual((row.state, row.newer), ("最新", {}))
+
+    def test_commit_based_newer_uses_12_char_display(self):
+        for name in ("alice", "work"):
+            d = self.cfg.profiles[name].config_dir / "plugins" / "installed_plugins.json"
+            data = json.loads(d.read_text())
+            data["plugins"][TOOLS][0]["gitCommitSha"] = "aaaaaaaaaaaa1111"
+            d.write_text(json.dumps(data))
+        row = {r.pid: r for r in build_rows(self.cfg, snapshot(self.cfg), {("work", TOOLS): Latest(None, "bbbbbbbbbbbbbbbb")})}[TOOLS]
+        self.assertEqual((row.state, row.newer), ("有新版", {"work": "bbbbbbbbbbbb"}))
+
+    def test_inconsistent_beats_newer(self):
+        write_plugins(self.cfg, "work", installed={TOOLS: [("user", "0.9.0", None)]}, known=GOOD_KNOWN)
+        row = {r.pid: r for r in build_rows(self.cfg, snapshot(self.cfg), {("alice", TOOLS): Latest("1.1.0", None)})}[TOOLS]
+        self.assertEqual((row.state, row.newer), ("不一致", {"alice": "1.1.0"}))

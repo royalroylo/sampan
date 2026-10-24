@@ -1,4 +1,5 @@
 """Pure data model of the plugin screen: rows, info card, per-profile choices, change plan and save preview. No curses, no I/O beyond reading plugin state."""
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -42,7 +43,86 @@ class PluginRow:
     newer: dict
 
 
-def build_rows(cfg, snap, latest=None):  # `latest` is accepted for the update check (not wired in yet)
+@dataclass(frozen=True)
+class CatalogEntry:
+    pid: str
+    description: str
+    source: str | None
+
+
+def _read_marketplace(clone):
+    """Plugin entries of a marketplace clone; [] when the file is missing or malformed."""
+    try:
+        data = json.loads((Path(clone) / ".claude-plugin" / "marketplace.json").read_text())
+        return [e for e in data["plugins"] if isinstance(e, dict) and isinstance(e.get("name"), str)]
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
+
+
+def catalog(cfg, snap):
+    """Plugins offered by the marketplaces already cloned in any existing profile (no network)."""
+    found = {}
+    for p in cfg.profiles.values():
+        if p.name in snap.missing:
+            continue
+        root = Path(p.config_dir) / "plugins" / "marketplaces"
+        try:
+            clones = sorted(d for d in root.iterdir() if d.is_dir())
+        except OSError:
+            continue
+        for clone in clones:
+            mkt = clone.name
+            for e in _read_marketplace(clone):
+                pid = f"{e['name']}@{mkt}"
+                if pid in found:
+                    continue
+                desc = e.get("description", "")
+                desc = desc.splitlines()[0] if isinstance(desc, str) and desc.strip() else ""
+                found[pid] = CatalogEntry(pid, desc, cfg.marketplaces.get(mkt) or snap.states[p.name].marketplaces.get(mkt))
+    return [found[k] for k in sorted(found)]
+
+
+@dataclass(frozen=True)
+class Latest:
+    version: str | None
+    commit: str | None
+
+
+UNKNOWN = Latest(None, None)
+
+
+def newest(profile, mkt, short, run):
+    """Latest version known from the local marketplace clone; `profile` is a Profile. Never uses the network."""
+    clone = Path(profile.config_dir) / "plugins" / "marketplaces" / mkt
+    entry = next((e for e in _read_marketplace(clone) if e["name"] == short), None)
+    if entry is None:
+        return UNKNOWN
+    if isinstance(entry.get("version"), str):
+        return Latest(entry["version"], None)
+    src = entry.get("source")
+    if isinstance(src, str):
+        try:
+            v = json.loads((clone / src / ".claude-plugin" / "plugin.json").read_text()).get("version")
+        except (OSError, ValueError, AttributeError):
+            v = None
+        if isinstance(v, str):
+            return Latest(v, None)
+        r = run(["git", "-C", str(clone), "rev-parse", "HEAD"])
+        return Latest(r.stdout.strip()[:12], None) if r.returncode == 0 and r.stdout.strip() else UNKNOWN
+    if isinstance(src, dict) and isinstance(src.get("sha"), str):
+        return Latest(None, src["sha"])
+    return UNKNOWN
+
+
+def is_newer(installed, commit, latest):
+    """True only when a comparable value is known on both sides and the 12-character prefixes differ."""
+    return bool((installed and latest.version and installed[:12] != latest.version[:12])
+                or (commit and latest.commit and commit[:12] != latest.commit[:12]))
+
+
+def build_rows(cfg, snap, latest=None):
+    """`latest` maps (profile name, pid) -> Latest; None skips the newer-version check."""
+    latest = latest or {}
     profiles = list(cfg.profiles.values())
     ids = sorted(set().union(*(set(p.plugins) for p in profiles), *(set(s.installed) for s in snap.states.values())))
     shorts = [pid.split("@", 1)[0] for pid in ids]
@@ -59,10 +139,17 @@ def build_rows(cfg, snap, latest=None):  # `latest` is accepted for the update c
             state = "不一致"
         else:
             state = "最新"
+        newer = {}
+        for p in live:
+            lt = latest.get((p.name, pid))
+            if p.name in installed and lt and is_newer(installed[p.name], snap.states[p.name].commits.get(pid), lt):
+                newer[p.name] = lt.version or (lt.commit or "")[:12]
+        if newer and state == "最新":
+            state = "有新版"
         source = cfg.marketplaces.get(mkt) or next(
             (snap.states[p.name].marketplaces[mkt] for p in live if snap.states[p.name].marketplaces.get(mkt)), None)
         name = short if shorts.count(short) == 1 else pid
-        rows.append(PluginRow(pid, short, mkt, name, installed, listed, len(profiles), state, source, {}))
+        rows.append(PluginRow(pid, short, mkt, name, installed, listed, len(profiles), state, source, newer))
     return rows
 
 
