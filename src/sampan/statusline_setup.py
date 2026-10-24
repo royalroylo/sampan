@@ -70,6 +70,7 @@ def _install_command(cmd, sampan_path):
     if toks is not None:
         if toks[0] == str(sampan_path):
             return cmd
+        cmd = cmd.lstrip()
         return shlex.quote(str(sampan_path)) + cmd[_first_token_end(cmd):]  # an older install location: only the path changes
     if not cmd:
         return f"{shlex.quote(str(sampan_path))} statusline"
@@ -168,6 +169,9 @@ def _run(cfg, out, ask, profiles, *, yes, compute, same_note, label):
 
 
 def install(cfg, out, ask, profiles, sampan_path, *, yes=False):
+    if Path(sampan_path).name != "sampan":  # e.g. run as `python -m sampan`: a status line pointing there would break
+        actionlog.tee(cfg, "statusline install", out)(f"❌ 找不到 sampan 執行檔（{sampan_path}），沒改")
+        return 1
     return _run(cfg, out, ask, profiles, yes=yes, label="statusline install", same_note="已經接上，不用改",
                 compute=lambda cur: _install_command(cur, sampan_path))
 

@@ -114,6 +114,15 @@ class LaunchTest(unittest.TestCase):
         cmd_codex(self.cfg, ["--x"], execvpe=lambda f, a, e: calls.append((f, a)))
         self.assertEqual(calls, [("codex", ["codex", "--x"])])
 
+    def test_cmd_codex_refuses_when_codex_is_off(self):
+        from dataclasses import replace
+        cfg = replace(self.cfg, codex=replace(self.cfg.codex, enabled=False))
+        calls, lines = [], []
+        rc = cmd_codex(cfg, [], out=lines.append, execvpe=lambda f, a, e: calls.append((f, a)))
+        self.assertEqual(rc, 2)
+        self.assertEqual(calls, [])
+        self.assertEqual(lines, ["❌ Codex 已關閉（沒有使用中的 Codex profile）"])
+
 
 class CliPassthroughTest(unittest.TestCase):
     def test_flags_pass_through_to_claude(self):

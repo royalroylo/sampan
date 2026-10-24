@@ -73,6 +73,20 @@ class SetupTest(unittest.TestCase):
         self.install()
         self.assertEqual(self.get(self.alice)["statusLine"]["command"], f"{SAMPAN} statusline -- sh -c 'echo hi'")
 
+    def test_install_rewrites_older_path_with_leading_whitespace(self):
+        old = "  /old/bin/sampan statusline -- sh -c 'echo hi'"
+        self.put(self.alice, {"statusLine": {"type": "command", "command": old}})
+        self.assertEqual(self.install(), 0)
+        self.assertEqual(self.get(self.alice)["statusLine"]["command"], f"{SAMPAN} statusline -- sh -c 'echo hi'")
+
+    def test_install_refuses_a_path_that_is_not_sampan(self):
+        self.put(self.alice, {"statusLine": {"type": "command", "command": "echo hi"}})
+        before = self.settings(self.alice).read_text()
+        rc = ss.install(self.cfg, self.lines.append, lambda _p: "y", [self.alice], "/usr/bin/python3")
+        self.assertEqual(rc, 1)
+        self.assertIn("❌ 找不到 sampan 執行檔（/usr/bin/python3），沒改", self.lines)
+        self.assertEqual(self.settings(self.alice).read_text(), before)
+
     def test_uninstall_restores_original(self):
         orig = "jq -r '.a' | cat"
         self.put(self.alice, {"statusLine": {"type": "command", "command": orig, "padding": 2}})

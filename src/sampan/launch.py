@@ -109,7 +109,10 @@ def cmd_claude(cfg, run, out, ask, profile_name, extra, *, execvpe=os.execvpe, i
     return 0
 
 
-def cmd_codex(cfg, extra, *, execvpe=os.execvpe):
+def cmd_codex(cfg, extra, *, out=print, execvpe=os.execvpe):
+    if not cfg.codex.enabled:
+        out("❌ Codex 已關閉（沒有使用中的 Codex profile）")
+        return 2
     argv = codex_argv(extra=extra)
     env = dict(os.environ)
     env.update(_codex_env(cfg))

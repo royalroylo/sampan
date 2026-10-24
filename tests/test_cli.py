@@ -148,6 +148,13 @@ class CliTest(unittest.TestCase):
             cli.main(["statusline"])
             self.assertEqual(sl.call_args.args[2], [])
 
+    def test_statusline_passes_wrapped_flags_through(self):
+        stdin = mock.Mock()
+        stdin.buffer.read.return_value = b"{}"
+        with mock.patch("sampan.usage.cmd_statusline", return_value=0) as sl, mock.patch("sys.stdin", stdin):
+            self.assertEqual(cli.main(["statusline", "--", "cmd", "--flag"]), 0)
+        self.assertEqual(sl.call_args.args[2], ["cmd", "--flag"])
+
     def test_statusline_runs_wrapped_even_when_config_fails(self):
         stdin = mock.Mock()
         stdin.buffer.read.return_value = b"{}"

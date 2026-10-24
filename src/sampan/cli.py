@@ -353,7 +353,7 @@ def _dispatch(cfg, args):
         return cmd_claude(cfg, run, out, input, profile, rest)
     if cmd == "codex":
         from .launch import cmd_codex
-        return cmd_codex(cfg, list(args.rest))
+        return cmd_codex(cfg, list(args.rest), out=out)
     if cmd == "save":
         from .save import cmd_save
         return cmd_save(cfg, run, out, quiet=args.quiet, dry_run=args.dry_run)
