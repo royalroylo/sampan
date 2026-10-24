@@ -7,7 +7,7 @@ from .text import ENTER, MOVES
 
 
 class PluginPicker(Picker):
-    """Plugin list: Picker navigation (digits, /, arrows) plus the plugin actions."""
+    """Plugin or marketplace list (rows only need .name): Picker navigation (digits, /, arrows) plus the list actions; Tab switches tabs."""
 
     def key(self, k):
         if self.query is not None:
@@ -19,6 +19,8 @@ class PluginPicker(Picker):
         self.jump = ""
         if k in ("q", "\x1b"):
             return ("back", [])
+        if k == "\t":
+            return ("tab", [])
         if k == "U":
             return ("update_all", [])
         if k == "a":

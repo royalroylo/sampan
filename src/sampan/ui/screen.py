@@ -3,8 +3,9 @@ import os
 import time
 from datetime import datetime, timezone
 
+from ..marketplace_view import build_market_rows, market_card, market_choices
 from ..plugin_apply import check_latest
-from ..plugin_view import NO_SOURCE, _mkt, build_rows, profile_choices, snapshot
+from ..plugin_view import NO_SOURCE, _mkt, build_rows, catalog, profile_choices, snapshot
 from ..plugin_view import card_lines as plugin_card
 from ..prompts import SKIP, prompt_choices
 from ..status import status_rows
@@ -12,10 +13,21 @@ from ..tmux import TMUX
 from .actions import cmd_ui, dir_context
 from .cards import Wrap, _quote_of, adopt_card, card_lines, gather_cards, preview_header, restore_card
 from .dirpick import DirPicker
-from .plugin_actions import add_flow, reload_config, restart_offer, save_flow, update_flow
+from .plugin_actions import (
+    add_flow,
+    market_add_flow,
+    market_save_flow,
+    market_toggles,
+    market_update_flow,
+    reload_config,
+    restart_offer,
+    save_flow,
+    update_flow,
+)
 from .plugin_state import CatalogPicker, PluginPicker, ProfileToggles
 from .render import (
     LIST_COLS,
+    MARKET_COLS,
     PLUGIN_COLS,
     TOGGLE_COLS,
     _adopt_cells,
@@ -23,11 +35,13 @@ from .render import (
     _restore_cells,
     list_cols,
     list_empty,
+    market_cells,
     plugin_cells,
     prompt_frame,
     render,
     render_dirpick,
     screen_title,
+    tab_title,
     toggle_cells,
 )
 from .state import Checklist, Picker, _row_key
@@ -36,7 +50,8 @@ from .text import BACKSPACE, ENTER, MOVES, clean_capture, text_width
 KEYS_HELP = "↑↓ 移動　1-9 跳列　/ 搜尋　空白 勾選　Enter 接上　s 停掉　R 接回　A 接手　n 開新　w 存檔　p plugin　q 離開"
 RESTORE_HELP = "↑↓ 移動　空白 勾選　Enter 確認接回　q 取消"
 ADOPT_HELP = "↑↓ 移動　空白 勾選　Enter 確認接手　q 取消"
-PLUGINS_HELP = "↑↓ 移動　1-9 跳列　/ 搜尋　Enter 選 profile　u 更新這個　U 全部更新　a 新增　r 檢查新版　q 返回"
+PLUGINS_HELP = "↑↓ 移動　1-9 跳列　/ 搜尋　Enter 選 profile　u 更新這個　U 全部更新　a 新增　r 檢查新版　q 返回　Tab 切到來源"
+MARKETS_HELP = "↑↓ 移動　1-9 跳列　/ 搜尋　Enter 選 profile　u 更新這個　U 全部更新　a 新增來源　Tab 切到 plugin　q 返回"
 TOGGLE_HELP = "↑↓ 移動　空白 勾選／取消　s 儲存　Esc 返回"
 CATALOG_HELP = "↑↓ 移動　/ 搜尋　Enter 選這個　i 自己輸入　q 返回"
 PLUGINS_TITLE = "sampan · plugin 管理"
@@ -356,13 +371,14 @@ class CursesScreen:
             self.prompt = None
 
     def plugins(self, *, ask, own_pane=None, on_prompt=None):
-        """The plugin screen (p): layer 1 lists the plugins, Enter opens layer 2 (per-profile toggles). q returns 0.
-        Waits for keys without timeouts; the config is re-read after every action (a save rewrites it)."""
+        """The plugin screen (p): layer 1 lists the plugins (or, after Tab, the marketplaces), Enter opens layer 2
+        (per-profile toggles). q returns 0. Waits for keys without timeouts; the config is re-read after every action."""
         own_pane = own_pane if own_pane is not None else self.own_pane
         cfg = reload_config(self.cfg, self.out)
-        latest, checked_at = None, None
-        rows = build_rows(cfg, snapshot(cfg), latest)
-        picker = PluginPicker(rows, clock=self.clock)
+        latest, checked_at, tab = None, None, "plugin"
+        snap = snapshot(cfg)
+        rows, mrows = build_rows(cfg, snap, latest), build_market_rows(cfg, snap)
+        pickers = {"plugin": PluginPicker(rows, clock=self.clock), "market": PluginPicker(mrows, clock=self.clock)}
         saved = self.view
         self._timeout(-1)
 
@@ -372,13 +388,19 @@ class CursesScreen:
                               on_prompt=on_prompt, rows_fn=self.rows_fn)
         try:
             while True:
-                title = PLUGINS_TITLE + (f"　上次檢查 {checked_at}" if checked_at else "")
-                cells = {r.name: plugin_cells(r, i, len(rows)) for i, r in enumerate(rows, 1)}
+                picker = pickers[tab]
+                title = tab_title(PLUGINS_TITLE, tab) + (f"　上次檢查 {checked_at}" if checked_at else "")
                 here = picker.visible[picker.cursor] if picker.visible else None
-                empty = "目前沒有任何 plugin（a 新增）" if not picker.query else f"沒有名稱含「{picker.query}」的 plugin"
+                if tab == "plugin":
+                    cells = {r.name: plugin_cells(r, i, len(rows)) for i, r in enumerate(rows, 1)}
+                    empty = "目前沒有任何 plugin（a 新增）" if not picker.query else f"沒有名稱含「{picker.query}」的 plugin"
+                    card, help_, cols = plugin_card(cfg, here) if here else [], PLUGINS_HELP, PLUGIN_COLS
+                else:
+                    cells = {r.name: market_cells(r, i, len(mrows)) for i, r in enumerate(mrows, 1)}
+                    empty = "目前沒有任何來源（a 新增來源）" if not picker.query else f"沒有名稱含「{picker.query}」的來源"
+                    card, help_, cols = market_card(cfg, snap, here) if here else [], MARKETS_HELP, MARKET_COLS
                 self.view = dict(title=title, left=[cells[r.name] for r in picker.visible], cursor=picker.cursor,
-                                 card=plugin_card(cfg, here) if here else [], preview=None, help=PLUGINS_HELP,
-                                 cols=PLUGIN_COLS, empty=empty, notice=None,
+                                 card=card, preview=None, help=help_, cols=cols, empty=empty, notice=None,
                                  name_w=max((text_width(c[0]) for c in cells.values()), default=None))
                 self.prompt = picker.prompt
                 self.draw()
@@ -392,9 +414,14 @@ class CursesScreen:
                 self.prompt = None
                 if kind == "back":
                     return 0
+                if kind == "tab":
+                    tab = "market" if tab == "plugin" else "plugin"
+                    continue
                 self.messages = []  # a new action: the message area holds only this action's result
                 goto = None
-                if kind == "open":
+                if tab == "market":
+                    goto = self._market_action(cfg, ask, kind, names, mrows, offer)
+                elif kind == "open":
                     r = next(x for x in rows if x.name == names[0])
                     offer(self._plugin_toggles(cfg, ask, r.pid, r.source, latest))
                 elif kind == "update":
@@ -413,14 +440,67 @@ class CursesScreen:
                                                    latest, new_source=new_source))
                         goto = pid
                 cfg = reload_config(cfg, self.out)
-                rows = build_rows(cfg, snapshot(cfg), latest)
-                picker.reload(rows)  # the cursor stays on the same plugin
-                target = next((r.name for r in rows if r.pid == goto), None)
+                snap = snapshot(cfg)
+                rows, mrows = build_rows(cfg, snap, latest), build_market_rows(cfg, snap)
+                pickers["plugin"].reload(rows)  # the cursor stays on the same row
+                pickers["market"].reload(mrows)
+                if tab == "plugin":
+                    target = next((r.name for r in rows if r.pid == goto), None)
+                elif goto is not None:  # a new source: the row whose config source is the one typed
+                    target = next((r.name for r in mrows if r.source == goto), None)
+                else:
+                    target = None
                 if target is not None and picker.query is None:
                     picker._goto(target)
         finally:
             self.prompt = None
             self.view = saved
+
+    def _market_action(self, cfg, ask, kind, names, mrows, offer):
+        """One action of the 來源 tab. Returns the source just added (to move the cursor to it), else None."""
+        if kind == "open":
+            r = next(x for x in mrows if x.name == names[0])
+            offer(self._market_toggles(cfg, ask, r.name, r.source))
+        elif kind == "update":
+            market_update_flow(cfg, self.run, self.out, ask, [names[0]])
+        elif kind == "update_all":
+            market_update_flow(cfg, self.run, self.out, ask, None)
+        elif kind == "add":
+            src = market_add_flow(self.out, ask)
+            if src:
+                offer(self._market_toggles(cfg, ask, None, src))
+                return src
+        return None  # "check" (r) belongs to the plugin tab
+
+    def _market_toggles(self, cfg, ask, name, source):
+        """Layer 2 of one marketplace (name None: a new source, nothing checked; source None: outside the config).
+        s previews and saves. Returns the profiles that need a restart (a removal that uninstalled plugins)."""
+        snap = snapshot(cfg)
+        choices = market_choices(cfg, snap, name, source)
+        t = market_toggles(choices)
+        if name is None:
+            card = [f"來源 {source}", "名稱 （加入後才知道名稱）"]
+        else:
+            n = sum(1 for e in catalog(cfg, snap) if _mkt(e.pid) == name)
+            card = [f"來源 {source or '（不在設定檔）'}", f"目錄有 {n} 個 plugin"]
+        while True:
+            self.view = dict(title=f"{PLUGINS_TITLE} › {name or source}", left=[toggle_cells(t, c) for c in choices],
+                             cursor=t.cursor, card=card, preview=None, help=TOGGLE_HELP, cols=TOGGLE_COLS,
+                             empty="（沒有任何 profile）", notice=None, name_w=None)
+            self.prompt = t.prompt
+            self.draw()
+            k = self.key()
+            if k is None:
+                continue
+            action = t.key(k)
+            self.prompt = t.prompt
+            if action is None:
+                continue
+            self.prompt = None
+            if action[0] == "back":
+                return []
+            return market_save_flow(cfg, self.run, self.out, ask, name, choices, t.checked, source=source,
+                                    new=name is None)
 
     def _plugin_toggles(self, cfg, ask, pid, source, latest, *, new_source=None):
         """Layer 2: one box per profile; s previews and saves. Returns the profiles that changed (empty when nothing was saved)."""

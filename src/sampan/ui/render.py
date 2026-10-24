@@ -268,3 +268,19 @@ def toggle_cells(t, c):
     note = t.note(c)
     return (f"{t.mark(c)} {c.profile}", (c.installed or "—")[:12],
             (note or "", "attn" if note and note.startswith("←") else "muted"))
+
+
+MSTYLE = {"一致": "ok", "沒用到": "muted", "來源不同": "err", "清單外": "warn"}
+MARKET_COLS = (5, 8)  # marketplace list: registered/total, state
+
+
+def market_cells(row, num, total):
+    """One marketplace list row (a MarketRow): number and name, registered/total, coloured state."""
+    return (f"{num:>{len(str(total))}} {row.name}", f"{len(row.registered)}/{row.total}",
+            (row.state, MSTYLE[row.state]))
+
+
+def tab_title(base, tab):
+    """base + the tab switch, the active one wrapped in ▸…◂: "… ［▸plugin◂｜來源］" (tab is "plugin" or "market")."""
+    words = [("plugin", "plugin"), ("market", "來源")]
+    return f"{base} ［" + "｜".join(f"▸{w}◂" if k == tab else w for k, w in words) + "］"

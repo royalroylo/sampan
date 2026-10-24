@@ -274,7 +274,7 @@ class FlowTest(unittest.TestCase):
         rc = pa.plain_plugins(self.cfg, run, self.out.append, ask, rows_fn=lambda c, r: rows)
         self.assertEqual(rc, 0)
         text = "\n".join(self.out)
-        self.assertIn("═══ sampan · plugin 管理 ═══", text)
+        self.assertIn("═══ sampan · plugin 管理 ［▸plugin◂｜來源］ ═══", text)
         self.assertIn("  [ 2] tools                        1/2  不一致", text)
         self.assertIn("  [2] [ ]! work  —  清單有但沒裝", text)
         self.assertIn("  [2] [x]! work  —  ← 儲存時會安裝", text)
@@ -461,7 +461,7 @@ class CursesPluginScreenTest(unittest.TestCase):
         self.assertEqual(s.plugins(ask=s.ask), 0)
         frames = self.frames()
         text = "\n".join(frames)
-        self.assertRegex(text, r"sampan · plugin 管理　上次檢查 \d\d:\d\d")
+        self.assertRegex(text, r"sampan · plugin 管理 ［▸plugin◂｜來源］　上次檢查 \d\d:\d\d")
         self.assertIn("1.0.0 → 2.0.0", text)
         self.assertIn("↑↓ 移動　/ 搜尋　Enter 選這個　i 自己輸入　q 返回", text)
         self.assertIn("extra@my-plugins", text)
@@ -482,6 +482,190 @@ class CursesPluginScreenTest(unittest.TestCase):
         self.assertIn("sampan · plugin 管理 › extra@my-plugins", text)
         self.assertEqual([c["args"] for c in run.calls], [mkt, update])
         self.assertIn("沒有變動", text)
+
+
+TOKEN_REFUSAL = "❌ 網址裡不要放帳號或 token，認證交給 git 的 credential helper"
+
+
+def market_runner(cfg, **kw):
+    from tests.test_plugin_apply import market_fake
+    run = FakeRunner(strict=True)
+    rule = market_fake(run, cfg, **kw)
+    run.on(["claude", "plugin", "marketplace", "add"], rule)
+    run.on(["claude", "plugin", "marketplace", "remove"], rule)
+    return run
+
+
+class MarketTabTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.cfg = make_env(self.tmp)
+        self.out = []
+        write_state(self.cfg.profiles["alice"], [TOOLS], [("my-plugins", "owner/my-plugins")])
+        write_state(self.cfg.profiles["work"], [], [("my-plugins", "owner/my-plugins")])
+
+    def screen(self, keys, run=None, rows=()):
+        from sampan.ui.screen import CursesScreen
+        from tests.test_ui_screen import FakeScr
+        self.scr = FakeScr(keys)
+        self.run = run or FakeRunner(strict=True)
+        return CursesScreen(self.scr, self.cfg, self.run, rows_fn=lambda c, r: list(rows))
+
+    def frames(self):
+        return ["\n".join(f) for f in self.scr.screens]
+
+    def markets(self):
+        return tomllib.loads(self.cfg.path.read_text()).get("marketplaces", {})
+
+    def test_picker_tab_key(self):
+        self.assertEqual(PluginPicker(rows("a")).key("\t"), ("tab", []))
+        self.assertEqual(PluginPicker([]).key("\t"), ("tab", []))
+
+    def test_tab_switches_and_title_marks_active(self):
+        from sampan.ui.screen import MARKETS_HELP, PLUGINS_HELP
+        self.assertTrue(PLUGINS_HELP.endswith("　Tab 切到來源"))
+        self.assertEqual(MARKETS_HELP, "↑↓ 移動　1-9 跳列　/ 搜尋　Enter 選 profile　u 更新這個　U 全部更新　a 新增來源"
+                                       "　Tab 切到 plugin　q 返回")
+        s = self.screen(["\t", "\t", "\t", "q"])
+        self.assertEqual(s.plugins(ask=s.ask), 0)
+        heads = [f.split("\n")[0] for f in self.frames()]
+        self.assertIn("sampan · plugin 管理 ［▸plugin◂｜來源］", heads[0])
+        market = [f for f in self.frames() if "［plugin｜▸來源◂］" in f.split("\n")[0]]
+        self.assertTrue(market)
+        self.assertIn("my-plugins", market[0])
+        self.assertIn(" 2/2 ", market[0])
+        self.assertIn("一致", market[0])
+        self.assertIn("目錄有 0 個 plugin", market[0])  # the layer-1 card is market_card
+        self.assertIn("a 新增來源", market[0])
+        self.assertTrue(any("［▸plugin◂｜來源］" in h for h in heads[heads.index(next(
+            h for h in heads if "▸來源◂" in h)):]))  # Tab again comes back to plugin
+        self.assertEqual(self.run.calls, [])
+
+    def test_market_cells_exact(self):
+        from sampan.marketplace_view import build_market_rows
+        from sampan.ui.render import market_cells
+        mrows = build_market_rows(self.cfg, snapshot(self.cfg))
+        mp = next(r for r in mrows if r.name == "my-plugins")
+        self.assertEqual(market_cells(mp, 2, 12), (" 2 my-plugins", "2/2", ("一致", "ok")))
+        write_state(self.cfg.profiles["work"], [], [("my-plugins", "owner/my-plugins"), ("other", "x/other")])
+        mrows = build_market_rows(self.cfg, snapshot(self.cfg))
+        other = next(r for r in mrows if r.name == "other")
+        self.assertEqual(market_cells(other, 3, 3), ("3 other", "1/2", ("清單外", "warn")))
+
+    def test_market_layer2_add_profile_save_confirm(self):
+        run = market_runner(self.cfg, name_for=lambda s: "new-mkt")
+        keys = ["\t", "a", *"owner/new-mkt", "\n", " ", "s", "y", "\n", "q"]
+        s = self.screen(keys, run)
+        self.assertEqual(s.plugins(ask=s.ask), 0)
+        self.assertEqual([c["args"] for c in run.calls], [["claude", "plugin", "marketplace", "add", "owner/new-mkt"]])
+        self.assertEqual(self.markets()["new-mkt"], "owner/new-mkt")
+        text = "\n".join(self.frames())
+        self.assertIn("來源（owner/repo 或 git 網址）: owner/new-mkt", text)
+        self.assertIn("sampan · plugin 管理 › owner/new-mkt", text)
+        self.assertIn("名稱 （加入後才知道名稱）", text)
+        self.assertIn("[x] alice", text)
+        self.assertIn("← 儲存時會加入", text)
+        self.assertIn("+ 加入到 alice（alice@example.com）", text)
+        self.assertIn("✔ alice：已加入 new-mkt", text)
+        self.assertNotIn("要生效需重開", text)  # adding a marketplace needs no restart
+        last = self.frames()[-1]
+        self.assertIn("［plugin｜▸來源◂］", last.split("\n")[0])
+        self.assertIn("new-mkt", last)
+        self.assertIn(" 1/2 ", last)
+
+    def test_market_layer2_existing_row_card_and_update_keys(self):
+        run = FakeRunner(strict=True)
+        upd = ["claude", "plugin", "marketplace", "update", "my-plugins"]
+        run.on(upd, lambda a: cp())
+        prompts = []
+        # tab, ↓ to my-plugins, Enter (layer 2: both disabled, they list tools), Esc; u updates it; U asks, n
+        s = self.screen(["\t", "KEY_DOWN", "\n", "\x1b", "u", "U", "n", "\n", "q"], run)
+        ask = lambda p: prompts.append(p) or s.ask(p)  # noqa: E731
+        self.assertEqual(s.plugins(ask=ask), 0)
+        text = "\n".join(self.frames())
+        self.assertIn("sampan · plugin 管理 › my-plugins", text)
+        self.assertIn("來源 owner/my-plugins", text)
+        self.assertIn("目錄有 0 個 plugin", text)
+        self.assertIn("[-] alice", text)
+        self.assertIn("清單還有 1 個 plugin", text)  # the note column (TOGGLE_COLS) cuts the rest
+        self.assertEqual([c["args"] for c in run.calls], [upd, upd])  # u: once per profile that has it
+        self.assertEqual(prompts, ["全部來源、全部 profile 都更新？(y/N): "])
+        self.assertIn("已取消", text)
+
+    def test_market_add_flow_refuses_token_url(self):
+        prompts = []
+        ask = lambda p: prompts.append(p) or "https://user:tok@example.com/r.git"  # noqa: E731
+        self.assertIsNone(pa.market_add_flow(self.out.append, ask))
+        self.assertEqual(prompts, ["來源（owner/repo 或 git 網址）: "])
+        self.assertEqual(self.out, [TOKEN_REFUSAL])
+        self.out.clear()
+        self.assertIsNone(pa.market_add_flow(self.out.append, answers("not a source")))
+        self.assertEqual(self.out, [f"❌ 來源要寫成 {SOURCE_RULE}"])
+        self.out.clear()
+        self.assertIsNone(pa.market_add_flow(self.out.append, answers("")))
+        self.assertEqual(self.out, [])
+        self.assertEqual(pa.market_add_flow(self.out.append, answers(" owner/new-mkt ")), "owner/new-mkt")
+
+    def test_market_save_flow_cancel_and_drops_count_as_changed(self):
+        from sampan.marketplace_view import market_choices
+        write_state(self.cfg.profiles["work"], ["foo@other"], [("my-plugins", "owner/my-plugins"), ("other", "x/other")])
+        run = market_runner(self.cfg)
+        choices = market_choices(self.cfg, snapshot(self.cfg), "other", None)
+        self.assertEqual(pa.market_save_flow(self.cfg, run, self.out.append, answers("y"), "other", choices,
+                                             {"alice": False, "work": True}, source=None, new=False), [])
+        self.assertEqual(self.out, ["沒有要變更的"])
+        self.out.clear()
+        self.assertEqual(pa.market_save_flow(self.cfg, run, self.out.append, answers("n"), "other", choices,
+                                             {"alice": False, "work": False}, source=None, new=False), [])
+        self.assertIn("  − 從 work（work@example.com） 移除（連同已裝的 foo 一起解除安裝）", self.out)
+        self.assertEqual((self.out[-1], run.calls), ("已取消", []))
+        self.out.clear()
+        got = pa.market_save_flow(self.cfg, run, self.out.append, answers("y"), "other", choices,
+                                  {"alice": False, "work": False}, source=None, new=False)
+        self.assertEqual(got, ["work"])
+        self.assertEqual([c["args"] for c in run.calls], [["claude", "plugin", "marketplace", "remove", "other"]])
+
+    def test_plain_t_toggles_tab(self):
+        prompts = []
+        it = iter(["t", "t", "q"])
+        ask = lambda p: prompts.append(p) or next(it)  # noqa: E731
+        self.assertEqual(pa.plain_plugins(self.cfg, FakeRunner(strict=True), self.out.append, ask), 0)
+        self.assertEqual(prompts, [pa.MENU, pa.MARKET_MENU, pa.MENU])
+        self.assertIn("t 切換 plugin／來源", pa.MENU)
+        self.assertIn("t 切換 plugin／來源", pa.MARKET_MENU)
+        self.assertIn("a 新增來源", pa.MARKET_MENU)
+        self.assertIn("═══ sampan · plugin 管理 ［plugin｜▸來源◂］ ═══", self.out)
+        self.assertIn("  [ 2] my-plugins                   2/2  一致", self.out)
+        self.assertEqual(self.out.count("═══ sampan · plugin 管理 ［▸plugin◂｜來源］ ═══"), 2)
+
+    def test_plain_market_remove_with_drops_offers_restart(self):
+        write_state(self.cfg.profiles["work"], ["foo@other"], [("my-plugins", "owner/my-plugins"), ("other", "x/other")])
+        run = market_runner(self.cfg)
+        it = iter(["t", "3", "2", "s", "y", "x", "q"])
+        prompts = []
+        ask = lambda p: prompts.append(p) or next(it)  # noqa: E731
+        rows_ = [status_row("a", profile="work")]
+        self.assertEqual(pa.plain_plugins(self.cfg, run, self.out.append, ask, rows_fn=lambda c, r: rows_), 0)
+        self.assertIn("── other ──", self.out)
+        self.assertIn("  [2] [ ] work  x/other  ← 儲存時會移除", self.out)
+        self.assertEqual([c["args"] for c in run.calls], [["claude", "plugin", "marketplace", "remove", "other"]])
+        self.assertIn("要生效需重開 work 的 session（1 個）：按 R 立刻重開，其他鍵稍後（輸入 R）: ", prompts)
+        self.assertEqual(prompts[-1], pa.MARKET_MENU)  # back on the 來源 tab
+
+    def test_plain_market_add_update_and_update_all(self):
+        run = market_runner(self.cfg, name_for=lambda s: "new-mkt")
+        upd = ["claude", "plugin", "marketplace", "update", "my-plugins"]
+        run.on(upd, lambda a: cp())
+        it = iter(["t", "a", "owner/new-mkt", "1", "s", "y", "u2", "U", "n", "a", "https://u:t@h/r.git", "q"])
+        prompts = []
+        ask = lambda p: prompts.append(p) or next(it)  # noqa: E731
+        self.assertEqual(pa.plain_plugins(self.cfg, run, self.out.append, ask), 0)
+        self.assertIn("── owner/new-mkt ──", self.out)
+        self.assertEqual(self.markets()["new-mkt"], "owner/new-mkt")
+        self.assertEqual([c["args"] for c in run.calls],
+                         [["claude", "plugin", "marketplace", "add", "owner/new-mkt"], upd, upd])
+        self.assertIn("全部來源、全部 profile 都更新？(y/N): ", prompts)
+        self.assertIn(TOKEN_REFUSAL, self.out)
 
 
 if __name__ == "__main__":

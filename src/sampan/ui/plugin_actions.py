@@ -3,15 +3,30 @@ Also the --plain plugin menu (plain_plugins)."""
 import re
 
 from ..config import SOURCE_RULE, ConfigError, load_config, strip_credentials, valid_source
-from ..plugin_apply import apply_changes, check_latest, restart_hint, restart_profiles, running_counts, update_plugins
+from ..marketplace_view import build_market_rows, market_choices, market_preview, plan_market
+from ..plugin_apply import (
+    apply_changes,
+    apply_market,
+    check_latest,
+    refuse_credentials,
+    restart_hint,
+    restart_profiles,
+    running_counts,
+    update_markets,
+    update_plugins,
+)
 from ..plugin_view import _mkt, build_rows, catalog, plan_changes, preview_lines, profile_choices, snapshot
 from ..status import status_rows
 from ..textwidth import pad
 from .actions import _ask
 from .plugin_state import ProfileToggles
+from .render import tab_title
 
 PID_RE = re.compile(r"^[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+$")
-MENU = "編號＝選 profile　u 編號＝更新　U 全部更新　a 新增　r 檢查新版　q 返回: "
+MENU = "編號＝選 profile　u 編號＝更新　U 全部更新　a 新增　r 檢查新版　t 切換 plugin／來源　q 返回: "
+MARKET_MENU = "編號＝選 profile　u 編號＝更新　U 全部更新　a 新增來源　t 切換 plugin／來源　q 返回: "
+MARKET_NOTES = ("← 儲存時會加入", "← 儲存時會移除")
+TITLE = "sampan · plugin 管理"
 TOGGLE = "輸入編號切換（可多個），s 儲存，q 返回: "
 MAX_HITS = 30
 
@@ -80,6 +95,47 @@ def add_flow(cfg, out, ask, snap, choose_fn):
     return pid, src
 
 
+def market_toggles(choices):
+    """Layer-2 boxes for a marketplace: checked = registered in that profile (nothing checked for a new source)."""
+    return ProfileToggles(choices, notes=MARKET_NOTES, mismatch_fn=lambda c: None)
+
+
+def market_save_flow(cfg, run, out, ask, name, choices, checked, *, source, new):
+    """Preview the marketplace plan, confirm, apply (name None for a new source; source None for one outside the config).
+    Returns the profiles that need a session restart: only those where a removal also uninstalled plugins."""
+    changes = plan_market(snapshot(cfg), choices, checked, name)
+    if not changes:
+        out("沒有要變更的")
+        return []
+    for line in market_preview(cfg, name, changes, new=new):
+        out(line)
+    if (_ask(ask, "確定？(y/N): ") or "").lower() != "y":
+        out("已取消")
+        return []
+    done = apply_market(cfg, run, out, ask, name, changes, source=source).changed
+    return [ch.profile for ch in changes if not ch.add and ch.drops and ch.profile in done]
+
+
+def market_update_flow(cfg, run, out, ask, names):
+    """names=None updates every marketplace after a confirmation; a list runs without asking."""
+    if names is None and (_ask(ask, "全部來源、全部 profile 都更新？(y/N): ") or "").lower() != "y":
+        out("已取消")
+        return
+    update_markets(cfg, run, out, names)
+
+
+def market_add_flow(out, ask):
+    """Ask for a new marketplace source. Returns it, or None (cancelled, credentials in it, or not a valid source)."""
+    src = _ask(ask, "來源（owner/repo 或 git 網址）: ")
+    if not src:
+        return None
+    refusal = refuse_credentials(src)
+    if refusal:
+        out(refusal)
+        return None
+    return src
+
+
 def restart_offer(cfg, run, out, ask, changed, getkey, *, own_pane=None, on_prompt=None, rows_fn=status_rows, **fns):
     """Offer to restart the running sessions of the changed profiles; only the R key restarts.
     fns: restart_fn (default restart_profiles) and anything else it takes (stop_fn, restore_fn)."""
@@ -119,25 +175,19 @@ def _plain_choose(out, ask):
     return choose
 
 
-def _toggle_loop(cfg, run, out, ask, pid, source, checked=None, *, new_source=None, own_pane=None, on_prompt=None,
-                 **fns):
-    """Layer 2 in --plain: toggle profiles by number, s saves (then offers the restart), q returns."""
-    choices = profile_choices(cfg, snapshot(cfg), pid, source)
-    t = ProfileToggles(choices, checked)
+def _toggles(out, ask, header, t, save):
+    """Layer 2 in --plain: toggle profiles by number; s calls save(checked) and returns its result, q returns []."""
+    choices = t.choices
     while True:
-        out(f"── {pid} ──")
+        out(f"── {header} ──")
         for j, c in enumerate(choices, 1):
             out(f"  [{j}] {t.mark(c)} {c.profile}  {c.installed[:12] if c.installed else '—'}  {t.note(c) or ''}")
         raw = _ask(ask, TOGGLE)
         if raw == "s":
-            changed = save_flow(cfg, run, out, ask, pid, choices, t.checked, new_source=new_source)
-            if changed:
-                restart_offer(cfg, run, out, ask, changed, lambda p: _ask(ask, p + "（輸入 R）: "),
-                              own_pane=own_pane, on_prompt=on_prompt, **fns)
-            return
+            return save(t.checked)
         if raw is None or raw in ("", "q"):
             if raw is None or not t.dirty() or (_ask(ask, "放棄變更？(y/N): ") or "").lower() == "y":
-                return
+                return []
             continue
         for tok in raw.split():
             if not tok.isdigit() or not 1 <= int(tok) <= len(choices):
@@ -150,13 +200,73 @@ def _toggle_loop(cfg, run, out, ask, pid, source, checked=None, *, new_source=No
                 t.checked[c.profile] = not t.checked[c.profile]
 
 
+def _plain_restart(cfg, run, out, ask, changed, *, own_pane=None, on_prompt=None, **fns):
+    if changed:
+        restart_offer(cfg, run, out, ask, changed, lambda p: _ask(ask, p + "（輸入 R）: "),
+                      own_pane=own_pane, on_prompt=on_prompt, **fns)
+
+
+def _toggle_loop(cfg, run, out, ask, pid, source, checked=None, *, new_source=None, own_pane=None, on_prompt=None,
+                 **fns):
+    """Layer 2 of a plugin in --plain: toggle profiles by number, s saves (then offers the restart), q returns."""
+    choices = profile_choices(cfg, snapshot(cfg), pid, source)
+    changed = _toggles(out, ask, pid, ProfileToggles(choices, checked), lambda ck: save_flow(
+        cfg, run, out, ask, pid, choices, ck, new_source=new_source))
+    _plain_restart(cfg, run, out, ask, changed, own_pane=own_pane, on_prompt=on_prompt, **fns)
+
+
+def _market_loop(cfg, run, out, ask, name, source, *, own_pane=None, on_prompt=None, **fns):
+    """Layer 2 of a marketplace in --plain (name None: a new source, nothing checked; source None: outside the config)."""
+    choices = market_choices(cfg, snapshot(cfg), name, source)
+    changed = _toggles(out, ask, name or source, market_toggles(choices), lambda ck: market_save_flow(
+        cfg, run, out, ask, name, choices, ck, source=source, new=name is None))
+    _plain_restart(cfg, run, out, ask, changed, own_pane=own_pane, on_prompt=on_prompt, **fns)
+
+
+def _plain_markets(cfg, run, out, ask, raw, rows, kw):
+    """One answer of the --plain 來源 menu."""
+    if raw.isdigit():
+        if not 1 <= int(raw) <= len(rows):
+            out(f"無效編號：{raw}")
+            return
+        r = rows[int(raw) - 1]
+        _market_loop(cfg, run, out, ask, r.name, r.source, **kw)
+    elif raw == "U":
+        market_update_flow(cfg, run, out, ask, None)
+    elif raw.startswith("u") and raw[1:].strip().isdigit() and 1 <= int(raw[1:]) <= len(rows):
+        market_update_flow(cfg, run, out, ask, [rows[int(raw[1:]) - 1].name])
+    elif raw == "a":
+        src = market_add_flow(out, ask)
+        if src:
+            _market_loop(cfg, run, out, ask, None, src, **kw)
+    else:
+        out(f"無效選擇：{raw}")
+
+
 def plain_plugins(cfg, run, out, ask, *, own_pane=None, on_prompt=None, **fns):
-    """The --plain plugin menu. fns are passed to restart_offer (rows_fn, restart_fn…). Returns 0."""
-    latest = None
+    """The --plain plugin menu, with a plugin tab and a 來源 (marketplace) tab; t switches.
+    fns are passed to restart_offer (rows_fn, restart_fn…). Returns 0."""
+    latest, tab = None, "plugin"
+    kw = dict(own_pane=own_pane, on_prompt=on_prompt, **fns)
     while True:
         cfg = reload_config(cfg, out)
+        out(f"═══ {tab_title(TITLE, tab)} ═══")
+        if tab == "market":
+            mrows = build_market_rows(cfg, snapshot(cfg))
+            if not mrows:
+                out("  目前沒有任何來源")
+            for i, r in enumerate(mrows, 1):
+                out(f"  [{i:>2}] {pad(r.name, 28)} {len(r.registered)}/{r.total}  {r.state}")
+            raw = _ask(ask, MARKET_MENU)
+            if raw is None or raw in ("", "q"):
+                return 0
+            if raw == "t":
+                tab = "plugin"
+            else:
+                _plain_markets(cfg, run, out, ask, raw, mrows, kw)
+            out("")
+            continue
         rows = build_rows(cfg, snapshot(cfg), latest)
-        out("═══ sampan · plugin 管理 ═══")
         if not rows:
             out("  目前沒有任何 plugin")
         for i, r in enumerate(rows, 1):
@@ -164,27 +274,25 @@ def plain_plugins(cfg, run, out, ask, *, own_pane=None, on_prompt=None, **fns):
         raw = _ask(ask, MENU)
         if raw is None or raw in ("", "q"):
             return 0
-        restart = lambda changed: changed and restart_offer(  # noqa: E731
-            cfg, run, out, ask, changed, lambda p: _ask(ask, p + "（輸入 R）: "),
-            own_pane=own_pane, on_prompt=on_prompt, **fns)
-        if raw.isdigit():
+        if raw == "t":
+            tab = "market"
+        elif raw.isdigit():
             if not 1 <= int(raw) <= len(rows):
                 out(f"無效編號：{raw}")
                 continue
             r = rows[int(raw) - 1]
-            _toggle_loop(cfg, run, out, ask, r.pid, r.source, own_pane=own_pane, on_prompt=on_prompt, **fns)
+            _toggle_loop(cfg, run, out, ask, r.pid, r.source, **kw)
         elif raw == "U":
-            restart(update_flow(cfg, run, out, ask, None))
+            _plain_restart(cfg, run, out, ask, update_flow(cfg, run, out, ask, None), **kw)
         elif raw.startswith("u") and raw[1:].strip().isdigit() and 1 <= int(raw[1:]) <= len(rows):
-            restart(update_flow(cfg, run, out, ask, [rows[int(raw[1:]) - 1].pid]))
+            _plain_restart(cfg, run, out, ask, update_flow(cfg, run, out, ask, [rows[int(raw[1:]) - 1].pid]), **kw)
         elif raw == "a":
             picked = add_flow(cfg, out, ask, snapshot(cfg), _plain_choose(out, ask))
             if picked:
                 pid, new_source = picked
                 source = new_source or cfg.marketplaces.get(_mkt(pid))
                 # boxes start at the install state: all unchecked for a plugin no profile has yet
-                _toggle_loop(cfg, run, out, ask, pid, source,
-                             new_source=new_source, own_pane=own_pane, on_prompt=on_prompt, **fns)
+                _toggle_loop(cfg, run, out, ask, pid, source, new_source=new_source, **kw)
         elif raw == "r":
             latest = check_latest(cfg, run, out, snapshot(cfg))
         else:
