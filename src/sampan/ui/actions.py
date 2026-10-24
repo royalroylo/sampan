@@ -15,7 +15,7 @@ from .dirpick import recent_dirs, sessions_by_dir
 from .state import row_text
 
 HELP = ("編號 = 接上／切過去（已停止的先接回）；s 停掉　m 搬目錄　P 換 profile　e 改名　R 接回　A 接手 tmux 外的　r retire　a activate"
-        "　n 開新 session　w 立即存檔　/文字 搜尋　q 離開")
+        "　n 開新 session　w 立即存檔　p plugin 管理　/文字 搜尋　q 離開")
 
 
 def _ask(ask, prompt):
@@ -245,6 +245,8 @@ def _plain_action(ask, out, rows, current):
         return ("switch", picked) if picked else ("quit" if picked is None else "invalid", [])
     if c == "n":
         return ("new", [])
+    if choice == "p":
+        return ("plugins", [])
     if c == "s":
         picked = _pick(ask, out, rows, "要停掉哪些？(編號，可多個用空格分隔): ", many=True)
     elif c == "m":
@@ -325,7 +327,7 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
            rename_fn=session_run.cmd_rename, switch_fn=session_run.cmd_switch,
            restore_fn=restore_mod.cmd_restore, restore_picker_fn=None,
            adopt_fn=adopt_mod.cmd_adopt, adopt_picker_fn=None, save_fn=save_mod.cmd_save, loop=False,
-           attach_fn=None, choose_dir_fn=None, updater=None, update_fn=update_mod.do_update, argv=(), prompt_fn=None):
+           attach_fn=None, choose_dir_fn=None, updater=None, update_fn=update_mod.do_update, argv=(), prompt_fn=None, plugins_fn=None):
     """picker_fn(rows, current) returns (action, list of names); when None, use the plain-text menu where a number is typed.
     restore_picker_fn / adopt_picker_fn are the checklist interfaces for R / A; when None, restore / adopt ask in text themselves.
     loop=True: after an action return to the list, leaving only on q / Esc (or when an opened session is attached); False does just one action.
@@ -335,7 +337,8 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
     on success sampan is re-executed with the same arguments (argv).
     prompt_fn(name, agent, prompt): used when R reattach or m move waits for the agent (n and Enter-reattach of one do not wait, they go straight into tmux) and the agent stops at a startup menu (in curses it is
     CursesScreen.prompt_choice, with --plain prompts.plain_prompt); when "go in and handle it myself" is chosen, that session is attached when the action ends.
-    None = do not look at prompts (as before)."""
+    None = do not look at prompts (as before).
+    plugins_fn(ask=…, own_pane=…, on_prompt=…) is the plugin screen for p (curses: CursesScreen.plugins); when None, the --plain plugin menu."""
 
     def _attach_row(names, rows, kw):
         name = names[0]
@@ -385,6 +388,12 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
             return 1, None
         return _switch(cfg, run, out, ask, r, own_pane, switch_fn, kw), None
 
+    def _plugins(names, rows, kw):
+        if plugins_fn is not None:
+            return plugins_fn(ask=ask, own_pane=own_pane, on_prompt=kw.get("on_prompt")), None
+        from .plugin_actions import plain_plugins  # lazy: plugin_actions imports this module
+        return plain_plugins(cfg, run, out, ask, own_pane=own_pane, on_prompt=kw.get("on_prompt")), None
+
     # one handler per action: (names, rows, kw) -> (rc, session to attach to, or None);
     # an unknown action raises directly and is never written to the registry as a state
     handlers = {
@@ -399,6 +408,7 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
         "rename": lambda names, rows, kw: (_rename(cfg, run, out, ask, names[0], rename_fn), None),
         "move": _move_row,
         "switch": _switch_row,
+        "plugins": _plugins,
         "retired": lambda names, rows, kw: (set_state_fn(cfg, out, names[0], "retired"), None),
         "active": lambda names, rows, kw: (set_state_fn(cfg, out, names[0], "active"), None),
     }
