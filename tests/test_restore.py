@@ -533,6 +533,16 @@ class RestoreTest(Base):
         self.assertEqual(self.keys(), [])
         self.assertEqual(r.called(["tmux", "-u", "new-session"]), [])
 
+    def test_restore_mixed_names_reports_retired_and_restores_the_rest(self):
+        self.transcript(A)
+        self.registry([Row("old", "claude", "alice", B, str(self.cwd), "retired"),
+                       Row("live", "claude", "alice", A, str(self.cwd))])
+        r = self.runner()
+        self.restore(r, names=["old", "live"], select_all=True)
+        self.assertIn("old 是 retired；先 sampan activate old", self.msgs)
+        self.assertTrue(any(f"--resume {A}" in str(k) for k in self.keys()))
+        self.assertFalse(any(f"--resume {B}" in str(k) for k in self.keys()))
+
     def test_restore_names_nothing_keeps_old_message_with_retired_rows(self):
         self.registry([Row("old", "claude", "alice", B, str(self.cwd), "retired")])
         self.assertEqual(self.restore(self.runner()), 0)

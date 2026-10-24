@@ -126,9 +126,29 @@ def _wrap_message(text, width):
     style = message_style(text)
     first = _wrap(text, width - 1, max_lines=1 << 30) or [""]
     out = [(first[0], style)]
-    rest = text[len(first[0]):]
+    rest = text[len(first[0]):].lstrip(" ")
     out += [("  " + piece, style) for piece in _wrap(rest, width - 3, max_lines=1 << 30)]
     return out
+
+
+def _fit_messages(groups, n, width):
+    """The last n wrapped lines; the newest message keeps its head (cut with … if too long), older ones keep their tail."""
+    shown = []
+    for i, g in enumerate(reversed(groups)):
+        space = n - len(shown)
+        if space <= 0:
+            break
+        if len(g) <= space:
+            shown = g + shown
+        elif i == 0:
+            g = g[:space]
+            text, style = g[-1]
+            while text and text_width(text) + 1 > width - 1:
+                text = text[:-1]
+            shown = g[:-1] + [(text + "…", style)]
+        else:
+            shown = g[-space:] + shown
+    return shown
 
 
 def render(*, title, left, cursor, card, preview=None, messages=(), prompt=None, help="", width, height,
@@ -148,11 +168,13 @@ def render(*, title, left, cursor, card, preview=None, messages=(), prompt=None,
     prompt_lines += [[(pad(" " + prompt, width), "prompt")]] if prompt is not None else []
     prompt_lines += [[(pad(" " + notice, width), "attn")]] if notice else []
     room = height - 3 - len(prompt_lines)  # title, separator line, key help
-    wrapped = [piece for m in messages for piece in _wrap_message(m, width)]
+    groups = [_wrap_message(m, width) for m in messages]
+    wrapped = [piece for g in groups for piece in g]
     n_msg = min(len(wrapped), max(1, height // 3)) if wrapped else 0
     n_msg = max(0, min(n_msg, room - 1)) if room > 1 else min(n_msg, max(0, room))
     body_h = max(0, room - n_msg)
-    msg_lines = [[(pad(" " + m, width), style)] for m, style in wrapped[len(wrapped) - n_msg:]] if n_msg else []
+    shown = _fit_messages(groups, n_msg, width) if n_msg else []
+    msg_lines = [[(pad(" " + m, width), style)] for m, style in shown]
     if width >= WIDE:
         cw = max(36, min(64, width // 2))
         lw = width - cw - 3

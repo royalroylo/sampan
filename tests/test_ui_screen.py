@@ -130,6 +130,22 @@ class MessageWrapTest(unittest.TestCase):
         self.assertTrue(all(t.startswith("   字") for t in text[1:]))  # 1 gutter + 2 indent
         self.assertEqual("".join(text).count("字"), 91)
 
+    def test_long_newest_message_keeps_its_head_cut_with_ellipsis(self):
+        msgs = ["⚠ HEAD" + "字" * 300]
+        lines = frame_text(render(title="sampan", left=LEFT, cursor=0, card=CARD, messages=msgs, prompt=None, help="h",
+                                  width=60, height=12))
+        shown = [t for t in lines if "字" in t or "HEAD" in t]
+        self.assertIn("HEAD", shown[0])
+        self.assertTrue(shown[-1].rstrip().endswith("…"))
+
+    def test_continuation_indent_is_two_cells_when_wrap_breaks_at_a_space(self):
+        msgs = ["⚠ " + "字" * 37 + " " + "字" * 20]  # the break lands on the space at width 80-1
+        segs = render(title="sampan", left=LEFT, cursor=0, card=CARD, messages=msgs, prompt=None, help="h", width=80,
+                      height=30)
+        text = ["".join(t for t, _ in seg) for seg in segs if "字" in "".join(t for t, _ in seg)]
+        self.assertEqual(len(text), 2)
+        self.assertTrue(text[1].startswith("   字"), text[1])
+
     def test_wrapped_lines_count_against_the_height_limit(self):
         msgs = ["⚠ " + "字" * 100] * 3
         lines = frame_text(render(title="sampan", left=LEFT, cursor=0, card=CARD, messages=msgs, prompt=None, help="h",
