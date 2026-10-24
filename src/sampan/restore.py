@@ -86,6 +86,9 @@ def _blocker(cfg, row, live, alive):
         return f"tmux session 存在但沒有 shell pane（{', '.join(p.command for p in session_panes)}），不動"
     if not Path(row.cwd).is_dir():
         return f"目錄不存在 {row.cwd}"
+    owner = cfg.owner(row.agent, row.profile)
+    if owner is not None and owner.disabled:
+        return f"profile {owner.name} 已停用（sampan profile enable {owner.name} 後可接回）"
     if row.agent == "codex":
         if not cfg.codex.enabled:
             return "設定檔停用了 Codex"

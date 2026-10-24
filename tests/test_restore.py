@@ -150,6 +150,23 @@ class CandidatesTest(Base):
         self.assertIn("找不到 rollout", skips["cx-norollout"])
         self.assertIsNone(skips["cx-ok"])
 
+    def test_restore_skips_rows_of_disabled_profile(self):
+        from sampan.config import load_config
+        from sampan.config_edit import set_profile_flag
+        from tests.helpers import TOML
+        toml = set_profile_flag(TOML, "work", "disabled", True)
+        toml += '\n[profiles.cx]\nagent = "codex"\nconfig_dir = "~/.codex"\ndisabled = true\n'
+        self.cfg.path.write_text(toml)
+        self.cfg = load_config(self.cfg.path, home=self.cfg.home, state_dir=self.cfg.state_dir)
+        self.rollout(TID)
+        self.registry([Row("w", "claude", "work", A, str(self.cwd)),
+                       Row("cx", "codex", "cx", TID, str(self.cwd)),
+                       Row("cx-old", "codex", "", TID, str(self.cwd))])
+        skips = {c.row.tmux: c.skip for c in candidates(self.cfg, self.runner(), _rows(self.cfg), NOW)}
+        self.assertEqual(skips, {"w": "profile work 已停用（sampan profile enable work 後可接回）",
+                                 "cx": "profile cx 已停用（sampan profile enable cx 後可接回）",
+                                 "cx-old": "profile cx 已停用（sampan profile enable cx 後可接回）"})
+
 
 def _rows(cfg):
     from sampan.registry import load_rows

@@ -9,7 +9,7 @@ from . import actionlog
 from .claude_state import move_transcript, transcript_carry, transcript_problem
 from .clock import now_iso
 from .codex_state import _is_codex, codex_pid_in_pane, find_rollout
-from .launch import launch_line, send_line
+from .launch import disabled_problem, launch_line, send_line
 from .observe import PROC_ROOT, SPLIT_HINT, live_by_pane, multi_agent_sessions
 from .procs import descendant_claude, is_descendant, list_procs
 from .prompts import ATTACH, SKIP, Relay
@@ -97,6 +97,9 @@ def cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.sleep
         agent, _, profile = target.rpartition(":") if ":" in target else ("claude", "", target)
         if agent != "claude":
             out(f"❌ 未知的 agent：{agent}（用 claude:<profile> 或 codex）")
+            return 2
+        if disabled_problem(cfg, profile):
+            out(disabled_problem(cfg, profile))
             return 2
         if profile not in cfg.profiles:
             out(f"❌ 未知的 profile：{profile}（可用：{', '.join(cfg.profiles)}）")

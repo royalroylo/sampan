@@ -87,6 +87,12 @@ def build_parser():
     pr = pf.add_parser("rename", help="改名（目錄不動；有 session 在跑時拒絕）")
     pr.add_argument("old")
     pr.add_argument("new")
+    pd = pf.add_parser("disable", help="停用（目錄保留；預設 profile 不能停用；有 session 在跑時拒絕）")
+    pd.add_argument("name")
+    pe = pf.add_parser("enable", help="恢復停用的 profile")
+    pe.add_argument("name")
+    pg = pf.add_parser("forget", help="從設定檔拿掉已停用的 profile，連同登記表裡它的 session（目錄不動，會印出手動接回的指令）")
+    pg.add_argument("name")
 
     hk = sub.add_parser("hook")  # called by Claude Code's SessionStart hook, not listed in the help
     hk.add_argument("event", choices=["session-start"])
@@ -272,9 +278,12 @@ def _dispatch(cfg, args):
         return cmd_ui(cfg, run, out, **where, picker_fn=None, restore_picker_fn=None, adopt_picker_fn=None, loop=True,
                       attach_fn=subprocess.call, updater=checker, argv=argv, prompt_fn=plain_prompt(out, input))
     if cmd == "claude":
-        from .launch import cmd_claude
+        from .launch import cmd_claude, disabled_problem
         rest = list(args.rest)
         profile = rest.pop(0) if rest and not rest[0].startswith("-") else None
+        if profile is not None and disabled_problem(cfg, profile):
+            out(disabled_problem(cfg, profile))
+            return 2
         if profile is not None and profile not in cfg.profiles:
             # a word that is not a profile must not be handed to claude as a prompt (a mistyped profile name would start a new conversation in the default profile)
             out(f"❌ 沒有這個 profile：{profile}（可用：{', '.join(cfg.profiles)}）")
@@ -338,6 +347,12 @@ def _dispatch(cfg, args):
             return profile_ops.cmd_profile_list(cfg, run, out)
         if args.action == "rename":
             return profile_ops.cmd_profile_rename(cfg, run, out, args.old, args.new)
+        if args.action == "disable":
+            return profile_ops.cmd_profile_disable(cfg, run, out, args.name)
+        if args.action == "enable":
+            return profile_ops.cmd_profile_enable(cfg, run, out, args.name)
+        if args.action == "forget":
+            return profile_ops.cmd_profile_forget(cfg, run, out, input, args.name)
         from .init import cmd_profile_add
         return cmd_profile_add(cfg, run, out, args.name, dir=args.dir, home=cfg.home)
     if cmd == "doctor":

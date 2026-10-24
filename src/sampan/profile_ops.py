@@ -1,4 +1,4 @@
-"""sampan profile list / rename, and the one safe way profile actions write config.toml (edit_config)."""
+"""sampan profile list / rename / disable / enable / forget, and the one safe way profile actions write config.toml (edit_config)."""
 import os
 import shutil
 import tomllib
@@ -8,11 +8,12 @@ from pathlib import Path
 from . import actionlog, registry
 from .clock import now_iso, now_stamp
 from .config import ConfigError, load_config
-from .config_edit import NAME_RE, _k, _s, append_section, remove_table, rename_profile
+from .config_edit import NAME_RE, _k, _s, append_section, remove_profile, remove_table, rename_profile, set_profile_flag
 from .fsutil import atomic_write
 from .init import NAME_RULE, _disp, _email
+from .launch import claude_argv, codex_argv, shell_command
 from .observe import PROC_ROOT, live_by_pane
-from .procs import list_procs
+from .procs import is_uuid, list_procs
 from .status import State, status_rows
 from .tmux import Tmux, TmuxUnreadable
 
@@ -202,4 +203,130 @@ def cmd_profile_rename(cfg, run, out, old, new, *, proc_root=PROC_ROOT):
             except OSError as e:
                 return _undo_config(cfg, out, backups[0], e)
     out(f"✔ 已把 profile {old} 改名為 {new}（登記表 {len(hit)} 列一起改）")
+    return 0
+
+
+# ---------- disable / enable / forget ----------
+
+def _running_refusal(cfg, run, out, name, verb, proc_root):
+    """None when no session runs under `name`; otherwise the refusal printed and the exit code returned."""
+    try:
+        running = running_sessions(cfg, run, name, proc_root=proc_root)
+    except TmuxUnreadable as e:
+        out(f"❌ {e}；不知道 profile {name} 有沒有 session 在跑，什麼都沒改")
+        return 2
+    if running:
+        out(f"❌ profile {name} 還有 session 在跑：{'、'.join(running)}；先停掉再{verb}")
+        return 1
+    return None
+
+
+def cmd_profile_disable(cfg, run, out, name, *, proc_root=PROC_ROOT):
+    out = actionlog.tee(cfg, f"profile disable {name}", out)
+    p = cfg.all_profiles.get(name)
+    if p is None:
+        out(f"❌ 沒有 profile {name}")
+        return 1
+    if p.default:
+        out(f"❌ {name} 是預設 profile，不能停用；先把別的 profile 設成 default")
+        return 1
+    if p.disabled:
+        out(f"profile {name} 已經停用")
+        return 0
+    refused = _running_refusal(cfg, run, out, name, "停用", proc_root)
+    if refused is not None:
+        return refused
+    with registry.lock(cfg.state_dir):
+        if edit_config(cfg, out, lambda text: set_profile_flag(text, name, "disabled", True)) is None:
+            return 1
+    out(f"✔ 已停用 {name}；目錄 {_disp(p.config_dir, cfg.home)} 保留（要刪的話先確認裡面沒有連到別處的捷徑）")
+    return 0
+
+
+def cmd_profile_enable(cfg, run, out, name):
+    out = actionlog.tee(cfg, f"profile enable {name}", out)
+    p = cfg.all_profiles.get(name)
+    if p is None:
+        out(f"❌ 沒有 profile {name}")
+        return 1
+    if not p.disabled:
+        out(f"profile {name} 沒有停用")
+        return 0
+    with registry.lock(cfg.state_dir):
+        if edit_config(cfg, out, lambda text: set_profile_flag(text, name, "disabled", None)) is None:
+            return 1
+    out(f"✔ 已恢復 {name}")
+    return 0
+
+
+def _forget_text(text, name, agent):
+    """[profiles.name] removed; when it was the last Codex profile, Codex is switched off with [codex] enabled = false
+    (otherwise the next load would fill an implicit Codex profile back in). None when that can't be done."""
+    text = remove_profile(text, name)
+    if text is None or agent != "codex":
+        return text
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return None
+    if any(isinstance(p, dict) and p.get("agent") == "codex" for p in data.get("profiles", {}).values()):
+        return text
+    if "codex" in data:
+        text = remove_table(text, "codex")
+    return append_section(text, "[codex]\nenabled = false\n")
+
+
+def _resume_line(cfg, p, row):
+    """The manual resume command for a row of a profile no longer in the config (launch_line can't look it up)."""
+    if not is_uuid(row.session_id):
+        return f"  對話 id {row.session_id}"
+    if p.agent == "codex":
+        env = {} if p.config_dir == cfg.home / ".codex" else {"CODEX_HOME": str(p.config_dir)}
+        line = shell_command(codex_argv(resume=row.session_id, extra=("-C", row.cwd) if row.cwd else ()),
+                             env_set=env, cwd=row.cwd or None)
+    else:
+        line = shell_command(claude_argv(p, resume=row.session_id), env_set={"CLAUDE_CONFIG_DIR": str(p.config_dir)},
+                             cwd=row.cwd or None)
+    return f"  對話還在：{line}"
+
+
+def cmd_profile_forget(cfg, run, out, ask, name, *, proc_root=PROC_ROOT):
+    """Take a disabled profile out of the config file (its directory stays) together with its registry rows."""
+    out = actionlog.tee(cfg, f"profile forget {name}", out)
+    p = cfg.all_profiles.get(name)
+    if p is None:
+        out(f"❌ 沒有 profile {name}")
+        return 1
+    if not p.disabled:
+        out(f"❌ 先 sampan profile disable {name}")
+        return 1
+    refused = _running_refusal(cfg, run, out, name, " forget", proc_root)
+    if refused is not None:
+        return refused
+    try:
+        answer = ask(f"輸入 {name} 確認：")
+    except EOFError:
+        answer = ""
+    if (answer or "").strip() != name:
+        out("已取消")
+        return 0
+    with registry.lock(cfg.state_dir):
+        try:
+            rows = registry.load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)
+        except registry.RegistryError as e:
+            out(f"❌ {e}")
+            return 1
+        backups = []
+        if edit_config(cfg, out, lambda text: _forget_text(text, name, p.agent), backups=backups) is None:
+            return 1
+        hit = [r for r in rows if cfg.owner(r.agent, r.profile) is p]
+        if hit:
+            keep = [r for r in rows if all(r is not h for h in hit)]
+            try:
+                registry.write_rows(cfg.registry_path, keep, now_iso(), cfg.history_dir)
+            except OSError as e:
+                return _undo_config(cfg, out, backups[0], e)
+    out(f"✔ 已從設定檔拿掉 profile {name}（目錄 {_disp(p.config_dir, cfg.home)} 保留；登記表 {len(hit)} 列一起移除）")
+    for r in hit:
+        out(_resume_line(cfg, p, r))
     return 0

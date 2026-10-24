@@ -220,6 +220,33 @@ class CliTest(unittest.TestCase):
         self.assertEqual(rn.call_args.args[3:], ("side", "other"))
         self.assertIs(rn.call_args.args[0], self.cfg)  # setUp's temp config, not the host's
 
+    def test_profile_disable_enable_forget_parse(self):
+        with mock.patch("sampan.profile_ops.cmd_profile_disable", return_value=0) as dis, \
+                mock.patch("sampan.profile_ops.cmd_profile_enable", return_value=0) as en, \
+                mock.patch("sampan.profile_ops.cmd_profile_forget", return_value=0) as fg:
+            cli.main(["profile", "disable", "work"])
+            cli.main(["profile", "enable", "work"])
+            cli.main(["profile", "forget", "work"])
+        self.assertEqual(dis.call_args.args[3], "work")
+        self.assertEqual(en.call_args.args[3], "work")
+        self.assertIs(fg.call_args.args[3], input)
+        self.assertEqual(fg.call_args.args[4], "work")
+
+    def test_new_session_refused_on_disabled_profile(self):
+        from sampan.config import load_config
+        from sampan.config_edit import set_profile_flag
+        from tests.helpers import TOML
+        self.cfg.path.write_text(set_profile_flag(TOML, "work", "disabled", True))
+        cfg = load_config(self.cfg.path, home=self.cfg.home, state_dir=self.cfg.state_dir)
+        buf = io.StringIO()
+        with mock.patch("sampan.cli.load_config", return_value=cfg), redirect_stdout(buf), \
+                mock.patch("sampan.launch.cmd_claude", side_effect=AssertionError("must not launch")), \
+                mock.patch("sampan.runner.run", FakeRunner(strict=True)):
+            self.assertEqual(cli.main(["claude", "work"]), 2)
+            self.assertEqual(cli.main(["new", "x", "work", "/tmp"]), 2)
+            self.assertEqual(cli.main(["new", "x", "claude:work", "/tmp"]), 2)
+        self.assertEqual(buf.getvalue().splitlines(), ["❌ profile work 已停用（sampan profile enable work）"] * 3)
+
 
 class EntryPointTest(unittest.TestCase):
     def test_pyproject_declares_only_the_sampan_entry_point(self):

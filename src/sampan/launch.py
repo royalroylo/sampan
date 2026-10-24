@@ -6,6 +6,14 @@ import sys
 from .procs import is_uuid
 
 
+def disabled_problem(cfg, name):
+    """The refusal for opening a new session under a disabled Claude profile, None otherwise."""
+    p = cfg.all_profiles.get(name)
+    if p is not None and p.agent == "claude" and p.disabled:
+        return f"❌ profile {name} 已停用（sampan profile enable {name}）"
+    return None
+
+
 def claude_argv(profile, *, resume=None, session_id=None, extra=()):
     if resume and session_id:
         raise ValueError("resume 與 session_id 不可同時給")
@@ -87,6 +95,9 @@ def cmd_claude(cfg, run, out, ask, profile_name, extra, *, execvpe=os.execvpe, i
             out("❌ Invalid selection.")
             return 1
         profile_name = names[int(raw) - 1]
+    if disabled_problem(cfg, profile_name):
+        out(disabled_problem(cfg, profile_name))
+        return 2
     if profile_name not in cfg.profiles:
         out(f"❌ 沒有這個 profile：{profile_name}（可用：{', '.join(cfg.profiles)}）")
         return 2

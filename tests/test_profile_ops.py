@@ -267,5 +267,150 @@ class ListTest(Base):
         self.assertEqual(by["codex"].account, "Logged in using an API key")
 
 
+CODEX_SECTION = '\n[profiles.cx]\nagent = "codex"\nconfig_dir = "~/.codex"\n'
+
+
+class DisableTest(Base):
+    def call(self, fn, name, running=()):
+        with mock.patch.object(profile_ops, "running_sessions", return_value=list(running)):
+            return fn(self.cfg, FakeRunner(strict=True), self.msgs.append, name)
+
+    def test_disable_default_refused(self):
+        before = self.cfg.path.read_bytes()
+        rc = self.call(profile_ops.cmd_profile_disable, "alice")
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.msgs, ["❌ alice 是預設 profile，不能停用；先把別的 profile 設成 default"])
+        self.assertEqual(self.cfg.path.read_bytes(), before)
+        self.assertEqual(self.backups(), [])
+
+    def test_disable_then_enable_round_trip(self):
+        toml = TOML + CODEX_SECTION  # no implicit Codex profile, so nothing is converted on the first write
+        self.cfg.path.write_text(toml)
+        self.cfg = self.reload()
+        self.assertEqual(self.call(profile_ops.cmd_profile_disable, "work"), 0)
+        self.assertIn("✔ 已停用 work；目錄 ~/.claude-profiles/work 保留（要刪的話先確認裡面沒有連到別處的捷徑）", self.msgs)
+        self.cfg = self.reload()
+        self.assertTrue(self.cfg.all_profiles["work"].disabled)
+        self.assertNotIn("work", self.cfg.profiles)
+        self.assertEqual(self.call(profile_ops.cmd_profile_enable, "work"), 0)
+        self.assertIn("✔ 已恢復 work", self.msgs)
+        self.assertEqual(self.cfg.path.read_text(), toml)
+        self.assertEqual(len(self.backups()), 2)
+        log = (self.cfg.state_dir / "actions.log").read_text()
+        self.assertIn("[profile disable work] ✔ 已停用 work", log)
+        self.assertIn("[profile enable work] ✔ 已恢復 work", log)
+
+    def test_disable_codex_profile_turns_codex_off(self):
+        self.assertEqual(self.call(profile_ops.cmd_profile_disable, "codex"), 0)  # the implicit one: converted first
+        cfg = self.reload()
+        self.assertTrue(cfg.all_profiles["codex"].disabled)
+        self.assertFalse(cfg.codex.enabled)
+        self.assertIn("已把 [codex] 轉成 [profiles.codex]（目錄 ~/.codex）", self.msgs)
+
+    def test_disable_refused_while_running(self):
+        before = self.cfg.path.read_bytes()
+        rc = self.call(profile_ops.cmd_profile_disable, "work", running=["b", "c"])
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.msgs, ["❌ profile work 還有 session 在跑：b、c；先停掉再停用"])
+        self.assertEqual(self.cfg.path.read_bytes(), before)
+        with mock.patch.object(profile_ops, "running_sessions", side_effect=TmuxUnreadable("讀不到 tmux")):
+            rc = profile_ops.cmd_profile_disable(self.cfg, FakeRunner(strict=True), self.msgs.append, "work")
+        self.assertEqual(rc, 2)
+        self.assertEqual(self.cfg.path.read_bytes(), before)
+
+    def test_enable_and_disable_unknown_or_unchanged(self):
+        before = self.cfg.path.read_bytes()
+        self.assertEqual(self.call(profile_ops.cmd_profile_disable, "nobody"), 1)
+        self.assertEqual(self.call(profile_ops.cmd_profile_enable, "work"), 0)
+        self.assertIn("❌ 沒有 profile nobody", self.msgs)
+        self.assertIn("profile work 沒有停用", self.msgs)
+        self.assertEqual(self.cfg.path.read_bytes(), before)
+
+
+class ForgetTest(Base):
+    toml = set_profile_flag(TOML, "work", "disabled", True) + CODEX_SECTION
+
+    def forget(self, name, answer=None, running=()):
+        asked = []
+
+        def ask(q):
+            asked.append(q)
+            return name if answer is None else answer
+
+        with mock.patch.object(profile_ops, "running_sessions", return_value=list(running)):
+            rc = profile_ops.cmd_profile_forget(self.cfg, FakeRunner(strict=True), self.msgs.append, ask, name)
+        return rc, asked
+
+    def test_forget_requires_disabled_and_confirmation(self):
+        before = self.cfg.path.read_bytes()
+        rc, asked = self.forget("alice")
+        self.assertEqual(rc, 1)
+        self.assertEqual(asked, [])
+        self.assertEqual(self.msgs, ["❌ 先 sampan profile disable alice"])
+        self.msgs.clear()
+        rc, asked = self.forget("work", answer="wor")
+        self.assertEqual(asked, ["輸入 work 確認："])
+        self.assertEqual(self.msgs, ["已取消"])
+        self.assertEqual(self.cfg.path.read_bytes(), before)
+        self.assertEqual(self.backups(), [])
+        rc, _ = self.forget("nobody")
+        self.assertEqual(rc, 1)
+        self.assertIn("❌ 沒有 profile nobody", self.msgs)
+
+    def test_forget_removes_rows_and_prints_resume_lines(self):
+        self.write_registry([Row("a", "claude", "alice", A, "/c", "active"),
+                             Row("w1", "claude", "work", A, "/c d", "active"),
+                             Row("w2", "claude", "work", "", "/c", "retired"),
+                             Row("cx", "codex", "cx", B, "/c", "active")])
+        rc, _ = self.forget("work")
+        self.assertEqual(rc, 0)
+        cfg = self.reload()
+        self.assertNotIn("work", cfg.all_profiles)
+        self.assertNotIn("[profiles.work]", self.cfg.path.read_text())
+        self.assertTrue((self.cfg.home / ".claude-profiles" / "work").is_dir())  # the directory stays
+        self.assertEqual([r.tmux for r in load_rows(self.cfg.registry_path)], ["a", "cx"])
+        work = self.cfg.home / ".claude-profiles" / "work"
+        self.assertEqual(self.msgs, [
+            "✔ 已從設定檔拿掉 profile work（目錄 ~/.claude-profiles/work 保留；登記表 2 列一起移除）",
+            f"  對話還在：cd '/c d' && env CLAUDE_CONFIG_DIR={work} claude --resume {A}",
+            "  對話 id ",
+        ])
+        self.assertIn("[profile forget work] ✔", (self.cfg.state_dir / "actions.log").read_text())
+
+    def test_forget_refused_while_running(self):
+        before = self.cfg.path.read_bytes()
+        rc, _ = self.forget("work", running=["w1"])
+        self.assertEqual(rc, 1)
+        self.assertIn("❌ profile work 還有 session 在跑：w1；先停掉再 forget", self.msgs)
+        self.assertEqual(self.cfg.path.read_bytes(), before)
+
+    def test_forget_undone_when_registry_write_fails(self):
+        self.write_registry([Row("w1", "claude", "work", A, "/c", "active")])
+        before = self.cfg.path.read_bytes()
+        with mock.patch.object(profile_ops.registry, "write_rows", side_effect=OSError("disk full")):
+            rc, _ = self.forget("work")
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.cfg.path.read_bytes(), before)
+        self.assertIn("❌ 登記表寫入失敗（disk full），設定檔已還原，什麼都沒改", self.msgs)
+
+    def test_forget_last_codex_writes_codex_off(self):
+        self.cfg.path.write_text(set_profile_flag(self.toml, "cx", "disabled", True))
+        self.cfg = self.reload()
+        self.cfg.registry_path.parent.mkdir(parents=True, exist_ok=True)
+        self.cfg.registry_path.write_text(json.dumps({"version": 2, "saved_at": "x", "sessions": [
+            {"tmux": "old", "agent": "codex", "profile": "", "session_id": A, "cwd": "/c", "state": "active"},
+            {"tmux": "new", "agent": "codex", "profile": "cx", "session_id": B, "cwd": "/c", "state": "active"},
+            {"tmux": "a", "agent": "claude", "profile": "alice", "session_id": A, "cwd": "/c", "state": "active"}]}))
+        rc, _ = self.forget("cx")
+        self.assertEqual(rc, 0)
+        self.assertTrue(self.cfg.path.read_text().endswith("[codex]\nenabled = false\n"))
+        cfg = self.reload()
+        self.assertFalse(cfg.codex.enabled)
+        self.assertFalse(any(p.agent == "codex" for p in cfg.all_profiles.values()))
+        self.assertEqual([r.tmux for r in load_rows(self.cfg.registry_path)], ["a"])
+        self.assertIn(f"  對話還在：cd /c && codex resume {A} -C /c", self.msgs)
+        self.assertIn(f"  對話還在：cd /c && codex resume {B} -C /c", self.msgs)
+
+
 if __name__ == "__main__":
     unittest.main()

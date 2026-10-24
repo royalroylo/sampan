@@ -103,6 +103,15 @@ class Config:
         """Enabled Codex profiles, in config-file order."""
         return {n: p for n, p in self.all_profiles.items() if p.agent == "codex" and not p.disabled}
 
+    def owner(self, agent, profile):
+        """The profile (disabled ones included) a registry row of agent/profile belongs to, or None. An old Codex row
+        has profile "": it belongs to the Codex profile when there is only one."""
+        if agent == "codex" and not profile:
+            codex = [p for p in self.all_profiles.values() if p.agent == "codex"]
+            return codex[0] if len(codex) == 1 else None
+        p = self.all_profiles.get(profile)
+        return p if p is not None and p.agent == agent else None
+
     @property
     def start_dir(self):
         """Where the `n` directory picker starts: [ui] start_dir; by default ~/Projects if it exists, else ~."""
