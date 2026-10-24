@@ -4,7 +4,7 @@ import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .config import same_source, strip_credentials
+from .config import redact, same_source, strip_credentials
 
 
 @dataclass
@@ -181,7 +181,7 @@ def cmd_sync(cfg, run, out, *, profile=None, dry_run=False, prune=False):
                 continue
             r = run(c, env=env, cwd=str(cfg.home))
             if r.returncode != 0:
-                failures.append(f"{p.name}：{shlex.join(c)} 失敗：{(r.stderr or r.stdout).strip()[:300]}")
+                failures.append(f"{p.name}：{shlex.join(c)} 失敗：{redact((r.stderr or r.stdout).strip())[:300]}")
         if not dry_run:
             after = read_state(p).installed
             for pid in p.plugins:
@@ -198,7 +198,7 @@ def cmd_sync(cfg, run, out, *, profile=None, dry_run=False, prune=False):
                     continue
                 r = run(c, env=env, cwd=cwd or str(cfg.home))
                 if r.returncode != 0:
-                    failures.append(f"{p.name}：{shlex.join(c)} 失敗：{(r.stderr or r.stdout).strip()[:300]}")
+                    failures.append(f"{p.name}：{shlex.join(c)} 失敗：{redact((r.stderr or r.stdout).strip())[:300]}")
                 else:
                     out(f"  移除：{shlex.join(c[2:])}{where}")
     if not dry_run:

@@ -364,6 +364,9 @@ def market_fake(run, cfg, *, name_for=lambda s: s.rstrip("/").rsplit("/", 1)[-1]
     return rule
 
 
+UNUSED_TOML = TOML.replace('plugins = ["tools@my-plugins", ', 'plugins = [').replace('plugins = ["tools@my-plugins"]', 'plugins = []')
+
+
 def no_ask(prompt):
     raise AssertionError(f"unexpected question: {prompt}")
 
@@ -440,6 +443,7 @@ class MarketApplyTest(unittest.TestCase):
             write_known(self.cfg, p, {name: {"source": km_source(source)}})
 
     def test_remove_runs_remove_and_asks_before_dropping_from_config(self):
+        self.cfg = make_env(self.tmp, UNUSED_TOML)  # no list uses my-plugins, so the line may go
         original = self.cfg.path.read_text()
         for answer, dropped in (("n", False), ("y", True)):
             self.out.clear()
@@ -605,7 +609,85 @@ class WriteConfigTest(unittest.TestCase):
         with mock.patch("sampan.plugin_apply.atomic_write", side_effect=OSError("disk full")):
             res = apply_changes(cfg, run, self.out.append, PID, [Change("work", True, True, False)], stamp=lambda: "S")
         self.assertEqual((res.changed, res.failed, res.backup), (["work"], {}, None))
+        self.assertEqual(sorted(self.tmp.glob("config.toml.bak-*")), [])  # no backup of a write that did not happen
         self.assertIn("❌ 設定檔寫入失敗（disk full），指令已執行；請手動改後跑 sampan plugins sync", self.out)
+
+
+FOO = "foo@handmade"  # its marketplace is not in [marketplaces]
+
+
+def loads_ok(cfg):
+    from sampan.config import load_config
+    return load_config(cfg.path, home=cfg.home, state_dir=cfg.state_dir)
+
+
+class LoadableConfigTest(unittest.TestCase):
+    """C1 / I1: a save never writes a config load_config rejects."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.cfg = make_env(self.tmp)
+        self.out = []
+
+    def test_list_add_without_marketplace_refused_before_any_command(self):
+        original = self.cfg.path.read_bytes()
+        run = FakeRunner(strict=True)
+        res = apply_changes(self.cfg, run, self.out.append, FOO, [Change("alice", None, True, False)], stamp=lambda: "S")
+        self.assertEqual(run.calls, [])
+        self.assertEqual((res.changed, res.failed, res.backup), ([], {}, None))
+        self.assertEqual(self.cfg.path.read_bytes(), original)
+        self.assertEqual(self.out, [f"❌ 設定檔無法自動修改（{self.cfg.path}），什麼都沒做；請手動改後跑 sampan plugins sync"])
+
+    def test_list_add_with_new_source_writes_loadable_config(self):
+        res = apply_changes(self.cfg, FakeRunner(strict=True), self.out.append, FOO,
+                            [Change("alice", None, True, False)], new_source="me/handmade", stamp=lambda: "S")
+        self.assertIsNotNone(res.backup)
+        cfg = loads_ok(self.cfg)
+        self.assertEqual(cfg.marketplaces["handmade"], "me/handmade")
+        self.assertIn(FOO, cfg.profiles["alice"].plugins)
+
+    def test_market_edit_refuses_dropping_a_used_marketplace(self):
+        text = self.cfg.path.read_text()
+        self.assertIsNone(pa._market_edit(text, "my-plugins", None))  # both lists use tools@my-plugins
+        unused = UNUSED_TOML
+        self.assertIsNotNone(pa._market_edit(unused, "my-plugins", None))
+
+    def test_remove_keeps_config_line_while_a_list_uses_it(self):
+        # work lists tools@my-plugins but its directory is gone (e.g. that profile lives on another machine)
+        import shutil
+        self.cfg = make_env(self.tmp, TOML.replace('plugins = ["tools@my-plugins", ', 'plugins = ['))
+        shutil.rmtree(self.cfg.profiles["work"].config_dir)
+        write_known(self.cfg, "alice", {"my-plugins": {"source": km_source("owner/my-plugins")}})
+        original = self.cfg.path.read_bytes()
+        asked = []
+        run = FakeRunner(strict=True)
+        run.on(["claude", "plugin", "marketplace", "remove"], market_fake(run, self.cfg))
+        res = pa.apply_market(self.cfg, run, self.out.append, lambda q: asked.append(q) or "y", "my-plugins",
+                              [MarketChange("alice", False, ())], source="owner/my-plugins", stamp=lambda: "S")
+        self.assertEqual(asked, [])
+        self.assertEqual(res.changed, ["alice"])
+        self.assertEqual(self.cfg.path.read_bytes(), original)
+        self.assertEqual(self.out, ["✔ alice：已移除 my-plugins",
+                                    "設定檔 [marketplaces] 保留 my-plugins：work 的清單還有用到它的 plugin"])
+        loads_ok(self.cfg)
+
+
+class RedactTest(unittest.TestCase):
+    """M1: command errors shown to the user never echo a token."""
+
+    def test_redact_userinfo_anywhere(self):
+        self.assertEqual(pa.redact("fatal: https://bob:ghp_x@github.com/o/r.git denied; ssh://tok@h/x"),
+                         "fatal: https://***@github.com/o/r.git denied; ssh://***@h/x")
+        self.assertEqual(pa.redact("no url here; owner/repo"), "no url here; owner/repo")
+
+    def test_install_failure_line_redacted(self):
+        cfg = make_env(Path(tempfile.mkdtemp()))
+        out = []
+        run = FakeRunner(strict=True)
+        run.on(INSTALL, cp(1, "", "clone https://x-access-token:SECRET@github.com/o/r failed"))
+        apply_changes(cfg, run, out.append, PID, [Change("work", True, True, False)], stamp=lambda: "S")
+        self.assertFalse(any("SECRET" in line for line in out))
+        self.assertIn("https://***@github.com/o/r", "\n".join(out))
 
 
 if __name__ == "__main__":

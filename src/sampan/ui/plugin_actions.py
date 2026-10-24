@@ -2,7 +2,7 @@
 Also the --plain plugin menu (plain_plugins)."""
 import re
 
-from ..config import SOURCE_RULE, ConfigError, load_config, strip_credentials, valid_source
+from ..config import SOURCE_RULE, ConfigError, load_config, usable_source
 from ..marketplace_view import build_market_rows, market_choices, market_preview, plan_market
 from ..plugin_apply import (
     apply_changes,
@@ -43,7 +43,13 @@ def reload_config(cfg, out=None):
 
 
 def _usable(src):
-    return bool(src) and valid_source(src) and strip_credentials(src) == src
+    return usable_source(src)
+
+
+def enter_source(cfg, pid, source):
+    """new_source for Enter on a plugin row: the row's source when its marketplace is not in [marketplaces] yet and
+    sampan can write that source (a save then adds it); None otherwise (profile_choices makes an unusable one remove-only)."""
+    return source if _mkt(pid) not in cfg.marketplaces and _usable(source) else None
 
 
 def save_flow(cfg, run, out, ask, pid, choices, checked, *, new_source=None):
@@ -289,7 +295,7 @@ def plain_plugins(cfg, run, out, ask, *, own_pane=None, on_prompt=None, **fns):
                 out(f"無效編號：{raw}")
                 continue
             r = rows[int(raw) - 1]
-            _toggle_loop(cfg, run, out, ask, r.pid, r.source, **kw)
+            _toggle_loop(cfg, run, out, ask, r.pid, r.source, new_source=enter_source(cfg, r.pid, r.source), **kw)
         elif raw == "U":
             _plain_restart(cfg, run, out, ask, update_flow(cfg, run, out, ask, None), **kw)
         elif raw.startswith("u") and raw[1:].strip().isdigit() and 1 <= int(raw[1:]) <= len(rows):

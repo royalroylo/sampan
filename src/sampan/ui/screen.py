@@ -16,6 +16,7 @@ from .dirpick import DirPicker
 from .plugin_actions import (
     add_flow,
     disabled_lines,
+    enter_source,
     market_add_flow,
     market_save_flow,
     market_toggles,
@@ -424,7 +425,8 @@ class CursesScreen:
                     goto = self._market_action(cfg, ask, kind, names, mrows, offer)
                 elif kind == "open":
                     r = next(x for x in rows if x.name == names[0])
-                    offer(self._plugin_toggles(cfg, ask, r.pid, r.source, latest))
+                    offer(self._plugin_toggles(cfg, ask, r.pid, r.source, latest,
+                                               new_source=enter_source(cfg, r.pid, r.source)))
                 elif kind == "update":
                     r = next(x for x in rows if x.name == names[0])
                     offer(update_flow(cfg, self.run, self.out, ask, [r.pid]))

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from . import config_edit
 from .clock import now_stamp
-from .config import SOURCE_RULE, same_source, strip_credentials, valid_source
+from .config import SOURCE_RULE, redact, same_source, strip_credentials, usable_source, valid_source
 from .fsutil import atomic_write
 from .plugin_view import _mkt, newest, snapshot
 from .plugins import read_state
@@ -43,6 +43,18 @@ def _expected(lists, pid, changes):
     return out
 
 
+def _loadable(text):
+    """load_config's rule that an edit can break: every listed plugin's marketplace is in [marketplaces]."""
+    lists, markets = config_edit.plugin_lists(text), _markets(text)
+    return lists is not None and markets is not None and all(
+        _mkt(x) in markets for pids in lists.values() for x in pids)
+
+
+def _err(c, r):
+    """The line for a failed command; scheme://user:token@ in its output is masked."""
+    return f"{shlex.join(c)} 失敗：{redact((r.stderr or r.stdout).strip())[:300]}"
+
+
 def _build(text, pid, changes, mkt, source):
     """Original text + the list edits of `changes` (+ the marketplace entry when source); None when it fails the check."""
     lists = config_edit.plugin_lists(text)
@@ -59,7 +71,7 @@ def _build(text, pid, changes, mkt, source):
         return None
     if source and tomllib.loads(new).get("marketplaces", {}).get(mkt) != source:
         return None
-    return new
+    return new if _loadable(new) else None
 
 
 def _write_config(cfg, out, original, final, stamp, rebuild):
@@ -78,7 +90,11 @@ def _write_config(cfg, out, original, final, stamp, rebuild):
             return None
         backup = cfg.path.with_name(f"{cfg.path.name}.bak-{stamp()}")
         shutil.copy2(cfg.path, backup)
-        atomic_write(cfg.path, final)
+        try:
+            atomic_write(cfg.path, final)
+        except OSError:
+            backup.unlink(missing_ok=True)  # a backup only of a write that happened
+            raise
     except OSError as e:
         out(f"❌ 設定檔寫入失敗（{e}），指令已執行；請手動改後跑 sampan plugins sync")
         return None
@@ -101,8 +117,7 @@ def apply_changes(cfg, run, out, pid, changes, *, new_source=None, stamp=now_sta
     mkt, short = _mkt(pid), pid.split("@", 1)[0]
     text = cfg.path.read_text()  # read now: the file may have been edited since the screen opened
     source = new_source or cfg.marketplaces.get(mkt)
-    if (new_source or any(ch.add_marketplace for ch in changes)) and not (
-            source and valid_source(source) and strip_credentials(source) == source):
+    if (new_source or any(ch.add_marketplace for ch in changes)) and not usable_source(source):
         out(f"❌ {mkt} 沒有可用的來源，什麼都沒做")
         return Applied([], {}, None)
     if _build(text, pid, changes, mkt, new_source) is None:
@@ -118,7 +133,7 @@ def apply_changes(cfg, run, out, pid, changes, *, new_source=None, stamp=now_sta
         for c in cmds:
             r = run(c, env=env, cwd=str(cfg.home))
             if r.returncode != 0:
-                err = f"{shlex.join(c)} 失敗：{(r.stderr or r.stdout).strip()[:300]}"
+                err = _err(c, r)
                 break
         if err:
             failed[ch.profile] = err
@@ -185,7 +200,8 @@ def _market_edit(text, name, source):
         new = config_edit.add_marketplace(text, name, source)
     after = None if new is None else _markets(new)
     want = {k: v for k, v in before.items() if k != name} | ({} if source is None else {name: source})
-    return new if after == want and config_edit.plugin_lists(new) == config_edit.plugin_lists(text) else None
+    return new if after == want and config_edit.plugin_lists(new) == config_edit.plugin_lists(text) \
+        and _loadable(new) else None
 
 
 def apply_market(cfg, run, out, ask, name, changes, *, source, stamp=now_stamp):
@@ -207,7 +223,7 @@ def apply_market(cfg, run, out, ask, name, changes, *, source, stamp=now_stamp):
         c = ["claude", "plugin", "marketplace", "add", source] if ch.add else ["claude", "plugin", "marketplace", "remove", name]
         r = run(c, env=prof.env(os.environ), cwd=str(cfg.home))
         if r.returncode != 0:
-            failed[ch.profile] = f"{shlex.join(c)} 失敗：{(r.stderr or r.stdout).strip()[:300]}"
+            failed[ch.profile] = _err(c, r)
             out(f"❌ {ch.profile}：{failed[ch.profile]}")
             continue
         changed.append(ch.profile)
@@ -232,9 +248,12 @@ def apply_market(cfg, run, out, ask, name, changes, *, source, stamp=now_stamp):
             out(f"❌ {name} 在設定檔已經指向 {theirs}，設定檔沒改（{'、'.join(added)} 已加入的保留，"
                 f"可用 claude plugin marketplace remove {name} 移除）")
     elif name in listed and any(not ch.add and ch.profile in changed for ch in changes) \
-            and not any(name in read_state(p).marketplaces for p in cfg.profiles.values()) \
-            and _ask(ask, f"也從設定檔 [marketplaces] 拿掉 {name}？(y/N): ") == "y":
-        target = None
+            and not any(name in read_state(p).marketplaces for p in cfg.profiles.values()):
+        users = [p for p, pids in (config_edit.plugin_lists(text) or {}).items() if any(_mkt(x) == name for x in pids)]
+        if users:  # e.g. a profile whose directory is missing: dropping the line would break the config
+            out(f"設定檔 [marketplaces] 保留 {name}：{'、'.join(users)} 的清單還有用到它的 plugin")
+        elif _ask(ask, f"也從設定檔 [marketplaces] 拿掉 {name}？(y/N): ") == "y":
+            target = None
 
     backup = None
     if target is not False:
@@ -256,7 +275,7 @@ def update_markets(cfg, run, out, names=None):
             c = ["claude", "plugin", "marketplace", "update", m]
             r = run(c, env=env, cwd=str(cfg.home))
             if r.returncode != 0:
-                out(f"❌ {prof.name}：{shlex.join(c)} 失敗：{(r.stderr or r.stdout).strip()[:300]}")
+                out(f"❌ {prof.name}：{_err(c, r)}")
             else:
                 out(f"✔ {prof.name}：{m} 已更新")
 
@@ -289,7 +308,7 @@ def update_plugins(cfg, run, out, pids=None):
         for c in cmds:
             r = run(c, env=env, cwd=str(cfg.home))
             if r.returncode != 0:
-                out(f"❌ {name}：{shlex.join(c)} 失敗：{(r.stderr or r.stdout).strip()[:300]}")
+                out(f"❌ {name}：{_err(c, r)}")
         after = read_state(prof).installed
         diffs = [(p, before[p], after[p]) for p in sorted(after) if p in before and before[p] != after[p]]
         for p, b, a in diffs:
@@ -314,7 +333,7 @@ def check_latest(cfg, run, out, snap):
             c = ["claude", "plugin", "marketplace", "update", m]
             r = run(c, env=env, cwd=str(cfg.home))
             if r.returncode != 0:
-                out(f"⚠ {name}：{shlex.join(c)} 失敗：{(r.stderr or r.stdout).strip()[:300]}")
+                out(f"⚠ {name}：{_err(c, r)}")
         for pid in sorted(st.installed):
             result[(name, pid)] = newest(prof, _mkt(pid), pid.split("@", 1)[0], run)
     return result

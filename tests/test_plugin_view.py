@@ -8,6 +8,7 @@ from pathlib import Path
 
 from sampan.plugin_view import (
     STATES,
+    UNMANAGED,
     CatalogEntry,
     Change,
     Latest,
@@ -274,6 +275,44 @@ class NewerRowsTest(unittest.TestCase):
         write_plugins(self.cfg, "work", installed={TOOLS: [("user", "0.9.0", None)]}, known=GOOD_KNOWN)
         row = {r.pid: r for r in build_rows(self.cfg, snapshot(self.cfg), {("alice", TOOLS): Latest("1.1.0", None)})}[TOOLS]
         self.assertEqual((row.state, row.newer), ("不一致", {"alice": "1.1.0"}))
+
+
+FOO = "foo@handmade"  # a marketplace that is not in [marketplaces]
+
+
+class UnmanagedMarketplaceTest(unittest.TestCase):
+    """C1 / M3: a plugin whose marketplace is not in the config."""
+
+    def setUp(self):
+        self.cfg = make_env(Path(tempfile.mkdtemp()))
+
+    def test_unusable_source_is_remove_only(self):
+        # file:// is not a source sampan manages: nobody may list or install it, alice may still uninstall it
+        write_plugins(self.cfg, "alice", installed={FOO: [("user", "1", None)]}, known={"handmade": "file:///x"})
+        write_plugins(self.cfg, "work")
+        snap = snapshot(self.cfg)
+        ch = profile_choices(self.cfg, snap, FOO, "file:///x")
+        self.assertEqual([(c.profile, c.disabled, c.remove_only) for c in ch],
+                         [("alice", None, True), ("work", UNMANAGED, True)])
+        self.assertEqual(UNMANAGED, "來源不在設定檔，也不是 sampan 能管的來源（只能移除）")
+        self.assertEqual(plan_changes(snap, ch, {"alice": True, "work": True}, "handmade"), [])
+        self.assertEqual(plan_changes(snap, ch, {"alice": False, "work": True}, "handmade"),
+                         [Change("alice", False, False, False)])
+
+    def test_usable_source_not_remove_only(self):
+        write_plugins(self.cfg, "alice", installed={FOO: [("user", "1", None)]}, known={"handmade": "me/handmade"})
+        write_plugins(self.cfg, "work")
+        ch = profile_choices(self.cfg, snapshot(self.cfg), FOO, "me/handmade")
+        self.assertEqual([(c.disabled, c.remove_only) for c in ch], [(None, False), (None, False)])
+
+    def test_local_marketplace_outside_config_reason(self):
+        write_plugins(self.cfg, "alice", installed={FOO: [("user", "1", None)]}, known={"handmade": None})
+        ch = profile_choices(self.cfg, snapshot(self.cfg), FOO, None)
+        self.assertEqual(ch[0].disabled, "本機來源，sampan 不管理")
+        # the config has a source: a local copy really is a different source
+        write_plugins(self.cfg, "alice", known={"my-plugins": None})
+        self.assertEqual(profile_choices(self.cfg, snapshot(self.cfg), TOOLS, "owner/my-plugins")[0].disabled,
+                         "來源不同：本機或不支援的來源")
 
 
 if __name__ == "__main__":

@@ -15,6 +15,7 @@ _URL_RE = re.compile(r"^(?:https?|ssh)://[^/\s]+/\S+$|^[\w.-]+@[\w.-]+:\S+$")
 
 
 _HTTP_USERINFO_RE = re.compile(r"^(https?://)[^/@\s]+@")
+_ANY_USERINFO_RE = re.compile(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@")
 
 
 def strip_credentials(src):
@@ -22,9 +23,19 @@ def strip_credentials(src):
     return _HTTP_USERINFO_RE.sub(r"\1", src) if isinstance(src, str) else src
 
 
+def redact(text):
+    """Text with the user/token part of every scheme://user:token@ URL in it replaced by ***, for showing command errors."""
+    return _ANY_USERINFO_RE.sub(r"\1***@", text)
+
+
 def valid_source(src):
     """Whether a marketplace source is one sampan can manage: GitHub owner/repo, or a git URL."""
     return isinstance(src, str) and bool(_GITHUB_RE.match(src) or _URL_RE.match(src))
+
+
+def usable_source(src):
+    """Whether sampan may pass src to claude and write it to the config: a valid source without credentials."""
+    return valid_source(src) and strip_credentials(src) == src
 
 
 def source_key(src):

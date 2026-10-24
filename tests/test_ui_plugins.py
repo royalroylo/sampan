@@ -693,5 +693,82 @@ class MarketTabTest(unittest.TestCase):
         self.assertIn(TOKEN_REFUSAL, self.out)
 
 
+FOO = "foo@handmade"  # installed by hand in alice from a marketplace that is not in [marketplaces]
+
+
+class UnmanagedEnterTest(unittest.TestCase):
+    """C1: Enter on a plugin whose marketplace is outside the config."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.cfg = make_env(self.tmp)
+        self.out = []
+
+    def seed(self, src):
+        pd = Path(self.cfg.profiles["alice"].config_dir) / "plugins"
+        pd.mkdir(parents=True, exist_ok=True)
+        (pd / "installed_plugins.json").write_text(json.dumps(
+            {"version": 2, "plugins": {FOO: [{"scope": "user", "version": "1.0.0"}]}}))
+        (pd / "known_marketplaces.json").write_text(json.dumps({"handmade": {"source": {"source": "git", "url": src}}
+                                                                 if "://" in src else
+                                                                 {"source": {"source": "github", "repo": src}}}))
+
+    def loads(self):
+        from sampan.config import load_config
+        return load_config(self.cfg.path, home=self.cfg.home, state_dir=self.cfg.state_dir)
+
+    def test_enter_source(self):
+        self.assertEqual(pa.enter_source(self.cfg, FOO, "me/handmade"), "me/handmade")
+        self.assertIsNone(pa.enter_source(self.cfg, FOO, "file:///x"))
+        self.assertIsNone(pa.enter_source(self.cfg, FOO, None))
+        self.assertIsNone(pa.enter_source(self.cfg, TOOLS, "owner/my-plugins"))  # already in the config
+
+    def test_plain_enter_adds_marketplace_on_save(self):
+        self.seed("me/handmade")
+        it = iter(["1", "s", "y", "q"])
+        self.assertEqual(pa.plain_plugins(self.cfg, FakeRunner(strict=True), self.out.append, lambda p: next(it)), 0)
+        self.assertIn("  · alice（alice@example.com）：清單加上（已經裝了）", self.out)
+        self.assertIn("  [marketplaces] 加上 handmade = me/handmade", self.out)
+        cfg = self.loads()
+        self.assertEqual(cfg.marketplaces["handmade"], "me/handmade")
+        self.assertIn(FOO, cfg.profiles["alice"].plugins)
+
+    def test_plain_enter_install_other_profile_with_new_source(self):
+        self.seed("me/handmade")
+        run = FakeRunner(strict=True)
+        run.on(["claude", "plugin", "marketplace", "add", "me/handmade"], cp())
+        run.on(["claude", "plugin", "install", FOO, "--scope", "user"], installer(run, self.cfg, version="1.0.0"))
+        it = iter(["1", "2", "s", "y", "x", "q"])
+        self.assertEqual(pa.plain_plugins(self.cfg, run, self.out.append, lambda p: next(it),
+                                          rows_fn=lambda c, r: []), 0)
+        self.assertIn("  + 安裝到 work（work@example.com）（同時加入 handmade 來源）", self.out)
+        self.assertNotIn("❌ handmade 沒有可用的來源，什麼都沒做", self.out)
+        cfg = self.loads()
+        self.assertEqual(cfg.profiles["work"].plugins, ("tools@my-plugins", FOO))
+
+    def test_plain_enter_unusable_source_remove_only(self):
+        self.seed("file:///x")
+        original = self.cfg.path.read_bytes()
+        it = iter(["1", "2", "s", "q"])
+        self.assertEqual(pa.plain_plugins(self.cfg, FakeRunner(strict=True), self.out.append, lambda p: next(it)), 0)
+        self.assertIn("  work：來源不在設定檔，也不是 sampan 能管的來源（只能移除）", self.out)
+        self.assertIn("work 不能改：來源不在設定檔，也不是 sampan 能管的來源（只能移除）", self.out)
+        self.assertIn("沒有要變更的", self.out)
+        self.assertEqual(self.cfg.path.read_bytes(), original)
+
+    def test_curses_enter_adds_marketplace_on_save(self):
+        from sampan.ui.screen import CursesScreen
+        from tests.test_ui_screen import FakeScr
+        self.seed("me/handmade")
+        self.scr = FakeScr(["1", "\n", "s", "y", "\n", "q"])
+        s = CursesScreen(self.scr, self.cfg, FakeRunner(strict=True), rows_fn=lambda c, r: [])
+        self.assertEqual(s.plugins(ask=s.ask), 0)
+        text = "\n".join("\n".join(f) for f in self.scr.screens)
+        self.assertIn("[marketplaces] 加上 handmade = me/handmade", text)
+        cfg = self.loads()
+        self.assertEqual(cfg.marketplaces["handmade"], "me/handmade")
+        self.assertIn(FOO, cfg.profiles["alice"].plugins)
+
+
 if __name__ == "__main__":
     unittest.main()

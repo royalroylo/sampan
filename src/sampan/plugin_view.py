@@ -3,12 +3,14 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import same_source
+from .config import same_source, usable_source
 from .plugins import ProfilePluginState, read_state
 from .textwidth import pad
 
 STATES = ("最新", "有新版", "未裝", "不一致")
 NO_SOURCE = "本機或不支援的來源"
+LOCAL = "本機來源，sampan 不管理"
+UNMANAGED = "來源不在設定檔，也不是 sampan 能管的來源（只能移除）"
 
 
 def _mkt(pid):
@@ -184,19 +186,29 @@ class ProfileChoice:
     installed: str | None
     listed: bool
     disabled: str | None
+    remove_only: bool = False  # the marketplace can't go into the config: the plugin may only be uninstalled
 
 
 def profile_choices(cfg, snap, pid, source):
+    """One choice per profile. A marketplace outside [marketplaces] whose source sampan can't write there is remove-only:
+    listing or installing would give a config load_config rejects (callers pass a usable source as new_source)."""
     mkt = _mkt(pid)
+    remove_only = mkt not in cfg.marketplaces and not usable_source(source)
     out = []
     for p in cfg.profiles.values():
         st = snap.states[p.name]
+        theirs = st.marketplaces.get(mkt)
+        installed = st.installed.get(pid)
         disabled = None
         if p.name in snap.missing:
             disabled = "目錄不存在"
-        elif mkt in st.marketplaces and not same_source(st.marketplaces[mkt], source):
-            disabled = f"來源不同：{st.marketplaces[mkt] or NO_SOURCE}"
-        out.append(ProfileChoice(p.name, p.label, st.installed.get(pid), pid in p.plugins, disabled))
+        elif mkt in st.marketplaces and not theirs and not source:
+            disabled = LOCAL
+        elif mkt in st.marketplaces and theirs != source and not same_source(theirs, source):
+            disabled = f"來源不同：{theirs or NO_SOURCE}"
+        elif remove_only and not installed:
+            disabled = UNMANAGED
+        out.append(ProfileChoice(p.name, p.label, installed, pid in p.plugins, disabled, remove_only))
     return out
 
 
@@ -222,6 +234,8 @@ def plan_changes(snap, choices, checked, mkt):
         if c.disabled:
             continue
         want = bool(checked[c.profile])
+        if want and c.remove_only:  # keep it as it is: listing it would break the config
+            continue
         install = True if want and not c.installed else False if not want and c.installed else None
         if install is not None or c.listed != want:
             add = install is True and mkt not in snap.states[c.profile].marketplaces
