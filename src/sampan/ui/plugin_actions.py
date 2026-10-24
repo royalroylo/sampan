@@ -16,11 +16,13 @@ TOGGLE = "輸入編號切換（可多個），s 儲存，q 返回: "
 MAX_HITS = 30
 
 
-def reload_config(cfg):
-    """The config as it is on disk now (a save rewrites the plugin lists); the old one when it can't be read."""
+def reload_config(cfg, out=None):
+    """The config as it is on disk now (a save rewrites the plugin lists); the old one, with a warning, when it can't be read."""
     try:
         return load_config(cfg.path, home=cfg.home, state_dir=cfg.state_dir)
-    except (ConfigError, OSError, ValueError):
+    except (ConfigError, OSError, ValueError) as e:
+        if out is not None:
+            out(f"⚠ 設定檔讀取失敗（{e}），沿用目前內容")
         return cfg
 
 
@@ -152,7 +154,7 @@ def plain_plugins(cfg, run, out, ask, *, own_pane=None, on_prompt=None, **fns):
     """The --plain plugin menu. fns are passed to restart_offer (rows_fn, restart_fn…). Returns 0."""
     latest = None
     while True:
-        cfg = reload_config(cfg)
+        cfg = reload_config(cfg, out)
         rows = build_rows(cfg, snapshot(cfg), latest)
         out("═══ sampan · plugin 管理 ═══")
         if not rows:
@@ -180,8 +182,8 @@ def plain_plugins(cfg, run, out, ask, *, own_pane=None, on_prompt=None, **fns):
             if picked:
                 pid, new_source = picked
                 source = new_source or cfg.marketplaces.get(_mkt(pid))
-                choices = profile_choices(cfg, snapshot(cfg), pid, source)
-                _toggle_loop(cfg, run, out, ask, pid, source, {c.profile: False for c in choices},
+                # boxes start at the install state: all unchecked for a plugin no profile has yet
+                _toggle_loop(cfg, run, out, ask, pid, source,
                              new_source=new_source, own_pane=own_pane, on_prompt=on_prompt, **fns)
         elif raw == "r":
             latest = check_latest(cfg, run, out, snapshot(cfg))

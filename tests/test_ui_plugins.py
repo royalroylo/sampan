@@ -308,6 +308,24 @@ class FlowTest(unittest.TestCase):
         self.assertIn("  [1] [x] alice  —  ← 儲存時會安裝", self.out)
         self.assertEqual(run.calls, [])
 
+    def test_plain_add_installed_plugin_keeps_install_state(self):
+        run = FakeRunner(strict=True)
+        run.on(INSTALL_TOOLS, installer(run, self.cfg, version="1.0.0"))
+        it = iter(["a", "", TOOLS, "2", "s", "y", "q"])
+        self.assertEqual(pa.plain_plugins(self.cfg, run, self.out.append, lambda p: next(it),
+                                          rows_fn=lambda c, r: []), 0)
+        self.assertIn("  [1] [x] alice  1.0.0  ", self.out)
+        self.assertIn("  + 安裝到 work（work@example.com）", self.out)
+        self.assertFalse([line for line in self.out if line.startswith("  − 從")])
+        self.assertEqual([c["args"] for c in run.calls], [INSTALL_TOOLS])
+
+    def test_reload_config_warns_on_broken_file(self):
+        self.cfg.path.write_text("this is = = not toml")
+        self.assertIs(pa.reload_config(self.cfg, self.out.append), self.cfg)
+        self.assertEqual(len(self.out), 1)
+        self.assertTrue(self.out[0].startswith("⚠ 設定檔讀取失敗（"))
+        self.assertTrue(self.out[0].endswith("），沿用目前內容"))
+
     def test_plain_choose_searches_catalog(self):
         entries = [CatalogEntry(f"p{i}@m", "desc", None) for i in range(40)] + [CatalogEntry("zz@m", "Zeta", None)]
         self.assertEqual(pa._plain_choose(self.out.append, answers("zeta", "1"))(entries), "zz@m")
