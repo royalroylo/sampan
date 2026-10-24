@@ -3,6 +3,7 @@ import os
 import stat
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 from types import SimpleNamespace as NS
 
@@ -47,6 +48,13 @@ class ActionLogTest(unittest.TestCase):
         self.assertNotIn("s3cret", "\n".join(self.lines()))
         self.assertIn("https://***@git.example.com/a.git", self.lines()[0])
 
+    def test_other_secret_forms_and_the_label_are_masked(self):
+        self.tee("來源 https://alice:s3cret@h/x")("GH_TOKEN=abc123 ghp_" + "a" * 36 + " Authorization: token zzz9")
+        line = self.lines()[0]
+        for secret in ("s3cret", "abc123", "a" * 36, "zzz9"):
+            self.assertNotIn(secret, line)
+        self.assertIn("[來源 https://***@h/x] GH_TOKEN=*** *** Authorization: token ***", line)
+
     def test_nested_tee_logs_once_under_the_outer_label(self):
         outer = self.tee("重開")
         inner = self.tee("forget a", outer)
@@ -60,6 +68,20 @@ class ActionLogTest(unittest.TestCase):
         self.cfg.state_dir.write_text("not a dir")
         self.tee("重開")("still shown")
         self.assertEqual(self.shown, ["still shown"])
+
+    def test_labels_of_the_hooked_actions(self):
+        from sampan import plugin_apply as pa
+        cfg = NS(state_dir=self.cfg.state_dir, profiles={}, path=None)
+        snap = NS(states={}, missing=set())
+        with unittest.mock.patch.object(pa, "snapshot", return_value=snap), \
+                unittest.mock.patch.object(pa, "plan_update", return_value={}):
+            pa.update_plugins(cfg, None, self.shown.append)
+        pa.update_markets(cfg, None, self.shown.append)  # no profiles: prints nothing
+        pa.check_latest(cfg, None, self.shown.append, snap)
+        pa.restart_profiles(cfg, None, self.shown.append, None, ["p"], stop_fn=lambda *a, **k: k["left"].append("b") or 0,
+                            restore_fn=None)
+        labels = [line.split("] ")[0].split(" [", 1)[1] for line in self.lines()]
+        self.assertEqual(labels, ["plugin 更新", "重開"])
 
     def test_rotates_when_large(self):
         out = self.tee("重開")

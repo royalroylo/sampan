@@ -678,6 +678,10 @@ class SwitchTest(MoveFixture):
         log = actionlog.log_path(self.cfg).read_text()
         self.assertIn("[switch 994-monitor → work] ✔ 994-monitor 已換到 work", log)
 
+    def test_dry_run_logs_nothing(self):
+        self.switch(dry_run=True)
+        self.assertFalse(actionlog.log_path(self.cfg).exists())
+
     def test_shared_projects_moves_nothing(self):
         work = self.cfg.profiles["work"].config_dir
         (work / "projects").symlink_to(self.cfg.default_profile.projects_dir)

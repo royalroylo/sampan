@@ -55,7 +55,7 @@ callable (`runner.py`). That is what makes the suite fast and safe: tests pass a
 | `registry.json` | sessions: tmux name, agent, profile, conversation id, cwd, state, last seen (UTC) |
 | `history/registry-*.json` | previous registries (newest 20 by modification time) |
 | `save.log` | one line per `sampan save` run; `sampan doctor` reads it |
-| `actions.log` (`.1`) | every message of plugin, marketplace, restart, forget and switch actions, with time and action; tokens redacted (`actionlog.py`) |
+| `actions.log` (`.1`, `.lock`) | messages of the plugin, marketplace, restart, forget and switch actions that ran, with time and action; credentials masked (`actionlog.py`) |
 | `hooks/<pid>.json` | written by the optional SessionStart hook |
 | `update-check.json` | cached newest version tag (6 hours) |
 | `~/Library/LaunchAgents/io.github.royalroylo.sampan-save.plist` | macOS hourly save |

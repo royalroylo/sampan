@@ -272,6 +272,10 @@ class ForgetTest(Base):
         self.assertIn("[forget u] ✔ 已從登記表移除 u", log)
         self.assertIn("[forget u]   對話還在：", log)
 
+    def test_forget_dry_run_logs_nothing(self):
+        self.assertEqual(cmd_forget(self.cfg, self.runner(), self.msgs.append, "u", dry_run=True), 0)
+        self.assertFalse(actionlog.log_path(self.cfg).exists())
+
     def test_forget_prints_id_when_it_cannot_be_resumed(self):
         self.registry([Row("u", "claude", "gone", "not-a-uuid", str(self.cwd), "retired", "t", "srv", None)])
         self.assertEqual(cmd_forget(self.cfg, self.runner(), self.msgs.append, "u"), 0)

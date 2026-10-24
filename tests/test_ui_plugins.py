@@ -696,6 +696,19 @@ class MarketTabTest(unittest.TestCase):
         self.assertIn("要生效需重開 work 的 session（1 個）：按 R 立刻重開，其他鍵稍後（輸入 R）: ", prompts)
         self.assertEqual(prompts[-1], pa.MARKET_MENU)  # back on the 來源 tab
 
+    def test_curses_market_remove_asks_restart_on_the_redrawn_market_tab(self):
+        write_state(self.cfg.profiles["work"], ["foo@other"], [("my-plugins", "owner/my-plugins"), ("other", "x/other")])
+        run = market_runner(self.cfg)
+        s = self.screen(["\t", "3", "\n", "KEY_DOWN", " ", "s", "y", "\n", "x", "q"], run,
+                        rows=[status_row("a", profile="work")])
+        self.assertEqual(s.plugins(ask=s.ask), 0)
+        self.assertEqual([c["args"] for c in run.calls], [["claude", "plugin", "marketplace", "remove", "other"]])
+        asking = [f for f in self.frames() if "要生效需重開 work 的 session（1 個）" in f]
+        self.assertTrue(asking)
+        for f in asking:
+            self.assertIn("［plugin｜▸來源◂］", f.split("\n")[0])
+            self.assertNotIn("›", f.split("\n")[0])
+
     def test_plain_market_add_update_and_update_all(self):
         run = market_runner(self.cfg, name_for=lambda s: "new-mkt")
         upd = ["claude", "plugin", "marketplace", "update", "my-plugins"]

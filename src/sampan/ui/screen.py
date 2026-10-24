@@ -389,8 +389,8 @@ class CursesScreen:
                 restart_offer(cfg, self.run, self.out, ask, changed, self._getkey, own_pane=own_pane,
                               on_prompt=on_prompt, rows_fn=self.rows_fn)
 
-        def show(picker):
-            """Draw layer 1 of the current tab (the list, its card and help) with picker's prompt."""
+        def show(picker, prompt=True):
+            """Draw layer 1 of the current tab (the list, its card and help) with picker's prompt (prompt=False: none)."""
             title = tab_title(PLUGINS_TITLE, tab) + (f"　上次檢查 {checked_at}" if checked_at else "")
             here = picker.visible[picker.cursor] if picker.visible else None
             if tab == "plugin":
@@ -404,7 +404,7 @@ class CursesScreen:
             self.view = dict(title=title, left=[cells[r.name] for r in picker.visible], cursor=picker.cursor,
                              card=card, preview=None, help=help_, cols=cols, empty=empty, notice=None,
                              name_w=max((text_width(c[0]) for c in cells.values()), default=None))
-            self.prompt = picker.prompt
+            self.prompt = picker.prompt if prompt else None
             self.draw()
         try:
             while True:
@@ -460,8 +460,7 @@ class CursesScreen:
                 if target is not None and picker.query is None:
                     picker._goto(target)
                 if changed:  # ask on the list as it is now, not on the frame of before the save
-                    show(picker)
-                    self.prompt = None
+                    show(picker, prompt=False)
                     offer(changed)
         finally:
             self.prompt = None
