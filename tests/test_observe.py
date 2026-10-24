@@ -106,7 +106,7 @@ class LiveByPaneTest(unittest.TestCase):
         e.pane("cx", "%1", 100, command="codex", path="/c")
         e.codex(200, 100)
         found, _w = e.live()
-        self.assertEqual(found["%1"], LiveAgent("codex", 200, "", TID, "/c", "idle", "%1"))
+        self.assertEqual(found["%1"], LiveAgent("codex", 200, self.cfg.codex.profile, TID, "/c", "idle", "%1"))
         observed, warnings, skipped = e.observe()
         self.assertEqual(observed, [Observed("cx", "codex", "", TID, "/c", 200)])
         self.assertEqual(skipped, set())
@@ -155,7 +155,7 @@ class ObserveTest(unittest.TestCase):
         write_session(e.cfg, "work", 200, sid=A, cwd="/c", tmux="cl:@1.%1")
         observed, _w, skipped = e.observe()
         self.assertEqual(sorted(observed, key=lambda o: o.tmux), [
-            Observed("cl", "claude", "work", A, "/c", 200), Observed("cx", "codex", "", TID, "/c", 201)])
+            Observed("cl", "claude", "work", A, "/c", 200), Observed("cx", "codex", self.cfg.codex.profile, TID, "/c", 201)])
         self.assertEqual(skipped, set())
 
     def test_codex_without_thread_yet_is_an_agent_but_not_observed(self):

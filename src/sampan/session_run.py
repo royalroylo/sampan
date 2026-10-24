@@ -49,7 +49,7 @@ def _quit(tmux, pane_id, agent, sleep):
 
 def _load(cfg, out):
     try:
-        return load_rows(cfg.registry_path)
+        return load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)
     except RegistryError as e:
         out(f"❌ {e}")
         return None
@@ -142,7 +142,7 @@ def cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.sleep
         if agent == "claude" and la is not None and la.agent == "claude":
             return 0
         if agent == "codex" and la is not None and la.agent == "codex" and la.session_id:
-            row = Row(name, "codex", "", la.session_id, cwd, "active", now_iso(), tmux.server_id() or "", la.pid)
+            row = Row(name, "codex", cfg.codex.profile, la.session_id, cwd, "active", now_iso(), tmux.server_id() or "", la.pid)
             if not _register(cfg, out, row):
                 return 2
             out(f"▶ {name}（codex，{la.session_id[:8]}）已登記")
@@ -641,7 +641,7 @@ def cmd_move(cfg, run, out, name, dest, *, dry_run=False, sleep=time.sleep, time
                                                        hit.session_id == session_id and
                                                        (agent == "claude" or hit.status == "idle")):
             cmd_save(cfg, run, lambda _m: None, quiet=True, proc_root=proc_root)  # report only the move result
-            now = next((r for r in load_rows(cfg.registry_path) if r.tmux == name), None)
+            now = next((r for r in load_rows(cfg.registry_path, codex_profile=cfg.codex.profile) if r.tmux == name), None)
             if switching:
                 out(f"✔ {name} 已換到 {now.profile if now else new_prof}（{hit.session_id[:8]}）")
             else:
@@ -671,7 +671,7 @@ def _set_profile(cfg, name, session_id, profile):
     """Record profile on the registry row of name, only while it still holds session_id; returns whether it did."""
     with lock(cfg.state_dir):
         try:
-            rows = load_rows(cfg.registry_path)
+            rows = load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)
         except RegistryError:
             return False
         row = next((r for r in rows if r.tmux == name and r.session_id == session_id), None)

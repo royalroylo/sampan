@@ -403,7 +403,7 @@ class FlowTest(Base):
         self.assertIn("▶ 請到原本的終端機視窗（tmux 外）裡「~/proj.v2」那個 Codex 輸入 /quit", self.text())
         self.assertEqual(self.keys(), [["%50", f"cd {self.cwd} && codex resume {TID} -C {self.cwd}"], ["%50", "Enter"]])
         rows = load_rows(self.cfg.registry_path)
-        self.assertEqual([(x.agent, x.profile, x.session_id) for x in rows], [("codex", "", TID)])
+        self.assertEqual([(x.agent, x.profile, x.session_id) for x in rows], [("codex", self.cfg.codex.profile, TID)])
 
     def test_codex_waits_for_both_wrapper_and_native(self):
         self.iterm_codex(700)

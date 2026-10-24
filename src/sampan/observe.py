@@ -91,7 +91,7 @@ def live_by_pane(cfg, run, panes, procs, proc_root=PROC_ROOT):
     warnings += codex_warnings
     tmux = Tmux(run)
     for pane_id, lc in codex.items():
-        found[pane_id] = LiveAgent("codex", lc.pid, "", lc.thread_id, lc.cwd, codex_activity(tmux.capture(pane_id)), pane_id)
+        found[pane_id] = LiveAgent("codex", lc.pid, cfg.codex.profile, lc.thread_id, lc.cwd, codex_activity(tmux.capture(pane_id)), pane_id)
     return found, warnings
 
 

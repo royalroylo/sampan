@@ -23,7 +23,7 @@ class RegistryError(Exception):
 class Row:
     tmux: str
     agent: str  # "claude" | "codex"
-    profile: str  # "" for codex
+    profile: str  # codex 列是 Codex profile 名稱（舊資料可能是 ""）
     session_id: str
     cwd: str
     state: str = "active"
@@ -118,7 +118,7 @@ def lock(state_dir):
             fcntl.flock(fh, fcntl.LOCK_UN)
 
 
-def load_rows(path):
+def load_rows(path, *, codex_profile=""):
     path = Path(path)
     if not path.exists():
         return []
@@ -131,6 +131,8 @@ def load_rows(path):
     except (OSError, ValueError, KeyError, TypeError) as e:
         raise RegistryError(f"{path} 無法解析（{e}）。不會覆蓋它；請從 state/history/ 挑一份還原。") from e
     for r in rows:
+        if r.agent == "codex" and r.profile == "":  # old rows: fill in the Codex profile name
+            r.profile = codex_profile
         if r.state not in STATES:
             raise RegistryError(f"{path}：{r.tmux} 的 state 是 {r.state!r}，只能是 {STATES}")
         if r.agent not in AGENTS:

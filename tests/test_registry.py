@@ -101,6 +101,11 @@ class StorageTest(unittest.TestCase):
         self.path = self.tmp / "state/registry.json"
         self.hist = self.tmp / "state/history"
 
+    def test_old_codex_rows_read_as_codex_profile(self):
+        write_rows(self.path, [Row("c", "codex", "", B, "/w"), Row("a", "claude", "work", A, "/w")], "t", self.hist)
+        rows = {r.tmux: r for r in load_rows(self.path, codex_profile="cx")}
+        self.assertEqual((rows["c"].profile, rows["a"].profile), ("cx", "work"))
+        self.assertEqual(load_rows(self.path)[0].profile, "")
     def test_missing_file_is_empty(self):
         self.assertEqual(load_rows(self.path), [])
 

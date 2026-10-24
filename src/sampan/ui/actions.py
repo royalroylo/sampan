@@ -66,7 +66,7 @@ def _attach(run, out, name, current, exec_fn):
 def dir_context(cfg):
     """Data for the right side of the directory chooser: recently used directories and the registered sessions in each directory. Empty when the registry cannot be read."""
     try:
-        rows = load_rows(cfg.registry_path)
+        rows = load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)
     except RegistryError:
         rows = []
     return {"recent": recent_dirs(rows), "sessions": sessions_by_dir(rows)}
@@ -79,7 +79,7 @@ def _default_start(cfg):
 
 def _session_cwd(cfg, name):
     try:
-        rows = load_rows(cfg.registry_path)
+        rows = load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)
     except RegistryError:
         rows = []
     cwd = next((r.cwd for r in rows if r.tmux == name), "")
@@ -285,7 +285,7 @@ def _resume_line(cfg, name):
     from ..launch import launch_line
 
     try:
-        row = next((r for r in load_rows(cfg.registry_path) if r.tmux == name), None)
+        row = next((r for r in load_rows(cfg.registry_path, codex_profile=cfg.codex.profile) if r.tmux == name), None)
         return launch_line(cfg, row.agent, row.profile, resume=row.session_id, cwd=row.cwd) if row else None
     except (RegistryError, ValueError, KeyError):
         return None

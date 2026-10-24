@@ -225,7 +225,7 @@ def cmd_restore(cfg, run, out, ask, *, names=(), select_all=False, dry_run=False
     opened: given a list, append the names of tmux sessions created / sent the reattach command, in order (the ui then attaches to the first).
     on_prompt(name, agent, prompt): asked when an agent stops at a startup menu during the wait (see prompts.Relay); None = press no keys."""
     try:
-        rows = load_rows(cfg.registry_path)
+        rows = load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)
     except RegistryError as e:
         out(f"❌ {e}")
         return 2

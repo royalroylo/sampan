@@ -123,6 +123,9 @@ class AgentStatusTest(unittest.TestCase):
         self.assertEqual(rows["cl"].last, datetime(2026, 10, 17, 3, 0, tzinfo=timezone.utc))
         self.assertEqual((rows["cx"].agent, rows["cx"].state, rows["cx"].agent_status), ("codex", State.RUNNING, "working"))
         self.assertEqual(rows["cx"].last, datetime(2026, 10, 20, 2, 30, tzinfo=timezone.utc))
+        # old "" registry row + live codex: the profile reads as the Codex profile name, so no mismatch is flagged
+        self.assertEqual(rows["cx"].profile, cfg.codex.profile)
+        self.assertNotEqual(cfg.codex.profile, "")
         self.assertEqual(rows["extra"].last, datetime(2026, 10, 18, 3, 0, tzinfo=timezone.utc))
         msgs = []
         with local_tz("Asia/Taipei"):

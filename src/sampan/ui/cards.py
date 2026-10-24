@@ -77,7 +77,7 @@ def _quote_of(cfg, agent, profile, sid):
 def gather_cards(cfg, run, rows):
     """Data each info card needs that status_rows lacks: {name: {cwd, windows, panes, quote}}. Read once each time the list is refreshed."""
     try:
-        reg = {r.tmux: r for r in load_rows(cfg.registry_path)}
+        reg = {r.tmux: r for r in load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)}
     except RegistryError:
         reg = {}
     panes = Tmux(run).panes() or []  # unreadable: treated as no panes, the info card merely lacks the tmux line; state and keys are handled by status_rows' "cannot tell" ("無法判斷")

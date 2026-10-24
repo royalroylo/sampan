@@ -73,7 +73,7 @@ def _at_trust_prompt(tmux, panes, session, agent):
 
 
 def status_rows(cfg, run):
-    rows = {r.tmux: r for r in load_rows(cfg.registry_path)}
+    rows = {r.tmux: r for r in load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)}
     tmux = Tmux(run)
     panes = tmux.panes()
     if panes is None:

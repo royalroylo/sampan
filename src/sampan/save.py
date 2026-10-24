@@ -25,7 +25,7 @@ def cmd_save(cfg, run, out, *, quiet=False, dry_run=False, proc_root=PROC_ROOT):
         return 0
     with lock(cfg.state_dir):
         try:
-            old = load_rows(cfg.registry_path)
+            old = load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)
         except RegistryError as e:
             append_log(cfg, f"error {e}")
             out(f"❌ {e}")

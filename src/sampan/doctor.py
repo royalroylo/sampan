@@ -110,7 +110,7 @@ def _plugins(cfg):
 
 def _home_sessions(cfg, profile):
     try:
-        rows = load_rows(cfg.registry_path)
+        rows = load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)
     except (RegistryError, OSError):
         return []
     return [r.tmux for r in rows if r.state == "active" and r.profile == profile.name and Path(r.cwd) == cfg.home]

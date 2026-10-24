@@ -160,7 +160,7 @@ def _codex_rows(cfg, run, tops, now):
     for p, deep in tops:
         cwd = proc_cwd(run, deep) or proc_cwd(run, p.pid) or "?"
         tid = rollout_from_lsof(run, deep, home) if cfg.codex.enabled else None
-        rows.append(dict(agent="codex", pid=p.pid, pids=tuple(dict.fromkeys((p.pid, deep))), profile="",
+        rows.append(dict(agent="codex", pid=p.pid, pids=tuple(dict.fromkeys((p.pid, deep))), profile=cfg.codex.profile,
                          session_id=tid, cwd=cwd, last=None, text=None, skip=None))
     bound = {r["session_id"] for r in rows if r["session_id"]}
     guesses = {}
