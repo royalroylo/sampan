@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 from . import launchd, paths
 from .config import SOURCE_RULE, ConfigError, load_config, same_source, valid_source
+from .config_edit import NAME_RE, _add_marketplaces, _append_plugins, _k, _s
 from .deps import PATH_LINE
 from .deps import ensure as ensure_deps
 from .fsutil import PRIVATE_FILE, atomic_write
@@ -23,7 +24,6 @@ from .observe import PROC_ROOT
 from .plugins import read_state
 from .procs import claude_pids, list_procs, proc_env
 
-NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 NO_SCHEDULE_NOTE = "ℹ 這台不是 macOS，沒有自動存檔排程；需要時自己跑 `sampan save`（或用 cron／systemd timer）"
 NAME_RULE = "名稱只能用英數字、- 和 _"
 
@@ -109,14 +109,6 @@ def detect_codex(home, env, which=shutil.which):
 
 # ---------- TOML generation ----------
 
-def _s(value):
-    return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")
-
-
-def _k(name):
-    return name if NAME_RE.match(name) else _s(name)
-
-
 def _disp(path, home):
     path = Path(path)
     if home is not None:
@@ -193,83 +185,6 @@ def render_config(detected, *, codex_enabled, codex_home, recent_days=7, home=No
         "",
     ]
     return "\n".join(head) + "\n" + "\n".join(sections)
-
-
-# ---------- text-level additions to an existing config file (existing content untouched) ----------
-
-_MARKETPLACES_RE = re.compile(r"^[ \t]*\[[ \t]*marketplaces[ \t]*\][ \t]*(#.*)?$", re.M)
-
-
-def _profile_header(name):
-    q = re.escape(name)
-    return re.compile(rf"""^[ \t]*\[[ \t]*profiles[ \t]*\.[ \t]*(?:{q}|"{q}"|'{q}')[ \t]*\][ \t]*(#.*)?$""", re.M)
-
-
-def _line_end(text, pos):
-    nl = text.find("\n", pos)
-    return len(text) if nl == -1 else nl + 1
-
-
-def _array_close(text, open_i):
-    """Index of the ']' closing the array opened at open_i, and of the last significant char before it."""
-    i, depth, last = open_i + 1, 1, open_i
-    while i < len(text):
-        c = text[i]
-        if c == "#":
-            i = _line_end(text, i)
-            continue
-        if c in "\"'":
-            j = i + 1
-            while j < len(text) and text[j] != c:
-                j += 2 if c == '"' and text[j] == "\\" else 1
-            last, i = j, j + 1
-            continue
-        if c == "[":
-            depth += 1
-        elif c == "]":
-            depth -= 1
-            if depth == 0:
-                return i, last
-        if not c.isspace():
-            last = i
-        i += 1
-    return None, None
-
-
-def _append_plugins(text, name, pids):
-    m = _profile_header(name).search(text)
-    if m is None:
-        return None
-    start = _line_end(text, m.end())
-    end = next((start + mm.start() for mm in re.finditer(r"^[ \t]*\[", text[start:], re.M)), len(text))
-    pm = re.compile(r"^[ \t]*plugins[ \t]*=[ \t]*", re.M).search(text, start, end)
-    if pm is None:
-        prefix = text[:start] if text[:start].endswith("\n") else text[:start] + "\n"
-        return prefix + f"plugins = [{', '.join(_s(p) for p in pids)}]\n" + text[start:]
-    open_i = pm.end()
-    if text[open_i:open_i + 1] != "[":
-        return None
-    close_i, last = _array_close(text, open_i)
-    if close_i is None:
-        return None
-    if last == open_i:
-        return text[:open_i + 1] + ", ".join(_s(p) for p in pids) + text[open_i + 1:]
-    comma = "" if text[last] == "," else ","
-    nl = text.rfind("\n", last, close_i)
-    if nl != -1:
-        items = "".join(f"\n  {_s(p)}," for p in pids)
-        return text[:last + 1] + comma + text[last + 1:nl] + items + text[nl:]
-    return text[:last + 1] + comma + " " + ", ".join(_s(p) for p in pids) + text[last + 1:]
-
-
-def _add_marketplaces(text, new):
-    entries = "".join(f"{_k(n)} = {_s(r)}\n" for n, r in new.items())
-    m = _MARKETPLACES_RE.search(text)
-    if m is None:
-        return text.rstrip("\n") + "\n\n[marketplaces]\n" + entries
-    pos = _line_end(text, m.end())
-    prefix = text[:pos] if text[:pos].endswith("\n") else text[:pos] + "\n"
-    return prefix + entries + text[pos:]
 
 
 # ---------- interaction ----------
