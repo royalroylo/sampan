@@ -97,15 +97,19 @@ def newest(profile, mkt, short, run):
     entry = next((e for e in _read_marketplace(clone) if e["name"] == short), None)
     if entry is None:
         return UNKNOWN
-    if isinstance(entry.get("version"), str):
+    if isinstance(entry.get("version"), str) and entry["version"]:
         return Latest(entry["version"], None)
     src = entry.get("source")
     if isinstance(src, str):
         try:
-            v = json.loads((clone / src / ".claude-plugin" / "plugin.json").read_text()).get("version")
+            base = clone.resolve()
+            target = (base / src).resolve()  # an absolute src replaces base; symlinks are followed
+            if not target.is_relative_to(base):
+                raise ValueError("source escapes the marketplace clone")
+            v = json.loads((target / ".claude-plugin" / "plugin.json").read_text()).get("version")
         except (OSError, ValueError, AttributeError):
             v = None
-        if isinstance(v, str):
+        if isinstance(v, str) and v:
             return Latest(v, None)
         r = run(["git", "-C", str(clone), "rev-parse", "HEAD"])
         return Latest(r.stdout.strip()[:12], None) if r.returncode == 0 and r.stdout.strip() else UNKNOWN

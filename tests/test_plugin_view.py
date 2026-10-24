@@ -156,8 +156,6 @@ class ViewTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 def write_mkt(cfg, profile, mkt, plugins):
@@ -215,6 +213,23 @@ class NewestTest(unittest.TestCase):
         self.assertEqual(newest(self.cfg.profiles["alice"], "nomkt", "x", run), Latest(None, None))
         self.assertEqual(len(run.calls), 1)
 
+    def test_newest_source_cannot_escape_clone_and_empty_version_is_absent(self):
+        clone = write_mkt(self.cfg, "alice", "m", [
+            {"name": "up", "source": "../../x"}, {"name": "abs", "source": "/etc/foo"},
+            {"name": "link", "source": "./link"}, {"name": "empty", "version": "", "source": "./empty"}])
+        outside = Path(tempfile.mkdtemp())
+        (outside / ".claude-plugin").mkdir()
+        (outside / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": "9.9.9"}))
+        (clone / "link").symlink_to(outside)
+        (clone.parent.parent / "x" / ".claude-plugin").mkdir(parents=True)
+        (clone.parent.parent / "x" / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": "8.8.8"}))
+        e = clone / "empty" / ".claude-plugin"
+        e.mkdir(parents=True)
+        (e / "plugin.json").write_text(json.dumps({"version": ""}))
+        run = FakeRunner(strict=True).on(["git", "-C", str(clone), "rev-parse", "HEAD"], cp(out="abcdef1234567890\n"))
+        for name in ("up", "abs", "link", "empty"):
+            self.assertEqual(newest(self.cfg.profiles["alice"], "m", name, run), Latest("abcdef123456", None), name)
+
     def test_newest_failed_git_is_unknown(self):
         clone = write_mkt(self.cfg, "alice", "m", [{"name": "head", "source": "./plugins/head"}])
         run = FakeRunner(strict=True).on(["git", "-C", str(clone), "rev-parse", "HEAD"], cp(rc=128, err="fatal"))
@@ -259,3 +274,7 @@ class NewerRowsTest(unittest.TestCase):
         write_plugins(self.cfg, "work", installed={TOOLS: [("user", "0.9.0", None)]}, known=GOOD_KNOWN)
         row = {r.pid: r for r in build_rows(self.cfg, snapshot(self.cfg), {("alice", TOOLS): Latest("1.1.0", None)})}[TOOLS]
         self.assertEqual((row.state, row.newer), ("不一致", {"alice": "1.1.0"}))
+
+
+if __name__ == "__main__":
+    unittest.main()
