@@ -240,6 +240,37 @@ class DoctorTest(unittest.TestCase):
         self.cfg = replace(self.cfg, codex=replace(self.cfg.codex, enabled=False))
         self.assertFalse(any("Codex" in c.title for c in self.checks()))
 
+    def test_doctor_reports_daemon(self):
+        from sampan.codex_daemon import DaemonSnapshot
+        seen = []
+
+        def up(home, run, *, now, **_kw):
+            seen.append(home)
+            return DaemonSnapshot(home, None, (), frozenset(), now)
+
+        home = self.cfg.codex.home
+        checks = self.checks(daemon_fn=up)
+        self.assertIn(("info", f"Codex 常駐服務：執行中（{home}）"), [(c.level, c.title) for c in checks])
+        self.assertEqual(seen, [home])
+        checks = self.checks(daemon_fn=lambda home, run, *, now, **_kw: None)
+        self.assertIn(("info", "Codex 常駐服務沒在執行（codex remote-control start）"),
+                      [(c.level, c.title) for c in checks])
+
+    def test_doctor_daemon_default_never_reaches_a_real_daemon(self):
+        # the temp CODEX_HOME has no socket: the default snapshot asks the (fake) codex binary and gets nothing
+        self.r.on(["codex", "app-server", "daemon", "version"], cp(rc=1))
+        titles = [c.title for c in self.checks()]
+        self.assertIn("Codex 常駐服務沒在執行（codex remote-control start）", titles)
+        self.assertEqual(len(self.r.called(["codex", "app-server", "daemon", "version"])), 1)
+
+    def test_doctor_daemon_skipped_without_codex_profile(self):
+        from dataclasses import replace
+        self.cfg = replace(self.cfg, codex=replace(self.cfg.codex, enabled=False))
+        called = []
+        checks = self.checks(daemon_fn=lambda *a, **k: called.append(a))
+        self.assertFalse(any("常駐服務" in c.title for c in checks))
+        self.assertEqual(called, [])
+
     def test_doctor_multi_agent_session(self):
         self.r.on(["tmux", "-u", "list-panes"], cp(out=pane_line("x", "%1", 100, "claude", "/c") + "\n"
                                                   + pane_line("x", "%2", 101, "codex", "/c") + "\n"))

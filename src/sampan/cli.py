@@ -333,7 +333,8 @@ def _dispatch(cfg, args):
         argv = sys.argv[1:]  # after a successful update with U, re-run with the same arguments
         if interactive:
             checker.start()  # check for a new version in the background: the list appears first
-            return curses_ui(cfg, run, out, **where, updater=checker, argv=argv)
+            from .ui.daemon_watch import make_watcher
+            return curses_ui(cfg, run, out, **where, updater=checker, argv=argv, watcher=make_watcher(cfg, run))
         import subprocess
 
         from .prompts import plain_prompt

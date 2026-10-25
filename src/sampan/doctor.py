@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
 
-from . import actionlog, launchd
+from . import actionlog, codex_daemon, launchd
 from . import deps as deps_mod
 from . import update as update_mod
 from .claude_state import stale_session_files
@@ -262,6 +262,19 @@ def _codex(cfg):
     return [Check("ok", "Codex 狀態資料庫可讀")]
 
 
+def _codex_daemon(cfg, run, snapshot_fn=None):
+    """Whether the Codex app-server daemon answers (one snapshot, ≤3 s); nothing without an enabled Codex profile."""
+    if not cfg.codex.enabled:
+        return []
+    try:
+        snap = (snapshot_fn or codex_daemon.snapshot)(cfg.codex.home, run, now=datetime.now(timezone.utc))
+    except Exception:  # noqa: BLE001  doctor reports, it never crashes on the daemon
+        snap = None
+    if snap is None:
+        return [Check("info", "Codex 常駐服務沒在執行（codex remote-control start）")]
+    return [Check("info", f"Codex 常駐服務：執行中（{snap.home}）")]
+
+
 def _multi_agent(cfg, run, proc_root):
     tmux = Tmux(run)
     panes = tmux.panes()
@@ -297,13 +310,13 @@ def _version(current, latest_fn):
 
 
 def run_checks(cfg, run, *, now, uid, sampan_path=None, proc_root=PROC_ROOT, which=shutil.which, env=None,
-               current=None, latest_fn=None, platform=sys.platform):
+               current=None, latest_fn=None, platform=sys.platform, daemon_fn=None):
     """latest_fn by default uses the run passed in to look up the latest version (honouring the cache); cmd_doctor passes a version with a timeout."""
     sampan_path = sampan_path or current_sampan()
     current = current or update_mod.current_version()
     latest_fn = latest_fn or (lambda: update_mod.check(cfg.state_dir, run=run)[0])
     return (_version(current, latest_fn) + _deps(cfg, which, env, platform) + _profile_dirs(cfg) + _owners(cfg, uid) + _plugins(cfg) + _auth(cfg, run) + _stale(cfg, run)
-            + _hooks(cfg) + _statusline(cfg, now) + _codex(cfg) + _multi_agent(cfg, run, proc_root) + _action_log(cfg)
+            + _hooks(cfg) + _statusline(cfg, now) + _codex(cfg) + _codex_daemon(cfg, run, daemon_fn) + _multi_agent(cfg, run, proc_root) + _action_log(cfg)
             + (_launchd(cfg, run, sampan_path) + _save_log(cfg, now) if platform == "darwin" else
                [Check("info", "這台不是 macOS，沒有自動存檔排程（需要時自己跑 sampan save，或用 cron／systemd timer）")]))
 

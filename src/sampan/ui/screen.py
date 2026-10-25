@@ -12,6 +12,7 @@ from ..status import status_rows
 from ..tmux import TMUX
 from .actions import cmd_ui, dir_context
 from .cards import Wrap, _quote_of, adopt_card, card_lines, gather_cards, preview_header, restore_card
+from .daemon_watch import apply_codex_status
 from .dirpick import DirPicker
 from .plugin_actions import (
     add_flow,
@@ -78,8 +79,10 @@ class CursesScreen:
     scr only uses getmaxyx, erase, addstr, refresh, get_wch (tests use a fake object)."""
 
     def __init__(self, scr, cfg=None, run=None, now_fn=_now, *, clock=time.monotonic, rows_fn=status_rows,
-                 own_pane=None, updater=None, usage_fn=None, interactive=None, sampan_path=None):
+                 own_pane=None, updater=None, usage_fn=None, interactive=None, sampan_path=None, watcher=None):
         self.scr, self.cfg, self.run, self.now_fn = scr, cfg, run, now_fn
+        # watcher: daemon_watch.DaemonWatcher (curses_ui starts / stops it); its latest snapshot colours the Codex rows
+        self.watcher, self._snap = watcher, None
         # usage_fn(cfg, profile) -> Usage | None for the account lines and profile cards (default: the files on disk);
         # interactive(args, env) runs a login with the terminal (curses steps out); None = say what to run instead
         self.usage_fn, self.interactive, self.sampan_path = usage_fn, interactive, sampan_path
@@ -253,7 +256,19 @@ class CursesScreen:
             return False
         self.warning = getattr(new, "warning", None)
         rows[:] = new
+        self._apply_snap(rows)
         picker.reload(rows)  # keeps the search, the digit buffer and the cursor session
+        return True
+
+    def _apply_snap(self, rows):
+        """Give rows the watcher's latest Codex thread states. Returns True when the snapshot is a new one since the
+        last call: then the 額度 cache is dropped too (the watcher has just saved a fresh reading)."""
+        snap = self.watcher.latest if self.watcher is not None else None
+        apply_codex_status(rows, snap)
+        if snap is self._snap:
+            return False
+        self._snap = snap
+        self._usage = None
         return True
 
     def _account_lines(self, rows):
@@ -278,9 +293,12 @@ class CursesScreen:
         picker = Picker(rows, self.last_name if self.last_name in names else current, clock=self.clock)
         shot, tick, refreshed = (None, None), False, self.clock()
         self._usage = None  # back on the list (after an action): read the 額度 again
+        self._apply_snap(rows)
         self._timeout(TICK_MS)
         try:
             while True:
+                if self._apply_snap(rows):
+                    built = {}  # the info cards show agent_status
                 card, preview = [], None
                 if picker.visible:
                     r = picker.visible[picker.cursor]
@@ -664,17 +682,24 @@ def run_outside(scr, args, env=None):
 
 
 def curses_ui(cfg, run, out, *, current_session=None, own_pane=None, exec_fn=os.execvp, wrapper=None,
-              run_outside=run_outside, updater=None, **kw):
+              run_outside=run_outside, updater=None, watcher=None, **kw):
     """The whole ui opens curses only once. When attaching to a session outside tmux, curses steps out temporarily and tmux attach runs in the foreground; after detach we are back at the list.
-    On exit the last contents of the message area are printed on the terminal."""
+    On exit the last contents of the message area are printed on the terminal.
+    watcher (daemon_watch.DaemonWatcher, None = none) is started here and stopped when the ui ends, however it ends."""
     pending, box = [], {}
 
     def main(scr):
         screen = box["screen"] = CursesScreen(scr, cfg, run, rows_fn=kw.get("rows_fn", status_rows), own_pane=own_pane,
-                                              updater=updater, interactive=lambda args, env: run_outside(scr, args, env))
+                                              updater=updater, interactive=lambda args, env: run_outside(scr, args, env),
+                                              watcher=watcher)
+
+        def set_cfg(c):
+            screen.cfg = c
+            if watcher is not None:
+                watcher.cfg = c  # renamed / added Codex profiles: the next poll saves under the new names
         opts = dict(picker_fn=screen.pick, restore_picker_fn=screen.restore_checklist, prompt_fn=screen.prompt_choice,
                     adopt_picker_fn=screen.adopt_checklist, plugins_fn=screen.plugins, profiles_fn=screen.profiles,
-                    set_cfg_fn=lambda c: setattr(screen, "cfg", c),
+                    set_cfg_fn=set_cfg,
                     exec_fn=lambda f, args: pending.append((f, args)),
                     attach_fn=lambda args: run_outside(scr, args), loop=True,
                     choose_dir_fn=lambda start, *, allow_missing: screen.choose_dir(
@@ -688,10 +713,15 @@ def curses_ui(cfg, run, out, *, current_session=None, own_pane=None, exec_fn=os.
         import curses
         _curses_prepare()
         wrapper = curses.wrapper
+    if watcher is not None:
+        watcher.start()
     try:
         rc = wrapper(main)
     except KeyboardInterrupt:
         rc = 0
+    finally:
+        if watcher is not None:
+            watcher.stop()
     screen = box.get("screen")
     for line in (screen.messages if screen else []):
         out(line)

@@ -521,6 +521,98 @@ class CursesUiTest(unittest.TestCase):
         self.assertEqual(printed, ["✔ 已存檔"])
 
 
+class FakeWatcher:
+    """Stand-in for daemon_watch.DaemonWatcher: latest is set by the test; start/stop are recorded (no thread)."""
+
+    def __init__(self, latest=None):
+        self.latest, self.events, self.cfg = latest, [], None
+
+    def start(self):
+        self.events.append("start")
+
+    def stop(self):
+        self.events.append("stop")
+
+
+def daemon_snap(threads=(), loaded=()):
+    from sampan.codex_daemon import DaemonSnapshot
+    return DaemonSnapshot(Path("/h"), None, tuple(threads), frozenset(loaded), NOW)
+
+
+def codex_thread(tid, status, flags=()):
+    from sampan.codex_daemon import CodexThread
+    return CodexThread(tid, "", "/w", "codex-tui", "cli", None, status, tuple(flags), NOW, None)
+
+
+class WatcherScreenTest(unittest.TestCase):
+    def setUp(self):
+        self.cfg = make_env(Path(tempfile.mkdtemp()))
+        self.rows = [row("cl", agent_status="busy"), row("cx", agent="codex", sid=TID, agent_status="working")]
+
+    def pick(self, keys, watcher, **kw):
+        self.setUp()  # fresh rows: apply_codex_status changes them in place
+        self.scr = FakeScr(keys)
+        s = CursesScreen(self.scr, self.cfg, FakeRunner(), now_fn=lambda: NOW, rows_fn=lambda c, r: list(self.rows),
+                         watcher=watcher, **kw)
+        s.pick(list(self.rows), None)
+        return s
+
+    def test_ui_uses_watcher_latest(self):
+        w = FakeWatcher(daemon_snap([codex_thread(TID, "active", ["waitingOnApproval"])]))
+        s = self.pick(["q"], w)
+        cells = {c[0].split()[-1]: c[4] for c in s.view["left"]}
+        self.assertEqual(cells["cx"], ("waiting", "attn"))
+        self.assertEqual(cells["cl"], ("busy", "warn"))
+        self.assertEqual(w.events, [])  # the screen never starts or stops the watcher itself
+        plain = self.pick(["q"], None)
+        self.assertEqual({c[0].split()[-1]: c[4] for c in plain.view["left"]}["cx"], ("working", "warn"))
+        self.assertEqual([c[4] for c in plain.view["left"]], [("busy", "warn"), ("working", "warn")])
+
+    def test_new_snapshot_applies_and_rereads_usage_without_waiting(self):
+        w = FakeWatcher(None)
+        calls = []
+        shown = []
+
+        def tick():
+            shown.append(dict((c[0].split()[-1], c[4][0]) for c in s.view["left"])["cx"])
+            if len(shown) == 1:
+                w.latest = daemon_snap([codex_thread(TID, "active", ["waitingOnUserInput"])])
+        self.scr = FakeScr([TICK, TICK, "q"], on_tick=tick)
+        s = CursesScreen(self.scr, self.cfg, FakeRunner(), now_fn=lambda: NOW, clock=lambda: 0.0,
+                         rows_fn=lambda c, r: list(self.rows), watcher=w,
+                         usage_fn=lambda cfg, p: calls.append(p.name))
+        s.pick(list(self.rows), None)
+        self.assertEqual(shown, ["working", "waiting"])
+        self.assertEqual(calls.count("codex"), 2)  # entry, then the new snapshot (clock never moved)
+
+    def test_reload_reapplies_latest(self):
+        w = FakeWatcher(daemon_snap(loaded={TID}))
+        t = [0.0]
+        self.scr = FakeScr([TICK, "q"], on_tick=lambda: t.__setitem__(0, t[0] + 10))
+        fresh = [row("cl", agent_status="busy"), row("cx", agent="codex", sid=TID, agent_status="working")]
+        s = CursesScreen(self.scr, self.cfg, FakeRunner(), now_fn=lambda: NOW, clock=lambda: t[0],
+                         rows_fn=lambda c, r: list(fresh), watcher=w)
+        shown = list(self.rows)
+        s.pick(shown, None)
+        self.assertIs(shown[1], fresh[1])  # the list was re-read
+        self.assertEqual(shown[1].agent_status, "idle")  # rows re-read from rows_fn get the snapshot too
+
+    def test_curses_ui_starts_and_stops_watcher(self):
+        cfg = make_env(Path(tempfile.mkdtemp()))
+        w = FakeWatcher()
+        rc = curses_ui(cfg, FakeRunner(), lambda _l: None, wrapper=lambda fn: fn(FakeScr(["q"])),
+                       rows_fn=lambda c, run: [row("a")], watcher=w)
+        self.assertEqual(rc, 0)
+        self.assertEqual(w.events, ["start", "stop"])
+
+        def boom(fn):
+            raise RuntimeError("curses broke")
+        w2 = FakeWatcher()
+        with self.assertRaises(RuntimeError):
+            curses_ui(cfg, FakeRunner(), lambda _l: None, wrapper=boom, watcher=w2)
+        self.assertEqual(w2.events, ["start", "stop"])
+
+
 if __name__ == "__main__":
     unittest.main()
 
