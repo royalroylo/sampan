@@ -23,6 +23,7 @@ def row_text(r):
             f"{pad(r.agent_status, 7)} {_fmt_tokens(r.tokens, r.context_window)}")
 
 
+OTHER_REFUSED = "nRAwUposmPeXra"  # action keys that, on a read-only other row, only say where to go instead
 JUMP_S = 1.0  # digit jump: a digit typed more than this many seconds after the previous one starts a new number
 
 
@@ -31,10 +32,14 @@ class Picker:
     s does not return immediately: it first sets prompt to a confirmation question, and on the next key y/Y returns ("stop!", name) (confirmed), any other key cancels.
     Digits jump to that row number (jump holds the digits typed so far); / starts a search (query is the text, None when not
     searching) and every key is text until Esc, Enter or Backspace on an empty query. visible is the list shown (filtered while
-    query is non-empty) and cursor indexes it."""
+    query is non-empty) and cursor indexes it.
+    others (the main list's「Codex 其他對話」, codex_others.OtherRow) follow the rows in visible: the cursor moves onto
+    them and a search matches their thread name, but digits count only rows, a space does not mark them, and every
+    action key there (all but moving, digits, / and quit) returns ("desktop", []) — they are read only."""
 
-    def __init__(self, rows, current=None, *, clock=time.monotonic):
+    def __init__(self, rows, current=None, *, clock=time.monotonic, others=()):
         self.rows = rows
+        self.others = list(others)
         self.marked = set()
         self.clock = clock
         self._stop = None
@@ -62,6 +67,12 @@ class Picker:
     def _filter(self):
         q = (self.query or "").lower()
         self.visible = [r for r in self.rows if q in r.name.lower()]
+        self.n_rows = len(self.visible)  # visible[n_rows:] are others
+        self.visible += [o for o in self.others if q in o.thread.name.lower()]
+
+    def on_other(self):
+        """The cursor is on one of others."""
+        return self.n_rows <= self.cursor < len(self.visible)
 
     def _goto(self, name):
         """Put the cursor on the row called name in visible, or on the first row when it is not there."""
@@ -74,11 +85,13 @@ class Picker:
     def _here_or_none(self):
         return self._here() if self.visible else None
 
-    def reload(self, rows):
-        """New rows from the periodic refresh: keep query, jump and checkmarks, and the cursor on the same session if it is still visible.
+    def reload(self, rows, others=None):
+        """New rows from the periodic refresh (others None = keep them): keep query, jump and checkmarks, and the cursor on the same session if it is still visible.
         When that session is gone: while searching the cursor goes to the first match, otherwise it keeps its index (clamped)."""
         here = self._here_or_none()
         self.rows = rows
+        if others is not None:
+            self.others = list(others)
         self.marked &= {r.name for r in rows}
         self._filter()
         names = [r.name for r in self.visible]
@@ -102,6 +115,8 @@ class Picker:
         if k in ENTER:
             if not self.visible:
                 return None
+            if self.on_other():
+                return ("desktop", [])
             name = self._here()
             self._end_search()
             return ("attach", [name])
@@ -145,6 +160,8 @@ class Picker:
         self.jump = ""
         if k in ("q", "\x1b"):
             return ("quit", [])
+        if self.on_other() and k not in MOVES and k != "/":
+            return ("desktop", []) if k in ENTER or (len(k) == 1 and k in OTHER_REFUSED) else None
         if k == "n":
             return ("new", [])
         if k == "R":

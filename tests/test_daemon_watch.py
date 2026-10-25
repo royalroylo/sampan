@@ -105,8 +105,10 @@ class WatcherTest(unittest.TestCase):
             with self.subTest(result=result):
                 w = self.watcher(result)
                 w.latest = snap(self.cfg.codex.home)  # an earlier success is dropped on failure
+                self.assertFalse(w.polled)
                 self.assertIsNone(w.poll_once())
                 self.assertIsNone(w.latest)
+                self.assertTrue(w.polled)  # None now means "down", not "not read yet"
         w = self.watcher(None)
         w.interval = 3600
         w.start()

@@ -23,11 +23,12 @@ from sampan.ui import (
     text_width,
 )
 from tests.fakes import FakeRunner, cp, pane_line
-from tests.helpers import make_env, status_row
+from tests.helpers import TOML, make_env, status_row
 
 NOW = datetime(2026, 10, 20, 14, 17, tzinfo=timezone.utc)
 SID = "b5768af2-0000-4000-8000-000000000001"
 TID = "01a1568b-81c2-71f1-99f7-b7a590f4ed96"
+TOML_NO_CODEX = TOML + "\n[codex]\nenabled = false\n"
 
 
 def row(name, state=State.RUNNING, profile="carol", agent_status="idle", tokens=93_000, agent="claude", sid=SID, last=None,
@@ -611,6 +612,114 @@ class WatcherScreenTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             curses_ui(cfg, FakeRunner(), lambda _l: None, wrapper=boom, watcher=w2)
         self.assertEqual(w2.events, ["start", "stop"])
+
+
+def desk_thread(tid, name, status="idle", flags=(), hours=1.0):
+    from sampan.codex_daemon import CodexThread
+    return CodexThread(tid, name, "/w/proj", "Codex Desktop", "vscode", None, status, tuple(flags),
+                       NOW - timedelta(hours=hours), None)
+
+
+class CodexOthersScreenTest(unittest.TestCase):
+    """The「Codex 其他對話」block under the tmux rows: display only, never an action."""
+
+    def setUp(self):
+        self.cfg = make_env(Path(tempfile.mkdtemp()))
+        self.snap = daemon_snap([desk_thread("d1", "desk-ask", "active", ["waitingOnApproval"]),
+                                 desk_thread("d2", "desk-idle", hours=2)])
+
+    def pick(self, keys, latest="snap", cfg=None, w=120):
+        self.scr = FakeScr(keys, w=w)
+        self.s = CursesScreen(self.scr, cfg or self.cfg, FakeRunner(), now_fn=lambda: NOW,
+                              watcher=FakeWatcher(self.snap if latest == "snap" else latest))
+        return self.s.pick([row("a"), row("b")], None)
+
+    def test_section_renders_after_tmux_rows(self):
+        from sampan.ui.codex_others import SECTION_TITLE
+        for w in (120, 80):
+            self.pick(["q"], w=w)
+            lines = self.scr.screens[0]
+            at = {k: next(i for i, x in enumerate(lines) if k in x) for k in ("  b ", SECTION_TITLE, "desk-ask")}
+            self.assertLess(at["  b "], at[SECTION_TITLE], (w, lines))
+            self.assertLess(at[SECTION_TITLE], at["desk-ask"], w)
+            self.assertIn("等你核准", lines[at["desk-ask"]])
+            self.assertIn("Desktop", lines[at["desk-ask"]])
+            self.assertIn("desk-idle", "\n".join(lines))
+
+    def test_cursor_skips_section_title(self):
+        from sampan.ui.codex_others import GO_DESKTOP
+        self.pick(["KEY_DOWN", "KEY_DOWN", "q"])
+        self.assertEqual(self.s.view["cursor"], 3)  # a, b, title, desk-ask
+        self.assertEqual(self.s.view["card"][-1], GO_DESKTOP)
+        self.assertEqual(self.s.view["card"][0], "desk-ask")
+        sel = [seg for seg in render(**self.s.view, width=119, height=30)[4] if seg[1].startswith("sel")]
+        self.assertTrue(sel and "desk-ask" in sel[0][0])
+        self.pick(["KEY_DOWN", "KEY_DOWN", "KEY_UP", "q"])
+        self.assertEqual(self.s.view["cursor"], 1)  # back on b, the title is never landed on
+
+    def test_digit_jump_counts_only_tmux_rows(self):
+        self.assertEqual(self.pick(["3", "2", "\n"]), ("attach", ["b"]))
+
+    def test_actions_on_external_rows_are_refused(self):
+        from sampan.ui.codex_others import GO_DESKTOP
+        down = ["KEY_DOWN", "KEY_DOWN"]
+        for keys in (down + ["\n"], down + ["s", "y"], down + ["R"], down + ["X"], down + ["m"],
+                     ["/", "d", "e", "s", "k", "\n", "\x1b"]):
+            self.assertEqual(self.pick(keys + ["q"]), ("quit", []), keys)
+            self.assertIn(GO_DESKTOP, "\n".join(self.scr.screens[-1]), keys)
+            self.assertNotIn("將停掉", "\n".join("\n".join(x) for x in self.scr.screens), keys)
+        self.assertEqual(self.pick(down + [" ", "KEY_UP", "KEY_UP", "\n"]), ("attach", ["a"]))
+        self.assertNotIn("●", "".join(c[0] for c in self.s.view["left"][:2] if isinstance(c, tuple)))
+
+    def test_bulk_action_with_cursor_on_external_row_is_refused(self):
+        from sampan.ui.codex_others import GO_DESKTOP
+        self.assertEqual(self.pick([" ", " ", "s", "y", "q"]), ("quit", []))  # a, b marked; cursor moved onto d1
+        self.assertIn(GO_DESKTOP, "\n".join(self.scr.screens[-1]))
+
+    def test_search_matches_external_names(self):
+        from sampan.ui.codex_others import SECTION_TITLE
+        self.pick(["/", "i", "d", "l", "e", "\x1b", "q"])
+        shown = "\n".join(self.scr.screens[5])  # after "/idle"
+        self.assertIn("desk-idle", shown)
+        self.assertIn(SECTION_TITLE, shown)
+        self.assertNotIn("desk-ask", shown)
+
+    def test_daemon_down_line(self):
+        from sampan.ui.codex_others import DAEMON_DOWN, SECTION_TITLE
+        self.pick(["q"], latest=None)
+        self.assertIn(DAEMON_DOWN, "\n".join(self.scr.screens[0]))
+        self.assertNotIn(SECTION_TITLE, "\n".join(self.scr.screens[0]))
+        no_codex = make_env(Path(tempfile.mkdtemp()), TOML_NO_CODEX)
+        self.pick(["q"], latest=None, cfg=no_codex)
+        self.assertNotIn(DAEMON_DOWN, "\n".join(self.scr.screens[0]))
+
+    def test_block_fits_any_width(self):
+        self.snap = daemon_snap([desk_thread("d1", "很長的對話名稱" * 6, "active", ["waitingOnApproval"])])
+        for w in (120, 100, 80, 40, 20, 8):
+            self.pick(["KEY_DOWN", "KEY_DOWN", "q"], w=w)
+            for line in self.scr.screens[-1]:
+                self.assertLessEqual(text_width(line), w, (w, line))
+
+    def test_nothing_before_the_first_read(self):
+        from sampan.ui.codex_others import DAEMON_DOWN
+        self.scr = FakeScr(["q"])
+        w = FakeWatcher(None)
+        w.polled = False
+        CursesScreen(self.scr, self.cfg, FakeRunner(), now_fn=lambda: NOW, watcher=w).pick([row("a")], None)
+        self.assertNotIn(DAEMON_DOWN, "\n".join(self.scr.screens[0]))
+
+    def test_nothing_matching_hides_the_block(self):
+        from sampan.ui.codex_others import DAEMON_DOWN, SECTION_TITLE
+        self.snap = daemon_snap([desk_thread("old", "desk-old", hours=30)])
+        self.pick(["q"])
+        shown = "\n".join(self.scr.screens[0])
+        self.assertNotIn(SECTION_TITLE, shown)
+        self.assertNotIn(DAEMON_DOWN, shown)
+
+    def test_overflow_line(self):
+        self.snap = daemon_snap([desk_thread(f"d{i}", f"desk-{i:02}", hours=i / 10) for i in range(13)])
+        self.pick(["q"])
+        self.assertIn("還有 3 段", "\n".join(self.scr.screens[0]))
 
 
 if __name__ == "__main__":

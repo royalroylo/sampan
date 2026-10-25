@@ -2,6 +2,7 @@
 from .. import update as update_mod
 from ..prompts import prompt_choices, prompt_lines
 from .cards import Keys, StateLine, Wrap, agent_style, message_style, state_style
+from .codex_others import ListNote, OwnCols
 from .dirpick import tilde
 from .state import list_state
 from .text import _wrap, pad, text_width
@@ -61,11 +62,16 @@ def _list_rows(left, cursor, cols, width, height, empty, name_w=None):
     top = max(0, min(cursor - height // 2, len(left) - height))
     # with other columns present, the name column extends only NAME_GAP cells past the longest name and the other columns follow right after it (not pushed to the far right)
     # name_w (the widest name cell of the whole list) keeps the columns still while the list is filtered
-    widest = name_w if name_w is not None else max(text_width(_cell(c[0])[0]) for c in left)
+    plain = [c for c in left if not isinstance(c, (ListNote, OwnCols))]
+    widest = name_w if name_w is not None else max((text_width(_cell(c[0])[0]) for c in plain), default=0)
     cap = widest + NAME_GAP if cols and left else None
     rows = []
     for i, cells in enumerate(left[top:top + height]):
-        segs = _cells(cells, cols, width, cap)
+        if isinstance(cells, ListNote):  # display only: a section title or a note, never highlighted
+            rows.append(_fit([(" " + cells, cells.style)], width))
+            continue
+        segs = (_cells(cells, cells.cols, width, min(cells.cap, max(4, width // 2))) if isinstance(cells, OwnCols)
+                else _cells(cells, cols, width, cap))
         if top + i == cursor:
             segs = [(t, f"sel+{s}" if s else "sel") for t, s in segs]
         rows.append(segs)

@@ -1,5 +1,6 @@
 """curses adapter layer: CursesScreen provides pick / checklist / choose_dir / ask / out to cmd_ui, and handles keys, redrawing and preview capture."""
 import os
+import tempfile
 import time
 from datetime import datetime, timezone
 
@@ -12,6 +13,7 @@ from ..status import status_rows
 from ..tmux import TMUX
 from .actions import cmd_ui, dir_context
 from .cards import Wrap, _quote_of, adopt_card, card_lines, gather_cards, preview_header, restore_card
+from .codex_others import GO_DESKTOP, OTHER_KEY, ListNote, OwnCols, block_left, other_card, other_cells, other_rows
 from .daemon_watch import apply_codex_status
 from .dirpick import DirPicker
 from .plugin_actions import (
@@ -74,6 +76,14 @@ def _now():
     return datetime.now(timezone.utc)
 
 
+def tmp_roots():
+    """System temp directories whose Codex threads the「Codex 其他對話」block leaves out (by path component)."""
+    roots = ["/tmp", "/private/tmp", os.path.realpath(tempfile.gettempdir())]
+    if os.environ.get("TMPDIR"):
+        roots.append(os.path.realpath(os.environ["TMPDIR"]))
+    return tuple(dict.fromkeys(roots))
+
+
 class CursesScreen:
     """One curses screen: pick / restore_checklist / adopt_checklist swap the left-hand content, ask asks in the message area, out redraws immediately.
     scr only uses getmaxyx, erase, addstr, refresh, get_wch (tests use a fake object)."""
@@ -83,6 +93,7 @@ class CursesScreen:
         self.scr, self.cfg, self.run, self.now_fn = scr, cfg, run, now_fn
         # watcher: daemon_watch.DaemonWatcher (curses_ui starts / stops it); its latest snapshot colours the Codex rows
         self.watcher, self._snap = watcher, None
+        self._tmp_roots = tmp_roots()
         # usage_fn(cfg, profile) -> Usage | None for the account lines and profile cards (default: the files on disk);
         # interactive(args, env) runs a login with the terminal (curses steps out); None = say what to run instead
         self.usage_fn, self.interactive, self.sampan_path = usage_fn, interactive, sampan_path
@@ -271,6 +282,31 @@ class CursesScreen:
         self._usage = None
         return True
 
+    def _others(self, rows, now):
+        """(OtherRows, how many more, daemon down) for the「Codex 其他對話」block. Nothing without a watcher or an
+        enabled Codex profile, or before the watcher's first read; down when its latest read failed."""
+        w = self.watcher
+        if w is None or self.cfg is None or not self.cfg.codex_profiles or not getattr(w, "polled", True):
+            return [], 0, False
+        if w.latest is None:
+            return [], 0, True
+        found, extra = other_rows(w.latest, rows, now, tmp_roots=self._tmp_roots)
+        return found, extra, False
+
+    def _left(self, picker, rows, current, now, extra, down):
+        """The list lines (tmux rows, then the block) and the cursor's index among them. Row numbers and the name
+        column width follow the unfiltered tmux list; block lines are never numbered or landed on."""
+        cells = {r.name: _list_cells(r, picker.marked, current, i, len(rows)) for i, r in enumerate(rows, 1)}
+        left = [cells[r.name] for r in picker.visible[:picker.n_rows]]
+        name_w = max((text_width(c[0]) for c in cells.values()), default=None)
+        lead = " " * (len(str(len(rows))) + 3 if rows else 2)  # under the number and the mark of a tmux row
+        block = block_left([OwnCols(other_cells(o, now, lead)) for o in picker.visible[picker.n_rows:]], extra,
+                           down=down)
+        if block and not left:
+            left = [ListNote(list_empty(rows, picker.query), "")]
+        cursor = len(left) - picker.n_rows + picker.cursor + (1 if picker.on_other() else 0)
+        return left + block, cursor, name_w
+
     def _account_lines(self, rows):
         """The account lines under the list. Usage (a Codex rollout scan, Claude record files) is cached for USAGE_S
         seconds; the running counts follow rows on every draw."""
@@ -289,22 +325,31 @@ class CursesScreen:
             return (gather_cards(self.cfg, self.run, rows) if self.cfg is not None else {}), self.now_fn(), {}
         cards, now, built = load()
         self.warning = getattr(rows, "warning", None)
-        names = [r.name for r in rows]
-        picker = Picker(rows, self.last_name if self.last_name in names else current, clock=self.clock)
-        shot, tick, refreshed = (None, None), False, self.clock()
         self._usage = None  # back on the list (after an action): read the 額度 again
         self._apply_snap(rows)
+        others, extra, down = self._others(rows, now)
+        names = [r.name for r in rows] + [o.name for o in others]
+        picker = Picker(rows, self.last_name if self.last_name in names else current, clock=self.clock,
+                        others=others)
+        shot, tick, refreshed = (None, None), False, self.clock()
         self._timeout(TICK_MS)
         try:
             while True:
                 if self._apply_snap(rows):
-                    built = {}  # the info cards show agent_status
+                    built = {}  # the info cards show agent_status (and the block's cards its state)
+                others, extra, down = self._others(rows, now)
+                if others != picker.others:
+                    picker.reload(rows, others)
                 card, preview = [], None
                 if picker.visible:
                     r = picker.visible[picker.cursor]
                     name = self.last_name = r.name
                     info = cards.get(name)
-                    if (info or {}).get("panes", 0) > 0 and self.run is not None:
+                    if picker.on_other():  # read only: its card (and rollout context) is built only when selected
+                        if name not in built:
+                            built[name] = other_card(r, now, home=self.cfg.home if self.cfg is not None else None)
+                        card = built[name]
+                    elif (info or {}).get("panes", 0) > 0 and self.run is not None:
                         if tick or shot[0] != name:
                             shot = (name, self.capture(r, current))
                         preview = shot[1]
@@ -313,11 +358,8 @@ class CursesScreen:
                         if name not in built:
                             built[name] = card_lines(self.cfg, r, info, now)
                         card = built[name]
-                # row numbers and the name column width follow the unfiltered list
-                cells = {r.name: _list_cells(r, picker.marked, current, i, len(rows)) for i, r in enumerate(rows, 1)}
-                left = [cells[r.name] for r in picker.visible]
-                name_w = max((text_width(c[0]) for c in cells.values()), default=None)
-                self.view = dict(title=self.title, left=left, cursor=picker.cursor, card=card, preview=preview,
+                left, cursor, name_w = self._left(picker, rows, current, now, extra, down)
+                self.view = dict(title=self.title, left=left, cursor=cursor, card=card, preview=preview,
                                  help=KEYS_HELP, cols=list_cols(rows), empty=list_empty(rows, picker.query),
                                  name_w=name_w, accounts=self._account_lines(rows),
                                  notice=self.warning or (self.updater.hint() if self.updater is not None else None))
@@ -334,6 +376,10 @@ class CursesScreen:
                             cards, now, built = load()
                     continue
                 action = picker.key(k)
+                if action is not None and (action[0] == "desktop"
+                                           or any(str(n).startswith(OTHER_KEY) for n in action[1])):
+                    self.messages = [GO_DESKTOP]  # a「Codex 其他對話」row never becomes an action
+                    continue
                 if action is not None:
                     if action[0] != "quit":
                         self.messages = []  # a new action: the message area holds only this action's result

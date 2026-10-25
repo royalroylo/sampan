@@ -64,19 +64,21 @@ class DaemonWatcher:
         self.cfg, self.run, self.snapshot_fn, self.now_fn = cfg, run, snapshot_fn, now_fn
         self.clock, self.interval = clock, interval
         self.latest = None
+        self.polled = False  # a first read has finished (before it, latest None means "not known yet", not "down")
         self._stop = threading.Event()
         self._thread = None
 
     def poll_once(self):
         cfg = self.cfg
         if not cfg.codex.enabled:  # the re-read config.toml has no enabled Codex profile any more
-            self.latest = None
+            self.latest, self.polled = None, True
             return None
         try:
             snap = self.snapshot_fn(cfg.codex.home, self.run, now=self.now_fn())
         except Exception:  # noqa: BLE001  a broken daemon / client bug only means "no reading"
             snap = None
         self.latest = snap
+        self.polled = True
         if snap is not None and snap.usage is not None:
             home = _real(snap.home)
             for p in cfg.codex_profiles.values():
