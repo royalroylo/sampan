@@ -67,4 +67,4 @@ def local_tz(name):
 def status_row(name, state=State.RUNNING, *, agent="claude", profile="alice", agent_status="idle", tokens=None,
                sid="x", last=None, detail="", pane=None):
     """A StatusRow for the ui tests; the one place that knows the row's field order."""
-    return StatusRow(name, agent, profile, sid, state, detail, agent_status, last, tokens, pane)
+    return StatusRow(name, agent, profile, sid, state, detail, agent_status, last, tokens, pane=pane)

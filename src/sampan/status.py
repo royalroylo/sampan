@@ -4,7 +4,7 @@ from enum import StrEnum
 
 from .claude_state import find_transcript, transcript_stats
 from .clock import fmt_local
-from .codex_state import find_rollout, rollout_last_time
+from .codex_state import find_rollout, rollout_context, rollout_last_time
 from .observe import live_by_pane, multi_agent_sessions
 from .procs import list_procs
 from .registry import RegistryError, load_rows
@@ -12,6 +12,7 @@ from .screens import at_trust_prompt
 from .tmux import Tmux, unreadable_message
 
 CONTEXT_LIMIT = 250_000
+CONTEXT_RATIO = 0.8  # Codex: ⚠ at this share of the model's own context window
 
 
 class State(StrEnum):
@@ -54,6 +55,7 @@ class StatusRow:
     agent_status: str = "-"  # what the agent itself reports: idle / busy / working / waiting / "-"
     last: datetime | None = None
     tokens: int | None = None
+    context_window: int | None = None  # Codex only: the model's window (Claude: None → CONTEXT_LIMIT)
     pane: str | None = None
 
     @property
@@ -109,9 +111,9 @@ def status_rows(cfg, run):
         # before Codex has its first prompt, lc has no thread id: keep the registry row's
         sid = (lc.session_id if lc is not None else None) or (row.session_id if row is not None else "")
         agent = src.agent if src is not None else "-"
-        last, tokens = _activity(cfg, agent, src.profile if src is not None else None, sid)
+        last, tokens, window = _activity(cfg, agent, src.profile if src is not None else None, sid)
         result.append(StatusRow(name, agent, (src.profile or "-") if src else "-", sid, state, detail,
-                                lc.status if lc else "-", last, tokens, lc.pane_id if lc else None))
+                                lc.status if lc else "-", last, tokens, window, lc.pane_id if lc else None))
     return result
 
 
@@ -121,9 +123,9 @@ def _unreadable_rows(cfg, rows, warning):
     result.warning = warning
     for name in sorted(rows):
         row = rows[name]
-        last, tokens = _activity(cfg, row.agent, row.profile, row.session_id)
+        last, tokens, window = _activity(cfg, row.agent, row.profile, row.session_id)
         result.append(StatusRow(name, row.agent, row.profile or "-", row.session_id,
-                                State.RETIRED if row.state == "retired" else State.UNKNOWN, "", "-", last, tokens, None))
+                                State.RETIRED if row.state == "retired" else State.UNKNOWN, "", "-", last, tokens, window, None))
     return result
 
 
@@ -138,27 +140,30 @@ def _parse_ts(ts):
 
 
 def _activity(cfg, agent, profile, sid):
-    """(last activity datetime | None, context tokens | None) of a conversation."""
+    """(last activity datetime | None, context tokens | None, context window | None) of a conversation; the window is Codex only."""
     if not sid:
-        return None, None
+        return None, None, None
     if agent == "codex":
         path = find_rollout(cfg.codex.home, sid)
-        return (rollout_last_time(path) if path is not None else None), None
+        if path is None:
+            return None, None, None
+        return (rollout_last_time(path), *rollout_context(path))
     t = find_transcript(cfg.profiles.values(), sid, prefer=profile)
     if t is None:
-        return None, None
+        return None, None, None
     last, tokens = transcript_stats(t)
-    return _parse_ts(last), tokens
+    return _parse_ts(last), tokens, None
 
 
 def _fmt_time(dt):
     return fmt_local(dt)
 
 
-def _fmt_tokens(n):
+def _fmt_tokens(n, window=None):
     if n is None:
         return "-"
-    return f"{round(n / 1000)}k" + (" ⚠" if n >= CONTEXT_LIMIT else "")
+    limit = CONTEXT_RATIO * window if window else CONTEXT_LIMIT
+    return f"{round(n / 1000)}k" + (" ⚠" if n >= limit else "")
 
 
 def cmd_status(cfg, run, out):
@@ -173,5 +178,5 @@ def cmd_status(cfg, run, out):
     out(f"{'名稱':<38} {'agent':<6} {'profile':<12} {'id':<8} {'狀態':<16} {'活動':<7} {'最後活動':<11} context")
     for r in rows:
         out(f"{r.name:<38} {r.agent:<6} {r.profile:<12} {r.sid[:8]:<8} {r.display:<16} {r.agent_status:<7} "
-            f"{_fmt_time(r.last):<11} {_fmt_tokens(r.tokens)}")
+            f"{_fmt_time(r.last):<11} {_fmt_tokens(r.tokens, r.context_window)}")
     return 1 if warning else 0

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from sampan.registry import Row, write_rows
-from sampan.status import State, cmd_status, status_rows
+from sampan.status import State, _fmt_tokens, cmd_status, status_rows
 from tests.fakes import FakeRunner, cp, pane_line, ps_line
 from tests.helpers import local_tz, make_env
 from tests.test_claude_state import write_session
@@ -92,6 +92,13 @@ TID = "01a1568b-81c2-71f1-99f7-b7a590f4ed96"
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
+class FmtTokensTest(unittest.TestCase):
+    def test_fmt_tokens_codex_threshold(self):
+        self.assertEqual(_fmt_tokens(206720, 258400), "207k ⚠")  # 80% of the model window
+        self.assertEqual(_fmt_tokens(200000, 258400), "200k")
+        self.assertEqual(_fmt_tokens(260000), "260k ⚠")  # no window: the fixed Claude limit
+
+
 class AgentStatusTest(unittest.TestCase):
     def test_rows_have_agent_and_last_activity(self):
         cfg = make_env(Path(tempfile.mkdtemp()))
@@ -107,7 +114,10 @@ class AgentStatusTest(unittest.TestCase):
         rollout = cfg.codex.home / "sessions/2026/10/20" / f"rollout-2026-10-20T07-42-25-{TID}.jsonl"
         rollout.parent.mkdir(parents=True)
         rollout.write_text(json.dumps({"timestamp": "2026-10-20T01:00:00.000Z", "type": "session_meta"}) + "\n"
-                           + json.dumps({"timestamp": "2026-10-20T02:30:00.000Z", "type": "event_msg"}) + "\n")
+                           + json.dumps({"timestamp": "2026-10-20T02:30:00.000Z", "type": "event_msg"}) + "\n"
+                           + json.dumps({"timestamp": "2026-10-20T02:30:00.000Z", "type": "event_msg", "payload": {
+                               "type": "token_count", "info": {"last_token_usage": {"input_tokens": 49227},
+                                                               "model_context_window": 258400}}}) + "\n")
         panes = [pane_line("cl", "%1", 100, "claude", "/c"), pane_line("cx", "%2", 101, "codex", "/c"),
                  pane_line("extra", "%3", 102, "claude", "/c")]
         procs = [ps_line(100 + i, 1, "-zsh", "-zsh") for i in range(3)] + [
@@ -123,6 +133,8 @@ class AgentStatusTest(unittest.TestCase):
         self.assertEqual(rows["cl"].last, datetime(2026, 10, 17, 3, 0, tzinfo=timezone.utc))
         self.assertEqual((rows["cx"].agent, rows["cx"].state, rows["cx"].agent_status), ("codex", State.RUNNING, "working"))
         self.assertEqual(rows["cx"].last, datetime(2026, 10, 20, 2, 30, tzinfo=timezone.utc))
+        self.assertEqual((rows["cx"].tokens, rows["cx"].context_window), (49227, 258400))
+        self.assertIsNone(rows["cl"].context_window)
         # old "" registry row + live codex: the profile reads as the Codex profile name, so no mismatch is flagged
         self.assertEqual(rows["cx"].profile, cfg.codex.profile)
         self.assertNotEqual(cfg.codex.profile, "")

@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 import tempfile
@@ -12,6 +13,7 @@ from sampan.codex_state import (
     codex_pid_in_pane,
     find_rollout,
     live_codex,
+    rollout_context,
     rollout_from_lsof,
     threads_fallback,
 )
@@ -140,6 +142,30 @@ class RolloutTest(unittest.TestCase):
             self.assertIsNone(find_rollout(home / "missing", TID))
             for bad in ("*", "", None):  # an unvalidated id must not be globbed
                 self.assertIsNone(find_rollout(home, bad))
+
+
+def token_count(used, window, ts="2026-10-20T02:00:00.000Z"):
+    info = None if used is None else {"last_token_usage": {"input_tokens": used}, "model_context_window": window}
+    return json.dumps({"timestamp": ts, "type": "event_msg", "payload": {"type": "token_count", "info": info}}) + "\n"
+
+
+class RolloutContextTest(unittest.TestCase):
+    def rollout(self, *lines):
+        path = Path(tempfile.mkdtemp()) / "r.jsonl"
+        path.write_text("".join(lines))
+        return path
+
+    def test_rollout_context_reads_last_token_count(self):
+        path = self.rollout(token_count(1000, 258400), token_count(49227, 258400), token_count(None, None))
+        self.assertEqual(rollout_context(path), (49227, 258400))  # the info: null record is skipped
+
+    def test_rollout_context_none_without_token_count(self):
+        path = self.rollout(json.dumps({"type": "session_meta"}) + "\n")
+        self.assertEqual(rollout_context(path), (None, None))
+        self.assertEqual(rollout_context(path.parent / "missing.jsonl"), (None, None))
+
+    def test_rollout_context_rejects_non_int(self):
+        self.assertEqual(rollout_context(self.rollout(token_count(True, "x"))), (None, None))
 
 
 class FallbackTest(unittest.TestCase):

@@ -128,7 +128,7 @@ def card_lines(cfg, row, info, now):
     if row.last:
         lines.append(_activity_line(row.last, now))
     if row.tokens is not None:
-        lines.append(_label("context", _fmt_tokens(row.tokens)))
+        lines.append(_label("context", _fmt_tokens(row.tokens, row.context_window)))
     if info.get("panes"):
         lines.append(_label("tmux", f"{info.get('windows') or 1} 個視窗、{info['panes']} 個 pane"))
     if info.get("quote"):
@@ -183,7 +183,7 @@ def preview_header(cfg, row, info):
         if row.agent != "codex" and row.profile not in ("-", "", None):
             parts.append(row.profile)
     if row.tokens is not None:
-        parts.append(f"context {_fmt_tokens(row.tokens)}")
+        parts.append(f"context {_fmt_tokens(row.tokens, row.context_window)}")
     rest = "・".join(parts[1:])
     lines = [f"{row.name}（預覽）", "─" * 200,
              ((parts[0], state_style(row.state)), ("・" + rest if rest else "", ""))]

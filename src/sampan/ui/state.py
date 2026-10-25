@@ -20,7 +20,7 @@ def list_state(row):
 def row_text(r):
     profile = "-" if r.agent == "codex" else (r.profile or "-")
     return (f"{pad(r.name, 38)} {pad(r.agent, 6)} {pad(profile, 12)} {pad(show_state(r), 22)} "
-            f"{pad(r.agent_status, 7)} {_fmt_tokens(r.tokens)}")
+            f"{pad(r.agent_status, 7)} {_fmt_tokens(r.tokens, r.context_window)}")
 
 
 JUMP_S = 1.0  # digit jump: a digit typed more than this many seconds after the previous one starts a new number

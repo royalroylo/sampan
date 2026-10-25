@@ -206,6 +206,33 @@ def rollout_last_time(path, tail_bytes=65536):
     return datetime.fromtimestamp(mtime, timezone.utc)
 
 
+def _int(v):
+    return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+
+def rollout_context(path, tail_bytes=262144):
+    """(input tokens of the last turn, model context window) from the rollout's newest token_count; (None, None) when unreadable.
+
+    last_token_usage.input_tokens already includes the cached input. A token_count whose info is null is skipped."""
+    try:
+        with open(path, "rb") as fh:
+            size = fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, size - tail_bytes))
+            lines = fh.read().decode(errors="replace").splitlines()
+    except OSError:
+        return None, None
+    for line in reversed(lines):
+        try:
+            payload = json.loads(line).get("payload")
+            if payload.get("type") != "token_count" or not isinstance(payload.get("info"), dict):
+                continue
+            info = payload["info"]
+            return _int(info["last_token_usage"]["input_tokens"]), _int(info.get("model_context_window"))
+        except (ValueError, AttributeError, TypeError, KeyError):
+            continue
+    return None, None
+
+
 def last_user_text(path):
     """The last message the user sent in a rollout (event_msg user_message); "" when none can be read."""
     try:

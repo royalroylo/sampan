@@ -109,7 +109,7 @@ def candidates(cfg, run, rows, now, *, alive=os.kill):
         if row.state != "active" or row.tmux in live.running:
             continue
         skip = _blocker(cfg, row, live, alive)
-        last, tokens = _activity(cfg, row.agent, row.profile, row.session_id)
+        last, tokens, _window = _activity(cfg, row.agent, row.profile, row.session_id)
         selected = skip is None and last is not None and now - last <= recent
         result.append(Candidate(row, last, tokens, selected, skip))
     return result
