@@ -9,6 +9,7 @@ import json
 import os
 import socket
 import struct
+import subprocess
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -20,6 +21,8 @@ from .usage import CODEX_WINDOWS, Usage, _window
 SOCKET_REL = Path("app-server-control/app-server-control.sock")
 ALLOWED = frozenset({"initialize", "initialized", "thread/list", "thread/loaded/list", "account/rateLimits/read"})
 _GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"  # RFC 6455 handshake constant
+START_TIMEOUT_S = 15  # `codex remote-control start` gets this long
+_REASON_MAX = 80
 _MAX_FRAME = 8 * 1024 * 1024  # a reply larger than this is not from a sane daemon
 
 
@@ -133,6 +136,34 @@ def socket_path(codex_home, run, timeout=2.0):
     except (OSError, ValueError, AttributeError):
         return None
     return Path(path) if isinstance(path, str) and path and Path(path).exists() else None
+
+
+def _first_line(text):
+    return next((ln.strip() for ln in (text or "").splitlines() if ln.strip()), "")
+
+
+def start_daemon(codex_home, run, *, timeout=START_TIMEOUT_S):
+    """Run `codex remote-control start` for codex_home. None on success (rc 0), else a one-line reason (≤80 chars):
+    stderr's first non-empty line, else stdout's, else the exit code. runner.run turns a missing binary / a timeout into
+    rc 127 / 124 instead of raising; a raising `run` is handled the same way."""
+    try:
+        r = run(["codex", "remote-control", "start"], env={**os.environ, "CODEX_HOME": str(codex_home)},
+                timeout=timeout)
+    except FileNotFoundError:
+        return "找不到 codex 指令"
+    except subprocess.TimeoutExpired:
+        return f"逾時 {timeout} 秒"
+    except OSError as e:
+        reason = str(e)
+    else:
+        if r.returncode == 0:
+            return None
+        if r.returncode == 127:
+            return "找不到 codex 指令"
+        if r.returncode == 124:
+            return f"逾時 {timeout} 秒"
+        reason = _first_line(r.stderr) or _first_line(r.stdout) or f"結束碼 {r.returncode}"
+    return reason if len(reason) <= _REASON_MAX else reason[:_REASON_MAX] + "…"
 
 
 # ---------- minimal WebSocket client ----------

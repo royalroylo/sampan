@@ -4,6 +4,7 @@ import json
 import shutil
 import socket
 import struct
+import subprocess
 import tempfile
 import threading
 import time
@@ -341,6 +342,51 @@ class SocketPathTests(unittest.TestCase):
         self.assertIsNone(cd.socket_path(self.home, FakeRunner(strict=True).on(base, cp(out="not json"))))
         gone = json.dumps({"socketPath": str(self.home / "gone.sock")})
         self.assertIsNone(cd.socket_path(self.home, FakeRunner(strict=True).on(base, cp(out=gone))))
+
+
+class StartDaemonTests(unittest.TestCase):
+    home = Path("/h/.codex")
+
+    def start(self, result=None, exc=None, **kw):
+        seen = {}
+
+        def run(args, *, env=None, cwd=None, timeout=None):
+            seen.update(argv=list(args), env=env, timeout=timeout)
+            if exc is not None:
+                raise exc
+            return result
+        return cd.start_daemon(self.home, run, **kw), seen
+
+    def test_start_daemon_ok(self):
+        reason, seen = self.start(cp())
+        self.assertIsNone(reason)
+        self.assertEqual(seen["argv"], ["codex", "remote-control", "start"])
+        self.assertEqual(seen["env"]["CODEX_HOME"], str(self.home))
+        self.assertEqual(seen["timeout"], 15)
+        self.assertEqual(cd.START_TIMEOUT_S, 15)
+
+    def test_start_daemon_reason_from_stderr(self):
+        reason, _ = self.start(cp(2, "out", "\nerror: unrecognized subcommand 'remote-control'\n"))
+        self.assertEqual(reason, "error: unrecognized subcommand 'remote-control'")
+
+    def test_start_daemon_reason_fallbacks(self):
+        self.assertEqual(self.start(cp(1, "x\n", ""))[0], "x")
+        self.assertEqual(self.start(cp(3))[0], "結束碼 3")
+
+    def test_start_daemon_missing_codex(self):
+        self.assertEqual(self.start(exc=FileNotFoundError("codex"))[0], "找不到 codex 指令")
+        self.assertEqual(self.start(exc=PermissionError("denied"))[0], "denied")
+        # runner.run turns a missing binary / a timeout into rc 127 / 124 instead of raising
+        self.assertEqual(self.start(cp(127, "", "No such file"))[0], "找不到 codex 指令")
+
+    def test_start_daemon_timeout(self):
+        self.assertEqual(self.start(exc=subprocess.TimeoutExpired(["codex"], 15))[0], "逾時 15 秒")
+        self.assertEqual(self.start(cp(124, "", "timeout"))[0], "逾時 15 秒")
+
+    def test_start_daemon_truncates_reason(self):
+        reason, _ = self.start(cp(1, "", "a" * 200))
+        self.assertEqual(len(reason), 81)
+        self.assertTrue(reason.endswith("…"))
 
 
 if __name__ == "__main__":

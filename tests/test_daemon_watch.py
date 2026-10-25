@@ -1,6 +1,8 @@
 import tempfile
+import threading
 import time
 import unittest
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -65,7 +67,8 @@ class WatcherTest(unittest.TestCase):
             if isinstance(result, BaseException):
                 raise result
             return result
-        return DaemonWatcher(self.cfg, FakeRunner(strict=True), snapshot_fn=fn, now_fn=lambda: NOW)
+        return DaemonWatcher(self.cfg, FakeRunner(strict=True), snapshot_fn=fn, now_fn=lambda: NOW,
+                             start_fn=lambda home, run: "測試不啟動")
 
     def test_constants(self):
         self.assertEqual(DAEMON_S, 30)
@@ -188,9 +191,6 @@ class ApplyStatusTest(unittest.TestCase):
         self.assertEqual(rows[0].agent_status, "idle")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class PublishAfterSaveTest(WatcherTest):
     def test_latest_is_published_only_after_the_usage_is_saved(self):
@@ -210,3 +210,100 @@ class PublishAfterSaveTest(WatcherTest):
             dw.record_codex = real
         self.assertEqual(seen, [None])
         self.assertIsNotNone(w.latest)
+
+
+class AutoStartTest(unittest.TestCase):
+    def setUp(self):
+        self.cfg = make_env(Path(tempfile.mkdtemp()), TWO_CODEX)
+        self.starts, self.reads = [], 0
+
+    def make(self, snaps, start_result=None, start_fn=None, cfg=None):
+        seq = list(snaps)
+
+        def snapshot_fn(home, run, *, now, **_kw):
+            self.reads += 1
+            return seq.pop(0) if len(seq) > 1 else seq[0]
+
+        def fake_start(home, run):
+            self.starts.append((home, run))
+            if isinstance(start_result, BaseException):
+                raise start_result
+            return start_result
+        self.run = FakeRunner(strict=True)
+        return DaemonWatcher(cfg or self.cfg, self.run, snapshot_fn=snapshot_fn, now_fn=lambda: NOW,
+                             start_fn=start_fn or fake_start)
+
+    def test_first_read_starts_once_when_down_then_rereads(self):
+        s = snap(self.cfg.codex.home)
+        w = self.make([None, s])
+        w.first_read()
+        self.assertEqual(self.starts, [(self.cfg.codex.home, self.run)])
+        self.assertIs(w.latest, s)
+        self.assertIsNone(w.start_state)
+        self.assertEqual(self.reads, 2)
+
+    def test_first_read_failed_start_keeps_reason(self):
+        w = self.make([None], "找不到 codex 指令")
+        w.first_read()
+        self.assertEqual((w.start_state, w.start_error), ("failed", "找不到 codex 指令"))
+        self.assertIsNone(w.latest)
+
+    def test_first_read_start_ok_but_still_down_does_not_retry(self):
+        w = self.make([None])
+        w.first_read()
+        self.assertEqual(len(self.starts), 1)
+        self.assertIsNone(w.start_state)
+        w.first_read()
+        w.poll_once()
+        self.assertEqual(len(self.starts), 1)
+
+    def test_first_read_no_start_when_up(self):
+        self.make([snap(self.cfg.codex.home)]).first_read()
+        self.assertEqual(self.starts, [])
+
+    def test_first_read_no_start_when_auto_start_off(self):
+        cfg = replace(self.cfg, codex_auto_start=False)
+        w = self.make([None], cfg=cfg)
+        w.first_read()
+        self.assertEqual(self.starts, [])
+        self.assertIsNone(w.start_state)
+
+    def test_first_read_no_start_when_codex_disabled(self):
+        w = self.make([None])
+        w.cfg = make_env(Path(tempfile.mkdtemp()), TWO_CODEX.replace('agent = "codex"', 'agent = "codex"\ndisabled = true'))
+        self.assertFalse(w.cfg.codex.enabled)
+        w.first_read()
+        self.assertEqual(self.starts, [])
+
+    def test_start_state_starting_while_start_runs(self):
+        seen = []
+
+        def start_fn(home, run):
+            seen.append(w.start_state)
+        w = self.make([None], start_fn=start_fn)
+        w.first_read()
+        self.assertEqual(seen, ["starting"])
+
+    def test_stop_returns_fast_while_start_blocks(self):
+        gate = threading.Event()
+        entered = threading.Event()
+
+        def start_fn(home, run):
+            entered.set()
+            gate.wait(10)
+        w = self.make([None], start_fn=start_fn)
+        w.start()
+        self.assertTrue(entered.wait(2))
+        t0 = time.monotonic()
+        w.stop()
+        self.assertLess(time.monotonic() - t0, 1.0)
+        gate.set()
+
+    def test_first_read_swallows_start_exception(self):
+        w = self.make([None], RuntimeError("boom"))
+        w.first_read()
+        self.assertEqual((w.start_state, w.start_error), ("failed", "boom"))
+
+
+if __name__ == "__main__":
+    unittest.main()

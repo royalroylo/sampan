@@ -60,9 +60,12 @@ class DaemonWatcher:
     `cfg` may be replaced while running (the ui re-reads config.toml); each poll uses the current one."""
 
     def __init__(self, cfg, run, *, snapshot_fn=codex_daemon.snapshot, now_fn=_now, clock=time.monotonic,
-                 interval=DAEMON_S):
+                 interval=DAEMON_S, start_fn=codex_daemon.start_daemon):
         self.cfg, self.run, self.snapshot_fn, self.now_fn = cfg, run, snapshot_fn, now_fn
-        self.clock, self.interval = clock, interval
+        self.clock, self.interval, self.start_fn = clock, interval, start_fn
+        self.start_state = None  # None (not tried / succeeded / over) | "starting" | "failed"
+        self.start_error = None  # one-line reason while start_state == "failed"
+        self._tried = False  # at most one start per watcher (= per opening of the ui)
         self.latest = None
         self.polled = False  # a first read has finished (before it, latest None means "not known yet", not "down")
         self._stop = threading.Event()
@@ -89,12 +92,33 @@ class DaemonWatcher:
         self.polled = True
         return snap
 
+    def first_read(self):
+        """The first read; when the daemon is down, Codex is enabled and auto-start is on, start it once (this blocks
+        up to START_TIMEOUT_S, so only the background thread calls it) and read again."""
+        snap = self.poll_once()
+        cfg = self.cfg
+        if snap is not None or self._tried or not cfg.codex.enabled or not cfg.codex_auto_start:
+            return
+        self._tried = True
+        self.start_state = "starting"
+        try:
+            reason = self.start_fn(cfg.codex.home, self.run)
+        except Exception as e:  # noqa: BLE001  a broken start only means "failed", never a traceback
+            reason = str(e) or type(e).__name__
+        if reason is None:
+            self.start_state = None
+            self.poll_once()
+        else:
+            self.start_state, self.start_error = "failed", reason
+
     def _loop(self):
+        step = self.first_read  # the first round may start the daemon; later rounds only read
         while not self._stop.is_set():
             try:
-                self.poll_once()
+                step()
             except Exception:  # noqa: BLE001  never let the thread die with a traceback over the curses screen
                 pass
+            step = self.poll_once
             self._stop.wait(self.interval)
 
     def start(self):
