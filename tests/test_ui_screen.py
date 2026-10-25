@@ -687,11 +687,19 @@ class CodexOthersScreenTest(unittest.TestCase):
 
     def test_daemon_down_line(self):
         from sampan.ui.codex_others import DAEMON_DOWN, SECTION_TITLE
-        self.pick(["q"], latest=None)
-        self.assertIn(DAEMON_DOWN, "\n".join(self.scr.screens[0]))
-        self.assertNotIn(SECTION_TITLE, "\n".join(self.scr.screens[0]))
+        for state in (State.RUNNING, State.STOPPED):  # a Codex row in any state is enough
+            self.scr = FakeScr(["q"])
+            CursesScreen(self.scr, self.cfg, FakeRunner(), now_fn=lambda: NOW, watcher=FakeWatcher(None)).pick(
+                [row("a"), row("cx", state=state, agent="codex")], None)
+            self.assertIn(DAEMON_DOWN, "\n".join(self.scr.screens[0]), state)
+            self.assertNotIn(SECTION_TITLE, "\n".join(self.scr.screens[0]))
         no_codex = make_env(Path(tempfile.mkdtemp()), TOML_NO_CODEX)
         self.pick(["q"], latest=None, cfg=no_codex)
+        self.assertNotIn(DAEMON_DOWN, "\n".join(self.scr.screens[0]))
+
+    def test_daemon_down_is_silent_without_a_codex_row(self):
+        from sampan.ui.codex_others import DAEMON_DOWN
+        self.pick(["q"], latest=None)  # an enabled Codex profile, but only Claude rows in the list
         self.assertNotIn(DAEMON_DOWN, "\n".join(self.scr.screens[0]))
 
     def test_block_fits_any_width(self):

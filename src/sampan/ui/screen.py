@@ -283,12 +283,13 @@ class CursesScreen:
 
     def _others(self, rows, now):
         """(OtherRows, how many more, daemon down) for the「Codex 其他對話」block. Nothing without a watcher or an
-        enabled Codex profile, or before the watcher's first read; down when its latest read failed."""
+        enabled Codex profile, or before the watcher's first read; down when its latest read failed and the list
+        has a Codex row (any state)."""
         w = self.watcher
         if w is None or self.cfg is None or not self.cfg.codex_profiles or not getattr(w, "polled", True):
             return [], 0, False
-        if w.latest is None:
-            return [], 0, True
+        if w.latest is None:  # nagging about the daemon only makes sense when a Codex session is listed
+            return [], 0, any(r.agent == "codex" for r in rows)
         found, extra = other_rows(w.latest, rows, now, tmp_roots=self._tmp_roots)
         return found, extra, False
 
