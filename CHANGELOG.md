@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-25
+
 ### Fixed
 - tmux Codex sessions no longer lose their thread id when the Codex TUI is attached to the shared daemon (Codex 0.164+): the thread is stored as source `vscode` with originator `codex-tui`, and the daemon (not the TUI process) holds the rollout open. The threads table match now accepts `codex-tui` threads (Codex Desktop threads stay excluded), and a pane still unresolved asks the daemon for the single live `codex-tui` thread in its directory (several → the usual 「無法判斷」 warning). This also stops the 「Codex 其他對話」 block from listing a tmux session's own thread again.
 - The 「Codex 常駐服務沒在執行」 note on the main screen now shows only when the list has a Codex session; it no longer appears for Claude-only use.
@@ -303,7 +305,8 @@ First public release. Versions up to 0.5.3 were released privately under the nam
 ### Security
 - Credentials in git URLs are no longer shown in output.
 
-[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/royalroylo/sampan/releases/tag/v0.9.1
 [0.9.0]: https://github.com/royalroylo/sampan/releases/tag/v0.9.0
 [0.8.1]: https://github.com/royalroylo/sampan/releases/tag/v0.8.1
 [0.8.0]: https://github.com/royalroylo/sampan/releases/tag/v0.8.0
