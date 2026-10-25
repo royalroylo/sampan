@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- tmux Codex sessions no longer lose their thread id when the Codex TUI is attached to the shared daemon (Codex 0.164+): the thread is stored as source `vscode` with originator `codex-tui`, and the daemon (not the TUI process) holds the rollout open. The threads table match now accepts `codex-tui` threads (Codex Desktop threads stay excluded), and a pane still unresolved asks the daemon for the single live `codex-tui` thread in its directory (several → the usual 「無法判斷」 warning). This also stops the 「Codex 其他對話」 block from listing a tmux session's own thread again.
+- The 「Codex 常駐服務沒在執行」 note on the main screen now shows only when the list has a Codex session; it no longer appears for Claude-only use.
+- The last-message line (「最後一句話」) skips Claude's compaction summary, and an injected leading self-closing tag such as `<artifact-content-authored-by-others/>` is treated as injected text.
+
 ## [0.9.0] - 2026-10-25
 
 ### Added

@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
+from . import codex_daemon
 from .fsutil import cache_by_stat, reverse_lines
 from .procs import UUID_RE, is_uuid
 
@@ -107,18 +108,26 @@ def _state_db(codex_home):
     return best[1] if best else None
 
 
+# the interactive TUI is source 'cli' when it runs its own app-server; attached to the shared daemon (Codex 0.164+) its
+# threads are source 'vscode' with originator 'codex-tui' (the Desktop app is 'vscode' + 'Codex Desktop': not a match)
+_THREADS_SQL = "select id, created_at from threads where ({match}) and archived = 0 and cwd in ({marks})"
+
+
 def threads_fallback(codex_home, cwd, started_at, exclude):
     """Interactive thread in cwd created closest to started_at (≤ 120 s); None when absent, AMBIGUOUS when two are as close."""
     db = _state_db(codex_home)
     if db is None:
         return None
     cwds = sorted({cwd, os.path.realpath(cwd)})
+    marks = ",".join("?" * len(cwds))
     try:
         con = sqlite3.connect(f"file:{quote(str(db))}?mode=ro", uri=True)
         try:
-            rows = con.execute(
-                f"select id, created_at from threads where source = 'cli' and archived = 0 "
-                f"and cwd in ({','.join('?' * len(cwds))})", cwds).fetchall()
+            try:
+                rows = con.execute(_THREADS_SQL.format(match="source = 'cli' or originator = 'codex-tui'", marks=marks),
+                                   cwds).fetchall()
+            except sqlite3.OperationalError:  # an older state db without the originator column
+                rows = con.execute(_THREADS_SQL.format(match="source = 'cli'", marks=marks), cwds).fetchall()
         finally:
             con.close()
     except sqlite3.Error:
@@ -133,6 +142,16 @@ def threads_fallback(codex_home, cwd, started_at, exclude):
     return diffs[0][1]
 
 
+def daemon_fallback(snap, cwd, exclude):
+    """Live codex-tui threads the daemon reports in cwd that no other pane has: a thread id, AMBIGUOUS when there are
+    several, None when none. For a pane whose process start time says nothing (a `/new` long after launch)."""
+    cwds = {cwd, os.path.realpath(cwd)}
+    ids = sorted({t.id for t in snap.threads
+                  if t.originator == "codex-tui" and t.id not in exclude and (t.id in snap.loaded or t.status in ("active", "idle"))
+                  and (t.cwd in cwds or os.path.realpath(t.cwd) in cwds)})
+    return ids[0] if len(ids) == 1 else AMBIGUOUS if ids else None
+
+
 def _started_at(run, pid, now):
     r = run(["ps", "-o", "etime=", "-p", str(pid)])
     m = ETIME_RE.match(r.stdout.strip()) if r.returncode == 0 else None
@@ -142,8 +161,9 @@ def _started_at(run, pid, now):
     return now - (((days * 24 + hours) * 60 + minutes) * 60 + seconds)
 
 
-def live_codex(cfg, run, panes, procs, now=None):
-    """Map pane id → LiveCodex. Rollout via lsof first, then the threads table; never two panes on one thread."""
+def live_codex(cfg, run, panes, procs, now=None, snapshot_fn=None):
+    """Map pane id → LiveCodex. Rollout via lsof first (a TUI attached to the daemon does not hold it), then the threads
+    table, then the daemon's loaded threads for what is still unknown; never two panes on one thread."""
     if not cfg.codex.enabled:
         return {}, []
     home = cfg.codex.home
@@ -162,6 +182,13 @@ def live_codex(cfg, run, panes, procs, now=None):
     for pane in pending:
         started = _started_at(run, found[pane.pane_id].pid, now)
         guesses[pane.pane_id] = threads_fallback(home, pane.path, started, bound) if started is not None else None
+    unresolved = [p for p in pending if guesses[p.pane_id] is None]
+    if unresolved:  # the only daemon call: nothing is read for a machine with no Codex pane, or when lsof / db found all
+        snap = (snapshot_fn or codex_daemon.snapshot)(home, run, now=datetime.fromtimestamp(now, timezone.utc))
+        if snap is not None:
+            taken = bound | {t for t in guesses.values() if t and t != AMBIGUOUS}
+            for pane in unresolved:
+                guesses[pane.pane_id] = daemon_fallback(snap, pane.path, taken)
     counts = Counter(t for t in guesses.values() if t and t != AMBIGUOUS)
     warnings = []
     for pane in pending:

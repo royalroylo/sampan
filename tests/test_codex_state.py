@@ -29,6 +29,9 @@ TID3 = "01a14b62-c91f-7d42-b701-89404b84ac61"
 NATIVE = "/Users/u/.nvm/versions/node/v24.19.0/lib/node_modules/@openai/codex/vendor/aarch64-apple-darwin/bin/codex"
 
 
+NO_DAEMON = lambda *a, **k: None  # noqa: E731 - tests never reach a real daemon
+
+
 def fixture(name):
     return (FIXTURES / name).read_text()
 
@@ -51,11 +54,17 @@ def lsof_out(*paths):
     return "p201\nfcwd\nn/Users/u/proj\n" + "".join(f"f{i + 10}\nn{p}\n" for i, p in enumerate(paths))
 
 
-def make_db(codex_home, rows, name="state_5.sqlite"):
+def make_db(codex_home, rows, name="state_5.sqlite", originators=None):
+    """rows: (id, cwd, source, archived, created_at). originators: {id: originator} adds that column (older DBs lack it)."""
     codex_home.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(codex_home / name)
-    con.execute("create table threads (id text primary key, cwd text, source text, archived integer, created_at integer)")
-    con.executemany("insert into threads values (?, ?, ?, ?, ?)", rows)
+    con.execute("create table threads (id text primary key, cwd text, source text, archived integer, created_at integer"
+                + (", originator text)" if originators is not None else ")"))
+    for r in rows:
+        if originators is None:
+            con.execute("insert into threads values (?, ?, ?, ?, ?)", r)
+        else:
+            con.execute("insert into threads values (?, ?, ?, ?, ?, ?)", (*r, originators.get(r[0], "")))
     con.commit()
     con.close()
 
@@ -183,6 +192,22 @@ class FallbackTest(unittest.TestCase):
             self.assertIsNone(threads_fallback(home, "/Users/u/proj", 1200.0, {TID}))  # all the rest are over 120 seconds off
             self.assertIsNone(threads_fallback(home, "/Users/u/nowhere", 1010.0, set()))
 
+    def test_fallback_matches_daemon_hosted_tui_thread(self):
+        # Codex 0.164: the TUI attaches to the shared daemon, its thread is source 'vscode' + originator 'codex-tui'
+        with tempfile.TemporaryDirectory() as d:
+            home = Path(d)
+            make_db(home, [(TID, "/Users/u/proj", "vscode", 0, 1002), (TID2, "/Users/u/proj", "vscode", 0, 1001)],
+                    originators={TID: "codex-tui", TID2: "Codex Desktop"})
+            self.assertEqual(threads_fallback(home, "/Users/u/proj", 1000.0, set()), TID)  # Desktop thread is not a match
+            self.assertIsNone(threads_fallback(home, "/Users/u/proj", 1000.0, {TID}))
+            self.assertIsNone(threads_fallback(home, "/Users/u/proj", 1500.0, set()))  # still the 120 s window
+
+    def test_fallback_without_originator_column_keeps_cli_only(self):
+        with tempfile.TemporaryDirectory() as d:
+            home = Path(d)
+            make_db(home, [(TID, "/Users/u/proj", "cli", 0, 1002), (TID2, "/Users/u/proj", "vscode", 0, 1001)])
+            self.assertEqual(threads_fallback(home, "/Users/u/proj", 1000.0, set()), TID)
+
     def test_fallback_picks_newest_state_version(self):
         with tempfile.TemporaryDirectory() as t:
             home = Path(t)
@@ -284,7 +309,7 @@ class LiveCodexTest(unittest.TestCase):
         # A Codex that was just opened and has no thread yet is normal: save --quiet should not make noise about it
         make_db(self.home, [])
         run = self.runner({"201": "00:05", "211": "00:05", "221": "00:05"})
-        found, warnings = live_codex(self.cfg, run, self.panes()[1:2], self.procs(), now=10_000.0)
+        found, warnings = live_codex(self.cfg, run, self.panes()[1:2], self.procs(), now=10_000.0, snapshot_fn=NO_DAEMON)
         self.assertIsNone(found["%2"].thread_id)
         self.assertEqual(warnings, [])
 
@@ -297,6 +322,96 @@ class LiveCodexTest(unittest.TestCase):
         self.assertIsNone(found["%2"].thread_id)
         self.assertEqual(len(warnings), 1)
         self.assertIn("無法判斷", warnings[0])
+
+    # --- daemon-hosted TUI threads (Codex 0.164+) ---
+
+    def daemon_snap(self, threads, loaded=()):
+        from datetime import datetime, timezone
+
+        from sampan.codex_daemon import DaemonSnapshot
+        at = datetime(2026, 10, 25, tzinfo=timezone.utc)
+        return DaemonSnapshot(self.home, None, tuple(threads), frozenset(loaded), at)
+
+    def thread(self, tid, cwd="/Users/u/proj", originator="codex-tui", status="idle"):
+        from datetime import datetime, timezone
+
+        from sampan.codex_daemon import CodexThread
+        return CodexThread(tid, "", cwd, originator, "vscode", None, status, (), datetime(2026, 10, 25, tzinfo=timezone.utc), None)
+
+    def live(self, run, panes, snap_fn, now=10_000.0):
+        return live_codex(self.cfg, run, panes, self.procs(), now=now, snapshot_fn=snap_fn)
+
+    def test_live_codex_finds_vscode_tui_thread_in_db(self):
+        now = 10_000.0
+        make_db(self.home, [(TID2, "/Users/u/proj", "vscode", 0, int(now - 298)),
+                            (TID3, "/Users/u/proj", "vscode", 0, int(now - 299))],
+                originators={TID2: "codex-tui", TID3: "Codex Desktop"})
+        run = self.runner({"211": "05:00"})
+        calls = []
+        found, warnings = self.live(run, self.panes()[1:2], lambda *a, **k: calls.append(a))
+        self.assertEqual(found["%2"].thread_id, TID2)
+        self.assertEqual((warnings, calls), ([], []))  # the db resolved it: no daemon call
+
+    def test_live_codex_daemon_fallback_picks_single_loaded_tui_thread(self):
+        make_db(self.home, [])
+        run = self.runner({"211": "05:00"})
+        snap = self.daemon_snap([self.thread(TID2), self.thread(TID3, originator="Codex Desktop"),
+                                 self.thread(TID, cwd="/Users/u/other"),
+                                 self.thread("01a14b62-0000-7d42-b701-89404b84ac99", status="notLoaded")], loaded=[TID2])
+        found, warnings = self.live(run, self.panes()[1:2], lambda home, run, now: snap)
+        self.assertEqual(found["%2"].thread_id, TID2)
+        self.assertEqual(warnings, [])
+
+    def test_live_codex_daemon_fallback_matches_resolved_cwd(self):
+        root = Path(self.tmp.name)
+        (root / "real").mkdir()
+        (root / "link").symlink_to(root / "real")
+        make_db(self.home, [])
+        run = self.runner({"211": "05:00"})
+        pane = Pane("b", "%2", 110, "codex", str(root / "link"))
+        snap = self.daemon_snap([self.thread(TID2, cwd=str(root / "real"))], loaded=[TID2])
+        found, _ = self.live(run, [pane], lambda home, run, now: snap)
+        self.assertEqual(found["%2"].thread_id, TID2)
+
+    def test_live_codex_daemon_fallback_two_candidates_is_ambiguous(self):
+        make_db(self.home, [])
+        run = self.runner({"211": "05:00"})
+        snap = self.daemon_snap([self.thread(TID2), self.thread(TID3)], loaded=[TID2, TID3])
+        found, warnings = self.live(run, self.panes()[1:2], lambda home, run, now: snap)
+        self.assertIsNone(found["%2"].thread_id)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("無法判斷", warnings[0])
+
+    def test_live_codex_daemon_fallback_skips_threads_bound_elsewhere(self):
+        make_db(self.home, [])
+        run = self.runner({"201": "05:00", "211": "05:00"})  # pane a resolves through lsof (TID)
+        snap = self.daemon_snap([self.thread(TID), self.thread(TID2)], loaded=[TID, TID2])
+        found, warnings = self.live(run, self.panes()[:2], lambda home, run, now: snap)
+        self.assertEqual((found["%1"].thread_id, found["%2"].thread_id, warnings), (TID, TID2, []))
+
+    def test_live_codex_daemon_fallback_one_thread_two_panes_binds_neither(self):
+        make_db(self.home, [])
+        run = self.runner({"211": "05:00", "221": "05:00"})
+        snap = self.daemon_snap([self.thread(TID2)], loaded=[TID2])
+        found, warnings = self.live(run, self.panes()[1:3], lambda home, run, now: snap)
+        self.assertIsNone(found["%2"].thread_id)
+        self.assertIsNone(found["%3"].thread_id)
+        self.assertEqual(len(warnings), 2)
+
+    def test_live_codex_daemon_unavailable_changes_nothing(self):
+        make_db(self.home, [])
+        run = self.runner({"211": "00:05"})
+        found, warnings = self.live(run, self.panes()[1:2], lambda *a, **k: None)
+        self.assertIsNone(found["%2"].thread_id)
+        self.assertEqual(warnings, [])
+
+    def test_live_codex_no_daemon_call_when_everything_resolved(self):
+        make_db(self.home, [])
+        run = self.runner({"201": "05:00"})  # lsof resolves pane a; the shell-only pane d is not a codex pane
+        calls = []
+        found, _ = self.live(run, [self.panes()[0], self.panes()[3]], lambda *a, **k: calls.append(a))
+        self.assertEqual(found["%1"].thread_id, TID)
+        self.assertEqual(calls, [])
 
     def test_live_codex_disabled(self):
         cfg = self.cfg.__class__(**{**self.cfg.__dict__, "codex": self.cfg.codex.__class__(False, self.home)})

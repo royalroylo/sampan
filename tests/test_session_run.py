@@ -91,6 +91,7 @@ class NewAndStateTest(Base):
         r = self.runner()
         r.on(["lsof"], lsof)
         r.on(["ps", "-o", "etime="], cp(rc=1))
+        r.on(["codex", "app-server", "daemon", "version"], cp(rc=1))  # no daemon (never the real one)
         r.on(["tmux", "-u", "capture-pane"], cp(out=IDLE))
         r.on(["tmux", "-u", "send-keys"], lambda a: self.events.append(a[4:]) or cp())
         return r

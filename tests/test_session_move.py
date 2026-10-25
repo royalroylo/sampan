@@ -104,6 +104,7 @@ class MoveFixture(unittest.TestCase):
         r.on(["ps", "-A"], self.ps)
         r.on(["ps", "eww"], cp())  # no environment readable
         r.on(["ps", "-o", "etime="], cp())
+        r.on(["codex", "app-server", "daemon", "version"], cp(rc=1))  # no daemon (never the real one)
         r.on(["lsof"], cp())
         return r
 
@@ -523,6 +524,7 @@ class CodexMoveTest(unittest.TestCase):
         r.on(["ps", "-A"], self.ps)
         r.on(["ps", "eww"], cp())  # no environment readable
         r.on(["ps", "-o", "etime="], cp(rc=1))
+        r.on(["codex", "app-server", "daemon", "version"], cp(rc=1))  # no daemon (never the real one)
         r.on(["lsof"], lambda a: cp(out=self.lsof_out.replace("p200", f"p{a[2]}") if self.ready else f"p{a[2]}\n"))
         return r
 
