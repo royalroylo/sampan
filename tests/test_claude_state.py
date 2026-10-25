@@ -138,6 +138,22 @@ class TranscriptTest(unittest.TestCase):
         p.write_text("\n".join(json.dumps({"type": "user", "message": {"role": "user", "content": t}}) for t in texts))
         self.assertEqual(last_user_text(p), "幫我修 adopt")
 
+    def test_last_user_text_skips_compaction_summary(self):
+        p = self.cfg.default_profile.projects_dir / "w.jsonl"
+        summary = ("<artifact-content-authored-by-others/>\nThe summarized conversation so far: alice asked for a fix…")
+        recs = [{"type": "user", "message": {"role": "user", "content": "改好 adopt"}},
+                {"type": "user", "isCompactSummary": True, "isVisibleInTranscriptOnly": True,
+                 "message": {"role": "user", "content": summary}}]
+        p.write_text("\n".join(json.dumps(x) for x in recs))
+        self.assertEqual(last_user_text(p), "改好 adopt")
+        # the flags alone are enough, and so is a self-closing leading tag alone
+        recs[1]["message"]["content"] = "plain summary text"
+        p.write_text("\n".join(json.dumps(x) for x in recs))
+        self.assertEqual(last_user_text(p), "改好 adopt")
+        recs[1] = {"type": "user", "message": {"role": "user", "content": summary}}
+        p.write_text("\n".join(json.dumps(x) for x in recs))
+        self.assertEqual(last_user_text(p), "改好 adopt")
+
     def test_last_user_text_keeps_text_that_only_starts_with_angle(self):
         p = self.cfg.default_profile.projects_dir / "v.jsonl"
         p.write_text(json.dumps({"type": "user", "message": {"role": "user", "content": "<= 3 的情況要怎麼辦"}}))

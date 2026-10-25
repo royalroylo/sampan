@@ -112,7 +112,7 @@ def transcript_stats(path):
     return last_ts, tokens
 
 
-INJECTED_TAG = re.compile(r"\s*<[a-z][a-z0-9_-]*>")  # <user-prompt-submit-hook>, <ide_opened_file>… are added by Claude itself
+INJECTED_TAG = re.compile(r"\s*<[a-z][a-z0-9_-]*/?>")  # <user-prompt-submit-hook>, <ide_opened_file>, <artifact-content-…/>… are added by Claude itself
 NOT_TYPED = ("<command-", "<local-command", "<bash-", "<task-notification", "<system-reminder", "Caveat:",
              "[Request interrupted")
 
@@ -136,6 +136,8 @@ def _last_user_text(path):
         except ValueError:
             continue
         if not isinstance(rec, dict) or rec.get("type") != "user" or rec.get("isMeta"):
+            continue
+        if rec.get("isCompactSummary") or rec.get("isVisibleInTranscriptOnly"):  # the compaction summary is not typed text
             continue
         msg = rec.get("message")
         content = msg.get("content") if isinstance(msg, dict) else None
