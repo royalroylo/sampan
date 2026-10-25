@@ -718,6 +718,17 @@ class CodexOthersScreenTest(unittest.TestCase):
         shown = self._pick_started([row("a")], polled=True, start_state="failed", start_error="x")
         self.assertIn("啟動失敗：x", shown)
 
+    def test_failed_note_hidden_once_daemon_is_up(self):
+        from sampan.ui.codex_others import SECTION_TITLE
+        w = FakeWatcher(self.snap)
+        w.polled, w.start_state, w.start_error = True, "failed", "x"
+        self.scr = FakeScr(["q"])
+        CursesScreen(self.scr, self.cfg, FakeRunner(), now_fn=lambda: NOW, watcher=w).pick([row("a")], None)
+        shown = "\n".join(self.scr.screens[0])
+        self.assertIn(SECTION_TITLE, shown)
+        self.assertIn("desk-ask", shown)
+        self.assertNotIn("啟動失敗", shown)
+
     def test_screen_down_rule_unchanged_after_start(self):
         from sampan.ui.codex_others import DAEMON_DOWN, STARTING
         shown = self._pick_started([row("a")], polled=True, start_state=None)

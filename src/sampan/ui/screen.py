@@ -299,7 +299,8 @@ class CursesScreen:
         if w is None or self.cfg is None or not self.cfg.codex_profiles:
             return False, None
         state = getattr(w, "start_state", None)
-        return state == "starting", (getattr(w, "start_error", None) or "未知原因") if state == "failed" else None
+        failed = state == "failed" and getattr(w, "latest", None) is None  # a daemon that came up later hides the note
+        return state == "starting", (getattr(w, "start_error", None) or "未知原因") if failed else None
 
     def _left(self, picker, rows, current, now, extra, down):
         """The list lines (tmux rows, then the block) and the cursor's index among them. Row numbers and the name

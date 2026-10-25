@@ -8,13 +8,13 @@ from pathlib import Path
 from sampan.codex_daemon import CodexThread, DaemonSnapshot
 from sampan.ui.cards import agent_style
 from sampan.ui.codex_others import (
+    DAEMON_DOWN,
     GO_DESKTOP,
     OTHERS_MAX,
-    DAEMON_DOWN,
     START_FAILED,
     STARTING,
-    OtherRow,
     ListNote,
+    OtherRow,
     block_left,
     other_card,
     other_cells,
