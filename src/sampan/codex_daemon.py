@@ -129,7 +129,7 @@ def socket_path(codex_home, run, timeout=2.0):
         return None
     try:
         r = run(["codex", "app-server", "daemon", "version"], env={**os.environ, "CODEX_HOME": str(codex_home)},
-                timeout=timeout)
+                timeout=timeout, stdin=subprocess.DEVNULL)  # never the curses terminal
         if r.returncode != 0:
             return None
         path = json.loads(r.stdout).get("socketPath")

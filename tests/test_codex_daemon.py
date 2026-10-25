@@ -335,6 +335,7 @@ class SocketPathTests(unittest.TestCase):
         call = run.calls[0]
         self.assertEqual(call["env"]["CODEX_HOME"], str(self.home))
         self.assertIsNotNone(call["timeout"])
+        self.assertIs(call["stdin"], subprocess.DEVNULL)  # never the curses terminal (a child would eat keys)
 
     def test_socket_path_failures_are_none(self):
         base = ["codex", "app-server", "daemon", "version"]

@@ -41,9 +41,9 @@ class FakeRunner:
         self.rules.append((tuple(prefix), result))
         return self
 
-    def __call__(self, args, *, env=None, cwd=None, timeout=None):
+    def __call__(self, args, *, env=None, cwd=None, timeout=None, stdin=None):
         args = list(args)
-        self.calls.append({"args": args, "env": env, "cwd": cwd, "timeout": timeout})
+        self.calls.append({"args": args, "env": env, "cwd": cwd, "timeout": timeout, "stdin": stdin})
         for prefix, res in reversed(self.rules):
             if _matches(args, prefix):
                 return res(args) if callable(res) else res
