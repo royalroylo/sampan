@@ -266,7 +266,7 @@ class SnapshotTests(DaemonCase):
         self.addCleanup(shutil.rmtree, home, True)
         seen = []
 
-        def slow(args, *, env=None, cwd=None, timeout=None):
+        def slow(args, *, env=None, cwd=None, timeout=None, stdin=None):
             seen.append(timeout)
             return cp(rc=124, err="timeout")
         self.assertIsNone(cd.snapshot(home, slow, now=NOW, timeout=0.3))
