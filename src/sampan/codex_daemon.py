@@ -142,6 +142,9 @@ def _first_line(text):
     return next((ln.strip() for ln in (text or "").splitlines() if ln.strip()), "")
 
 
+CODEX_NOT_FOUND = "找不到 codex 指令"  # start_daemon's reason for a missing binary; the ui hides it without a Codex row
+
+
 def start_daemon(codex_home, run, *, timeout=START_TIMEOUT_S):
     """Run `codex remote-control start` for codex_home. None on success (rc 0), else a one-line reason (≤80 chars):
     stderr's first non-empty line, else stdout's, else the exit code. runner.run turns a missing binary / a timeout into
@@ -150,7 +153,7 @@ def start_daemon(codex_home, run, *, timeout=START_TIMEOUT_S):
         r = run(["codex", "remote-control", "start"], env={**os.environ, "CODEX_HOME": str(codex_home)},
                 timeout=timeout, stdin=subprocess.DEVNULL)  # never the curses terminal
     except FileNotFoundError:
-        return "找不到 codex 指令"
+        return CODEX_NOT_FOUND
     except subprocess.TimeoutExpired:
         return f"逾時 {timeout} 秒"
     except OSError as e:
@@ -162,7 +165,7 @@ def start_daemon(codex_home, run, *, timeout=START_TIMEOUT_S):
         # runner.run's own FileNotFoundError text starts "[Errno 2]"; any other 127 text (e.g. an npm codex whose
         # `env: node: No such file or directory`) is a real reason
         if r.returncode == 127 and (not err or err.startswith("[Errno 2]")):
-            return "找不到 codex 指令"
+            return CODEX_NOT_FOUND
         if r.returncode == 124:
             return f"逾時 {timeout} 秒"
         reason = _first_line(r.stderr) or _first_line(r.stdout) or f"結束碼 {r.returncode}"

@@ -4,6 +4,7 @@ import tempfile
 import time
 from datetime import datetime, timezone
 
+from .. import codex_daemon
 from ..marketplace_view import build_market_rows, market_card, market_choices
 from ..plugin_apply import check_latest
 from ..plugin_view import NO_SOURCE, _mkt, build_rows, catalog, profile_choices, snapshot
@@ -293,15 +294,19 @@ class CursesScreen:
         found, extra = other_rows(w.latest, rows, now, tmp_roots=self._tmp_roots)
         return found, extra, False
 
-    def _start_note(self):
-        """(starting, failed reason) of the watcher's one auto-start of the Codex daemon; (False, None) otherwise."""
+    def _start_note(self, rows):
+        """(starting, failed reason) of the watcher's one auto-start of the Codex daemon; (False, None) otherwise.
+        A missing codex command is only worth showing when the list has a Codex row (like the daemon-down line)."""
         w = self.watcher
         if w is None or self.cfg is None or not self.cfg.codex_profiles:
             return False, None
         state = getattr(w, "start_state", None)
         down = getattr(w, "latest", None) is None  # a daemon that is up hides both notes (the block is shown instead)
         failed = state == "failed" and down
-        return state == "starting" and down, (getattr(w, "start_error", None) or "未知原因") if failed else None
+        reason = (getattr(w, "start_error", None) or "未知原因") if failed else None
+        if reason == codex_daemon.CODEX_NOT_FOUND and not any(r.agent == "codex" for r in rows):
+            reason = None
+        return state == "starting" and down, reason
 
     def _left(self, picker, rows, current, now, extra, down):
         """The list lines (tmux rows, then the block) and the cursor's index among them. Row numbers and the name
@@ -310,7 +315,7 @@ class CursesScreen:
         left = [cells[r.name] for r in picker.visible[:picker.n_rows]]
         name_w = max((text_width(c[0]) for c in cells.values()), default=None)
         lead = " " * (len(str(len(rows))) + 3 if rows else 2)  # under the number and the mark of a tmux row
-        starting, failed = self._start_note()
+        starting, failed = self._start_note(rows)
         block = block_left([OwnCols(other_cells(o, now, lead)) for o in picker.visible[picker.n_rows:]], extra,
                            down=down, starting=starting, failed=failed)
         if block and not left:

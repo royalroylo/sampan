@@ -729,6 +729,23 @@ class CodexOthersScreenTest(unittest.TestCase):
         shown = self._pick_started([row("a")], polled=True, start_state="failed", start_error="x")
         self.assertIn("啟動失敗：x", shown)
 
+    def test_not_found_failure_hidden_without_codex_rows(self):
+        from sampan.codex_daemon import CODEX_NOT_FOUND
+        from sampan.ui.codex_others import DAEMON_DOWN
+        shown = self._pick_started([row("a")], polled=True, start_state="failed", start_error=CODEX_NOT_FOUND)
+        self.assertNotIn("啟動失敗", shown)
+        self.assertNotIn(DAEMON_DOWN, shown)
+
+    def test_not_found_failure_shown_with_codex_row(self):
+        from sampan.codex_daemon import CODEX_NOT_FOUND
+        shown = self._pick_started([row("a", agent="codex")], polled=True, start_state="failed",
+                                   start_error=CODEX_NOT_FOUND)
+        self.assertIn("啟動失敗：找不到 codex 指令", shown)
+
+    def test_other_failure_shown_without_codex_rows(self):
+        shown = self._pick_started([row("a")], polled=True, start_state="failed", start_error="other")
+        self.assertIn("啟動失敗：other", shown)
+
     def test_failed_note_hidden_once_daemon_is_up(self):
         from sampan.ui.codex_others import SECTION_TITLE
         w = FakeWatcher(self.snap)
