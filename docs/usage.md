@@ -101,7 +101,7 @@
 
 **額度警告**：任一項用到 80% 起，帳號行改成 `⚠ 週 85%（10/27 09:10 重置）・5h 40%`（最緊的一項排最前面，括號是重置時間）；用完是 `⛔ 5h 已用完（08:28 重置）・週 73%`。
 
-**Codex 常駐服務**：Codex 的額度、session 狀態與對話清單，在 Codex 常駐服務（app-server，用 `codex remote-control start` 啟動）有跑時直接問它，唯讀、單次最多等 3 秒，每 30 秒一次，額度也存起來供之後使用；沒在跑時額度退回讀最新的 rollout 檔，`sampan doctor` 會提示「Codex 常駐服務沒在執行」，主畫面原本放「Codex 其他對話」的位置改成一行「Codex 常駐服務沒在執行（codex remote-control start）」。有常駐服務時：
+**Codex 常駐服務**：Codex 的額度、session 狀態與對話清單，在 Codex 常駐服務（app-server，用 `codex remote-control start` 啟動）有跑時直接問它，唯讀、單次最多等 3 秒，每 30 秒一次，額度也存起來供之後使用；沒在跑時額度退回讀最新的 rollout 檔，`sampan doctor` 會提示「Codex 常駐服務沒在執行」，主畫面原本放「Codex 其他對話」的位置改成一行「Codex 常駐服務沒在執行（codex remote-control start）」。打開 `sampan` 畫面時若常駐服務沒在執行，會在背景自動跑一次 `codex remote-control start`（`[ui] codex_auto_start = false` 關掉），畫面顯示「正在啟動 Codex 常駐服務…」或失敗原因；每次開畫面只試一次，只在 `sampan` 畫面，`status`、`doctor`、`restore` 不會啟動。有常駐服務時：
 - tmux 裡的 Codex session 的狀態欄用它的即時狀態（等核准與等輸入都顯示 `waiting`，另有 `working`、`idle`、`error`）。
 - 主畫面下方多一段「Codex 其他對話（24 小時內）」，狀態用等你核准、等你輸入、錯誤、執行中、閒置、未開啟：常駐服務知道、但不是 tmux session 的對話（多半在 Codex Desktop 開的），最多 10 列，只能看，不能進入或操作（按 Enter 只提示「到 Codex Desktop 操作」）。
 

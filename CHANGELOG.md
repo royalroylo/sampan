@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-25
+
+### Added
+- Opening the `sampan` screen now starts the Codex daemon (`codex remote-control start`) in the background when it is not running, once per opening and never on the ui thread (15 s limit). The main screen shows 「正在啟動 Codex 常駐服務…」 meanwhile, or 「Codex 常駐服務啟動失敗：<reason>」 if it failed (no `codex` command, a non-zero exit, a timeout). `status`, `doctor` and `restore` never start it. Turn it off with `[ui] codex_auto_start = false` in `config.toml`.
+
 ## [0.9.1] - 2026-10-25
 
 ### Fixed

@@ -284,6 +284,34 @@ class AutoStartTest(unittest.TestCase):
         w.first_read()
         self.assertEqual(seen, ["starting"])
 
+    def test_start_error_is_set_before_failed_state(self):
+        order = []
+
+        class W(DaemonWatcher):
+            def __setattr__(self, k, v):
+                if k in ("start_error", "start_state"):
+                    order.append((k, v))
+                super().__setattr__(k, v)
+        w = self.make([None], "boom")
+        w.__class__ = W
+        order.clear()
+        w.first_read()
+        self.assertEqual(order[-2:], [("start_error", "boom"), ("start_state", "failed")])
+
+    def test_state_stays_starting_until_reread_finished(self):
+        seen = []
+        s = snap(self.cfg.codex.home)
+        w = self.make([None, s])
+        orig = w.snapshot_fn
+
+        def snapshot_fn(*a, **k):
+            seen.append(w.start_state)
+            return orig(*a, **k)
+        w.snapshot_fn = snapshot_fn
+        w.first_read()
+        self.assertEqual(seen, [None, "starting"])
+        self.assertIsNone(w.start_state)
+
     def test_stop_returns_fast_while_start_blocks(self):
         gate = threading.Event()
         entered = threading.Event()

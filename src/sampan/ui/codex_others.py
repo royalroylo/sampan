@@ -16,6 +16,8 @@ OTHERS_MAX = 10
 OTHERS_WINDOW = timedelta(hours=24)
 SECTION_TITLE = "── Codex 其他對話（24 小時內）──"
 DAEMON_DOWN = "Codex 常駐服務沒在執行（codex remote-control start）"
+STARTING = "正在啟動 Codex 常駐服務…"
+START_FAILED = "Codex 常駐服務啟動失敗：{reason}（codex remote-control start）"
 GO_DESKTOP = "到 Codex Desktop 操作"
 OTHER_KEY = "codex:"  # list key prefix of a block row; tmux turns ":" in a session name into "_", so never a session
 OTHER_COLS = (7, 10, 8, 4)  # source, folder, state, updated
@@ -171,9 +173,14 @@ class OwnCols(tuple):
         return row
 
 
-def block_left(cells, extra, *, down):
-    """The block's list lines in order: [title, row cells…, overflow note] — or [DAEMON_DOWN] when down — or [] when
-    there is no row. cells are the OwnCols of the OtherRows shown (already filtered by a search)."""
+def block_left(cells, extra, *, down, starting=False, failed=None):
+    """The block's list lines in order: [title, row cells…, overflow note] — or [STARTING] while the daemon is being
+    started, [START_FAILED] when that failed (failed = the reason), [DAEMON_DOWN] when down — or [] when there is no
+    row. cells are the OwnCols of the OtherRows shown (already filtered by a search)."""
+    if starting:
+        return [ListNote(STARTING, "muted")]
+    if failed:
+        return [ListNote(START_FAILED.format(reason=failed), "warn")]
     if down:
         return [ListNote(DAEMON_DOWN, "muted")]
     if not cells:

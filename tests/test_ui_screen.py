@@ -702,6 +702,28 @@ class CodexOthersScreenTest(unittest.TestCase):
         self.pick(["q"], latest=None)  # an enabled Codex profile, but only Claude rows in the list
         self.assertNotIn(DAEMON_DOWN, "\n".join(self.scr.screens[0]))
 
+    def _pick_started(self, rows, **attrs):
+        w = FakeWatcher(None)
+        for k, v in attrs.items():
+            setattr(w, k, v)
+        self.scr = FakeScr(["q"])
+        CursesScreen(self.scr, self.cfg, FakeRunner(), now_fn=lambda: NOW, watcher=w).pick(rows, None)
+        return "\n".join(self.scr.screens[0])
+
+    def test_screen_shows_starting_without_codex_rows(self):
+        from sampan.ui.codex_others import STARTING
+        self.assertIn(STARTING, self._pick_started([row("a")], polled=False, start_state="starting"))
+
+    def test_screen_shows_start_failed(self):
+        shown = self._pick_started([row("a")], polled=True, start_state="failed", start_error="x")
+        self.assertIn("啟動失敗：x", shown)
+
+    def test_screen_down_rule_unchanged_after_start(self):
+        from sampan.ui.codex_others import DAEMON_DOWN, STARTING
+        shown = self._pick_started([row("a")], polled=True, start_state=None)
+        self.assertNotIn(DAEMON_DOWN, shown)
+        self.assertNotIn(STARTING, shown)
+
     def test_ui_reload_never_reads_the_daemon_itself(self):
         # a Codex pane whose thread is unresolved must not make the ui thread talk to the daemon: the watcher does that
         from unittest import mock

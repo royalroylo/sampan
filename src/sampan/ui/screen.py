@@ -293,6 +293,14 @@ class CursesScreen:
         found, extra = other_rows(w.latest, rows, now, tmp_roots=self._tmp_roots)
         return found, extra, False
 
+    def _start_note(self):
+        """(starting, failed reason) of the watcher's one auto-start of the Codex daemon; (False, None) otherwise."""
+        w = self.watcher
+        if w is None or self.cfg is None or not self.cfg.codex_profiles:
+            return False, None
+        state = getattr(w, "start_state", None)
+        return state == "starting", (getattr(w, "start_error", None) or "未知原因") if state == "failed" else None
+
     def _left(self, picker, rows, current, now, extra, down):
         """The list lines (tmux rows, then the block) and the cursor's index among them. Row numbers and the name
         column width follow the unfiltered tmux list; block lines are never numbered or landed on."""
@@ -300,8 +308,9 @@ class CursesScreen:
         left = [cells[r.name] for r in picker.visible[:picker.n_rows]]
         name_w = max((text_width(c[0]) for c in cells.values()), default=None)
         lead = " " * (len(str(len(rows))) + 3 if rows else 2)  # under the number and the mark of a tmux row
+        starting, failed = self._start_note()
         block = block_left([OwnCols(other_cells(o, now, lead)) for o in picker.visible[picker.n_rows:]], extra,
-                           down=down)
+                           down=down, starting=starting, failed=failed)
         if block and not left:
             left = [ListNote(list_empty(rows, picker.query), "")]
         cursor = len(left) - picker.n_rows + picker.cursor + (1 if picker.on_other() else 0)

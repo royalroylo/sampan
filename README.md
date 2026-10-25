@@ -7,7 +7,7 @@
 sampan 記住每個 session 跑的是哪一段對話。agent 結束、tmux 關掉，或機器重開機之後，可以一個個接回原本的對話。
 它也能讓多個 Claude profile 的 plugin 保持一致。
 
-主畫面會用 ⚠／⛔ 提醒額度快用完，也能唯讀地看 Codex 常駐服務（`codex remote-control start`）裡的狀態、額度與其他對話；沒在跑時退回讀紀錄。
+主畫面會用 ⚠／⛔ 提醒額度快用完，也能唯讀地看 Codex 常駐服務（`codex remote-control start`）裡的狀態、額度與其他對話；沒在跑時打開畫面會自動啟動一次，仍不行就退回讀紀錄。
 
 ## 需求
 

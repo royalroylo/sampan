@@ -10,7 +10,12 @@ from sampan.ui.cards import agent_style
 from sampan.ui.codex_others import (
     GO_DESKTOP,
     OTHERS_MAX,
+    DAEMON_DOWN,
+    START_FAILED,
+    STARTING,
     OtherRow,
+    ListNote,
+    block_left,
     other_card,
     other_cells,
     other_rows,
@@ -168,3 +173,20 @@ class TmpRootsTest(unittest.TestCase):
             roots = tmp_roots()
         self.assertIn(str(link) + "/.", roots)
         self.assertIn(str(real), roots)
+
+
+class BlockLeftStartTest(unittest.TestCase):
+    def test_block_left_starting(self):
+        self.assertEqual(block_left([], 0, down=False, starting=True), [ListNote(STARTING, "muted")])
+
+    def test_block_left_failed_shows_reason(self):
+        out = block_left([], 0, down=True, failed="找不到 codex 指令")
+        self.assertEqual(out, [ListNote("Codex 常駐服務啟動失敗：找不到 codex 指令（codex remote-control start）", "warn")])
+        self.assertEqual((out[0], out[0].style), (START_FAILED.format(reason="找不到 codex 指令"), "warn"))
+
+    def test_block_left_starting_beats_down(self):
+        self.assertEqual(block_left([], 0, down=True, starting=True, failed="x"), [ListNote(STARTING, "muted")])
+
+    def test_block_left_defaults_unchanged(self):
+        self.assertEqual(block_left([], 0, down=True), [ListNote(DAEMON_DOWN, "muted")])
+        self.assertEqual(block_left([], 0, down=False), [])

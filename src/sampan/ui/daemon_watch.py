@@ -106,10 +106,13 @@ class DaemonWatcher:
         except Exception as e:  # noqa: BLE001  a broken start only means "failed", never a traceback
             reason = str(e) or type(e).__name__
         if reason is None:
-            self.start_state = None
-            self.poll_once()
+            try:
+                self.poll_once()  # stay "starting" until the re-read is in, so the ui never flickers to "down"
+            finally:
+                self.start_state = None
         else:
-            self.start_state, self.start_error = "failed", reason
+            self.start_error = reason  # before the state, so the ui never sees "failed" without a reason
+            self.start_state = "failed"
 
     def _loop(self):
         step = self.first_read  # the first round may start the daemon; later rounds only read
