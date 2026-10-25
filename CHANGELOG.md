@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-25
+
 ### Added
 - Quota warnings: the account line shows `⚠` from 80% and `⛔` when a quota is used up, with the reset time (Claude and Codex).
 - Read-only monitoring of the Codex daemon (`codex remote-control start`): Codex quota (saved to the state directory), tmux Codex session status, a 「Codex 其他對話（24 小時內）」 block on the main screen for threads that are not tmux sessions, and a `sampan doctor` line. Codex context use (⚠ above 80% of the model limit, read from the rollout file, no daemon needed) is shown for Codex sessions too. The ui reads the daemon in the background every 30 seconds (3 s per query); without the daemon quota falls back to the newest rollout file and the main screen shows a one-line 「Codex 常駐服務沒在執行」 note instead of the block.
@@ -296,7 +298,8 @@ First public release. Versions up to 0.5.3 were released privately under the nam
 ### Security
 - Credentials in git URLs are no longer shown in output.
 
-[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/royalroylo/sampan/releases/tag/v0.9.0
 [0.8.1]: https://github.com/royalroylo/sampan/releases/tag/v0.8.1
 [0.8.0]: https://github.com/royalroylo/sampan/releases/tag/v0.8.0
 [0.7.3]: https://github.com/royalroylo/sampan/releases/tag/v0.7.3
