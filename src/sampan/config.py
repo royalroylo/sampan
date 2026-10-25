@@ -97,6 +97,7 @@ class Config:
     path: Path
     all_profiles: dict  # every profile in config-file order, disabled and Codex ones included
     implicit_codex: bool  # the Codex profile was filled in from [codex] / defaults, not written in the file
+    codex_auto_start: bool = True  # [ui] codex_auto_start: start the Codex daemon when the UI opens
 
     @property
     def codex_profiles(self):
@@ -237,6 +238,9 @@ def load_config(path, *, home=None, state_dir=None):
         start = expand(start_dir)
     else:
         raise ConfigError(f"[ui] start_dir 要是字串路徑，目前是 {start_dir!r}")
+    codex_auto_start = ui.get("codex_auto_start", True)
+    if not isinstance(codex_auto_start, bool):
+        raise ConfigError(f"[ui] codex_auto_start 要是 true 或 false，目前是 {codex_auto_start!r}")
     return Config(
         version=1,
         marketplaces=marketplaces,
@@ -249,4 +253,5 @@ def load_config(path, *, home=None, state_dir=None):
         path=path,
         all_profiles=all_profiles,
         implicit_codex=implicit_codex,
+        codex_auto_start=codex_auto_start,
     )

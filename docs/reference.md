@@ -11,6 +11,7 @@
 | `version` | 整數，必須是 `1` |
 | `[restore] recent_days` | 非負整數，預設 7；`restore` 預設只勾選最近幾天有動過的 |
 | `[ui] start_dir` | 字串路徑，`n`（開新工作）的選目錄畫面從這裡開始；沒寫時用 `~/Projects`（存在的話），否則 `~` |
+| `[ui] codex_auto_start` | 布林，預設 `true`。打開 `sampan` 畫面時若 Codex 常駐服務沒在執行，就在背景跑一次 `codex remote-control start`；`false` 不啟動 |
 | `[codex] enabled` | 布林，預設 `true`。沒有任何 `agent = "codex"` 的 profile 時，`[codex]` 在記憶體裡當成一個隱含的 Codex profile，第一次 `sampan profile rename／disable／enable／forget／add --codex` 才轉成 `[profiles.<名稱>]`；只要有任何 `agent = "codex"` 的 profile，整個 `[codex]` 都不再作用；設成 `false` 表示不用 Codex（沒有 Codex profile），forget 最後一個 Codex profile 時會寫入 |
 | `[codex] home` | Codex 資料夾；沒寫時用環境變數 `CODEX_HOME`，再沒有就是 `~/.codex`（只用在隱含的 Codex profile） |
 | `[marketplaces] <名稱> = "owner/repo"` | plugin 來源：GitHub `owner/repo`，或 git 網址（`https://…`、`ssh://…`、`git@host:path`，例如自架的 Gitea）。本機目錄不支援 |

@@ -178,6 +178,20 @@ class ConfigTest(unittest.TestCase):
             make_env(self.tmp, base % '[ui]\nstart_dir = 3\n')
         self.assertIn("start_dir", str(cm.exception))
 
+    def test_ui_codex_auto_start_default_true(self):
+        base = 'version = 1\n[profiles.alice]\nconfig_dir = "~/.claude"\ndefault = true\n'
+        self.assertIs(make_env(self.tmp, base).codex_auto_start, True)
+
+    def test_ui_codex_auto_start_false(self):
+        base = 'version = 1\n%s[profiles.alice]\nconfig_dir = "~/.claude"\ndefault = true\n'
+        self.assertIs(make_env(self.tmp, base % '[ui]\ncodex_auto_start = false\n').codex_auto_start, False)
+
+    def test_ui_codex_auto_start_must_be_bool(self):
+        base = 'version = 1\n%s[profiles.alice]\nconfig_dir = "~/.claude"\ndefault = true\n'
+        with self.assertRaises(ConfigError) as cm:
+            make_env(self.tmp, base % '[ui]\ncodex_auto_start = "yes"\n')
+        self.assertIn("[ui] codex_auto_start", str(cm.exception))
+
     def test_codex_home_from_env_and_config(self):
         home = self.tmp / "home"
         base = 'version = 1\n%s[profiles.alice]\nconfig_dir = "~/.claude"\ndefault = true\n'

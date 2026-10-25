@@ -11,6 +11,7 @@ For migration or conversion scripts. A version sampan does not understand is nev
 | `version` | integer, must be `1` |
 | `[restore] recent_days` | non-negative integer, default 7; `restore` pre-checks only sessions active within this many days |
 | `[ui] start_dir` | path where the directory chooser of `n` (start new work) starts; default `~/Projects` if it exists, else `~` |
+| `[ui] codex_auto_start` | boolean, default `true`. When the `sampan` screen opens and the Codex daemon is not running, run `codex remote-control start` once in the background; `false` never starts it |
 | `[codex] enabled` | boolean, default `true`. With no `agent = "codex"` profile, `[codex]` acts in memory as an implicit Codex profile, converted to `[profiles.<name>]` by the first `sampan profile rename / disable / enable / forget / add --codex`; once any `agent = "codex"` profile exists, all of `[codex]` is ignored; `false` means Codex is off (no Codex profile), and forgetting the last Codex profile writes it |
 | `[codex] home` | Codex folder; default `$CODEX_HOME`, else `~/.codex` (only used for the implicit Codex profile) |
 | `[marketplaces] <name> = "owner/repo"` | plugin source: GitHub `owner/repo` or a git URL (`https://…`, `ssh://…`, `git@host:path`, e.g. a self-hosted Gitea). Local directories are not supported |
