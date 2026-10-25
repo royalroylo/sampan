@@ -105,9 +105,11 @@ class FakeDaemon:
             self.raw_first = head
             if not self.upgrade:
                 conn.sendall(b"HTTP/1.1 400 Bad Request\r\n\r\n")
-                try:  # a client that sent JSON anyway would show up here
-                    conn.settimeout(0.3)
-                    self.methods.append(("raw", conn.recv(4096)))
+                try:  # a client that sent JSON anyway would show up here (until it closes)
+                    conn.settimeout(1.0)
+                    data = conn.recv(4096)
+                    if data:
+                        self.methods.append(("raw", data))
                 except OSError:
                     pass
                 return
@@ -202,7 +204,9 @@ class SnapshotTests(DaemonCase):
             cd._request(conn, "turn/start", {})
         with self.assertRaises(ValueError):
             cd._notify(conn, "thread/resume")
-        time.sleep(0.1)
+        sock.close()  # server sees EOF and ends; then nothing can still be in flight
+        d.thread.join(3)
+        self.assertFalse(d.thread.is_alive())
         self.assertEqual(d.methods, [])
 
     def test_notifications_between_responses_are_skipped(self):
@@ -232,6 +236,8 @@ class SnapshotTests(DaemonCase):
     def test_plain_json_without_upgrade_is_not_sent(self):
         d = self.daemon(upgrade=False)
         self.assertIsNone(self.snap(d))
+        d.thread.join(3)  # the server has finished reading (client closed) before we look
+        self.assertFalse(d.thread.is_alive())
         self.assertEqual(d.methods, [])
         self.assertTrue(d.raw_first.startswith(b"GET / HTTP/1.1"))
 
@@ -243,6 +249,24 @@ class SnapshotTests(DaemonCase):
         snap = self.snap(self.daemon(errors=["thread/loaded/list"]))
         self.assertEqual(snap.loaded, frozenset())
         self.assertEqual(len(snap.threads), 2)
+
+    def test_slow_version_command_cannot_exceed_budget(self):
+        home = Path(tempfile.mkdtemp(dir="/tmp"))
+        self.addCleanup(shutil.rmtree, home, True)
+        seen = []
+
+        def slow(args, *, env=None, cwd=None, timeout=None):
+            seen.append(timeout)
+            return cp(rc=124, err="timeout")
+        self.assertIsNone(cd.snapshot(home, slow, now=NOW, timeout=0.3))
+        self.assertLessEqual(seen[0], 0.3)  # run() is told the remaining budget, not a fixed 2s
+        seen.clear()
+        self.assertIsNone(cd.snapshot(home, slow, now=NOW, timeout=0))
+        self.assertEqual(seen, [])  # nothing left: not run at all
+
+    def test_default_timeout_is_three_seconds(self):
+        import inspect
+        self.assertEqual(inspect.signature(cd.snapshot).parameters["timeout"].default, 3.0)
 
     def test_no_socket_returns_none(self):
         home = Path(tempfile.mkdtemp(dir="/tmp"))

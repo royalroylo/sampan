@@ -115,15 +115,18 @@ def _loaded_ids(result):
 
 # ---------- socket location ----------
 
-def socket_path(codex_home, run):
+def socket_path(codex_home, run, timeout=2.0):
     """The daemon's control socket: <codex_home>/app-server-control/app-server-control.sock when it exists, else the
-    socketPath `codex app-server daemon version` reports (if that file exists); None when neither."""
+    socketPath `codex app-server daemon version` reports (if that file exists); None when neither. The version
+    command gets at most `timeout` seconds, and is not run at all when none are left."""
     default = Path(codex_home) / SOCKET_REL
     if default.exists():
         return default
+    if timeout <= 0:
+        return None
     try:
         r = run(["codex", "app-server", "daemon", "version"], env={**os.environ, "CODEX_HOME": str(codex_home)},
-                timeout=2)
+                timeout=timeout)
         if r.returncode != 0:
             return None
         path = json.loads(r.stdout).get("socketPath")
@@ -265,16 +268,16 @@ def _connect_unix(path, timeout):
     return sock
 
 
-def snapshot(codex_home, run, *, now, timeout=1.0, connect=None):
+def snapshot(codex_home, run, *, now, timeout=3.0, connect=None):
     """One read of the daemon: 額度, thread list and loaded ids, within `timeout` seconds in all. None when there is
     no daemon or initialize / rateLimits / thread/list fails (a failed thread/loaded/list only leaves `loaded` empty).
     `connect(path, timeout)` returns a connected socket (tests inject their own)."""
     deadline = time.monotonic() + timeout
-    path = socket_path(codex_home, run)
+    path = socket_path(codex_home, run, min(2.0, max(0.0, deadline - time.monotonic())))
     if path is None:
         return None
     try:
-        sock = (connect or _connect_unix)(path, timeout)
+        sock = (connect or _connect_unix)(path, max(0.0, deadline - time.monotonic()))
     except OSError:
         return None
     try:
