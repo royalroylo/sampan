@@ -78,9 +78,8 @@ def _now():
 
 def tmp_roots():
     """System temp directories whose Codex threads the「Codex 其他對話」block leaves out (by path component)."""
-    roots = ["/tmp", "/private/tmp", os.path.realpath(tempfile.gettempdir())]
-    if os.environ.get("TMPDIR"):
-        roots.append(os.path.realpath(os.environ["TMPDIR"]))
+    raw = [tempfile.gettempdir(), os.environ.get("TMPDIR")]  # the paths as given next to their realpaths
+    roots = ["/tmp", "/private/tmp"] + [x for r in raw if r for x in (r, os.path.realpath(r))]
     return tuple(dict.fromkeys(roots))
 
 

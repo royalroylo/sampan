@@ -206,6 +206,21 @@ class AlertTextTest(Base):
         u = self.u(win(100, -1), win(50, -2), reached=True)
         self.assertEqual((usage.usage_text(u, NOW), usage.usage_alert(u, NOW)), ("", ""))
 
+    def test_stale_reached_after_the_5h_reset_is_ignored(self):
+        # the daemon said 5h 100% + reached; the 5h window has since reset, week is 73%
+        u = self.u(win(100, -0.5), win(73, 72), reached=True, at=NOW - timedelta(hours=1))
+        with local_tz("Asia/Taipei"):
+            text = usage.usage_text(u, NOW)
+        self.assertTrue(text.startswith("週 73%"), text)
+        self.assertNotIn("⛔", text)
+        self.assertEqual(usage.usage_alert(u, NOW), "")
+
+    def test_reached_without_window_expires_after_5_hours(self):
+        fresh = self.u(None, None, reached=True, at=NOW - timedelta(hours=1))
+        self.assertEqual((usage.usage_text(fresh, NOW), usage.usage_alert(fresh, NOW)), ("⛔ 已用完", "err"))
+        old = self.u(None, None, reached=True, at=NOW - timedelta(hours=6))
+        self.assertEqual((usage.usage_text(old, NOW), usage.usage_alert(old, NOW)), ("", ""))
+
     def test_stale_reading_time_appended(self):
         with local_tz("Asia/Taipei"):
             old = self.u(win(40, 2), None, at=NOW - timedelta(minutes=10))

@@ -190,3 +190,23 @@ class ApplyStatusTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PublishAfterSaveTest(WatcherTest):
+    def test_latest_is_published_only_after_the_usage_is_saved(self):
+        seen = []
+        w = self.watcher(snap(self.cfg.codex.home, usage=USAGE))
+        import sampan.ui.daemon_watch as dw
+        real = dw.record_codex
+
+        def spy(*a, **k):
+            seen.append(w.latest)
+            return real(*a, **k)
+
+        dw.record_codex = spy
+        try:
+            w.poll_once()
+        finally:
+            dw.record_codex = real
+        self.assertEqual(seen, [None])
+        self.assertIsNotNone(w.latest)

@@ -77,8 +77,6 @@ class DaemonWatcher:
             snap = self.snapshot_fn(cfg.codex.home, self.run, now=self.now_fn())
         except Exception:  # noqa: BLE001  a broken daemon / client bug only means "no reading"
             snap = None
-        self.latest = snap
-        self.polled = True
         if snap is not None and snap.usage is not None:
             home = _real(snap.home)
             for p in cfg.codex_profiles.values():
@@ -87,6 +85,8 @@ class DaemonWatcher:
                         record_codex(cfg, p.name, snap.usage)
                     except OSError:
                         pass
+        self.latest = snap  # published only after the reading is saved, so the account lines never lag behind it
+        self.polled = True
         return snap
 
     def _loop(self):

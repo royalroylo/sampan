@@ -663,11 +663,12 @@ class CodexOthersScreenTest(unittest.TestCase):
     def test_actions_on_external_rows_are_refused(self):
         from sampan.ui.codex_others import GO_DESKTOP
         down = ["KEY_DOWN", "KEY_DOWN"]
-        for keys in (down + ["\n"], down + ["s", "y"], down + ["R"], down + ["X"], down + ["m"],
+        for keys in (down + ["\n"], down + ["s", "y"], down + ["X"], down + ["m"],
                      ["/", "d", "e", "s", "k", "\n", "\x1b"]):
             self.assertEqual(self.pick(keys + ["q"]), ("quit", []), keys)
             self.assertIn(GO_DESKTOP, "\n".join(self.scr.screens[-1]), keys)
             self.assertNotIn("將停掉", "\n".join("\n".join(x) for x in self.scr.screens), keys)
+        self.assertEqual(self.pick(down + ["R"]), ("restore", []))  # global keys are not row actions
         self.assertEqual(self.pick(down + [" ", "KEY_UP", "KEY_UP", "\n"]), ("attach", ["a"]))
         self.assertNotIn("●", "".join(c[0] for c in self.s.view["left"][:2] if isinstance(c, tuple)))
 

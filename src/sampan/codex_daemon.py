@@ -291,7 +291,10 @@ def snapshot(codex_home, run, *, now, timeout=3.0, connect=None):
             loaded = _loaded_ids(_request(conn, "thread/loaded/list", {}))
         except (OSError, ValueError):
             loaded = frozenset()
-        return DaemonSnapshot(Path(codex_home), parse_rate_limits(limits, now), parse_threads(threads), loaded, now)
+        # the snapshot belongs to the CODEX_HOME the socket lives in (<home>/app-server-control/<sock>), which
+        # `daemon version` may have pointed away from the configured one
+        home = path.parent.parent if path.parent.name == SOCKET_REL.parent.name else Path(codex_home)
+        return DaemonSnapshot(home, parse_rate_limits(limits, now), parse_threads(threads), loaded, now)
     except (OSError, ValueError):  # ConnectionError / TimeoutError are OSError; bad JSON / UnicodeDecodeError / RPC error are ValueError
         return None
     finally:

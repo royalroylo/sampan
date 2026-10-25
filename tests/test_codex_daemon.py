@@ -52,9 +52,10 @@ class FakeDaemon:
     JSON-RPC error)."""
 
     def __init__(self, results=None, notify=False, silent_after=None, drop_after=None, upgrade=True, split=False,
-                 pings=False, errors=()):
+                 pings=False, errors=(), rel="d.sock"):
         self.dir = tempfile.mkdtemp(dir="/tmp")
-        self.path = Path(self.dir) / "d.sock"
+        self.path = Path(self.dir) / rel
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         self.results = dict(RESULTS if results is None else results)
         self.notify, self.silent_after, self.drop_after = notify, silent_after, drop_after
         self.upgrade, self.split, self.pings, self.errors = upgrade, split, pings, set(errors)
@@ -185,6 +186,15 @@ class SnapshotTests(DaemonCase):
         self.assertEqual(t1.updated_at, datetime.fromtimestamp(1792888000, timezone.utc))
         self.assertEqual(d.unmasked, 0)
         self.assertNotIn("acct", repr(snap))
+
+    def test_snapshot_home_is_the_sockets_home_not_the_configured_one(self):
+        d = self.daemon(rel="other/app-server-control/app-server-control.sock")
+        snap = self.snap(d)  # queried with <dir>/home; `daemon version` points at <dir>/other's socket
+        self.assertEqual(snap.home, Path(d.dir) / "other")
+
+    def test_snapshot_home_falls_back_to_the_configured_one(self):
+        d = self.daemon()  # a socket outside any app-server-control directory
+        self.assertEqual(self.snap(d).home, Path(d.dir) / "home")
 
     def test_requests_only_allowed_methods(self):
         d = self.daemon()

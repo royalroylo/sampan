@@ -129,3 +129,42 @@ class AgentStyleTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OtherRowKeysTest(unittest.TestCase):
+    """With no tmux row the cursor sits on the block, yet global keys keep working; only row actions are refused."""
+
+    def picker(self):
+        from sampan.ui import Picker
+        return Picker([], others=[OtherRow(th("abc"), "idle", None, 0)])
+
+    def test_global_keys_work_on_the_block(self):
+        for key, action in (("n", "new"), ("R", "restore"), ("A", "adopt"), ("w", "save"), ("U", "update"),
+                            ("p", "plugins"), ("o", "profiles")):
+            with self.subTest(key=key):
+                p = self.picker()
+                self.assertTrue(p.on_other())
+                self.assertEqual(p.key(key), (action, []))
+
+    def test_row_actions_on_the_block_are_refused(self):
+        for key in ("\n", "s", "m", "P", "e", "X", "r", "a"):
+            with self.subTest(key=key):
+                self.assertEqual(self.picker().key(key), ("desktop", []))
+        p = self.picker()
+        self.assertIsNone(p.key(" "))
+        self.assertEqual(p.marked, set())
+
+
+class TmpRootsTest(unittest.TestCase):
+    def test_raw_and_resolved_temp_dirs_are_both_listed(self):
+        import os
+        from unittest import mock
+
+        from sampan.ui.screen import tmp_roots
+        link = Path(tempfile.mkdtemp(dir="/tmp"))
+        self.addCleanup(link.rmdir)
+        real = Path(os.path.realpath(link))
+        with mock.patch.dict(os.environ, {"TMPDIR": str(link) + "/."}):
+            roots = tmp_roots()
+        self.assertIn(str(link) + "/.", roots)
+        self.assertIn(str(real), roots)

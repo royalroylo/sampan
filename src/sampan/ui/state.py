@@ -23,7 +23,6 @@ def row_text(r):
             f"{pad(r.agent_status, 7)} {_fmt_tokens(r.tokens, r.context_window)}")
 
 
-OTHER_REFUSED = "nRAwUposmPeXra"  # action keys that, on a read-only other row, only say where to go instead
 JUMP_S = 1.0  # digit jump: a digit typed more than this many seconds after the previous one starts a new number
 
 
@@ -35,7 +34,7 @@ class Picker:
     query is non-empty) and cursor indexes it.
     others (the main list's「Codex 其他對話」, codex_others.OtherRow) follow the rows in visible: the cursor moves onto
     them and a search matches their thread name, but digits count only rows, a space does not mark them, and every
-    action key there (all but moving, digits, / and quit) returns ("desktop", []) — they are read only."""
+    row action key there (Enter s m P e X r a) returns ("desktop", []) — they are read only."""
 
     def __init__(self, rows, current=None, *, clock=time.monotonic, others=()):
         self.rows = rows
@@ -160,8 +159,6 @@ class Picker:
         self.jump = ""
         if k in ("q", "\x1b"):
             return ("quit", [])
-        if self.on_other() and k not in MOVES and k != "/":
-            return ("desktop", []) if k in ENTER or (len(k) == 1 and k in OTHER_REFUSED) else None
         if k == "n":
             return ("new", [])
         if k == "R":
@@ -184,6 +181,8 @@ class Picker:
         if k in MOVES:
             self.cursor = max(0, min(len(self.visible) - 1, self.cursor + MOVES[k]))
             return None
+        if self.on_other():  # row-targeted actions on a read-only other row only say where to go
+            return ("desktop", []) if k in ENTER or (len(k) == 1 and k in "smPeXra") else None
         if k == " ":
             self.marked ^= {self._here()}
             self.cursor = min(len(self.visible) - 1, self.cursor + 1)

@@ -5,7 +5,7 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .fsutil import PRIVATE_FILE, atomic_write, private_dir
@@ -189,6 +189,9 @@ def codex_profile_usage(cfg, p):
     return saved if saved.at >= rollout.at else rollout
 
 
+REACHED_S = timedelta(hours=5)  # a reached flag with no window to expire it is trusted at most one 5h window
+
+
 def _live(u, now):
     """[(label, Window)] of the windows not yet past their reset."""
     return [(label, w) for label, w in (("5h", u.five_hour), ("週", u.week)) if w is not None and w.resets_at > now]
@@ -196,12 +199,15 @@ def _live(u, now):
 
 def _levels(u, now):
     """([(label, window, level)], reached-without-window) with level 2 = used up, 1 = warning, 0 = fine.
-    reached with no window at 100%: the fullest window counts as used up."""
+    reached with no window at 100%: the fullest window counts as used up. A stored reached flag is stale (ignored)
+    once any stored window is past its reset, and with no window at all it is honoured only for REACHED_S."""
     live = _live(u, now)
+    stored = [w for w in (u.five_hour, u.week) if w is not None]
+    reached = u.reached and all(w.resets_at > now for w in stored) and (stored or now - u.at <= REACHED_S)
     levels = [2 if w.used >= 100 else 1 if w.used >= WARN_AT else 0 for _l, w in live]
-    if u.reached and live and 2 not in levels:
+    if reached and live and 2 not in levels:
         levels[max(range(len(live)), key=lambda i: live[i][1].used)] = 2
-    return [(label, w, lv) for (label, w), lv in zip(live, levels)], u.reached and u.five_hour is None and u.week is None
+    return [(label, w, lv) for (label, w), lv in zip(live, levels)], bool(reached and not stored)
 
 
 def usage_alert(u, now):
