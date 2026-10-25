@@ -25,6 +25,7 @@ class Usage:
     five_hour: Window | None
     week: Window | None
     at: datetime  # when the numbers were read
+    reached: bool = False  # the account hit a limit (Codex daemon: rateLimitReachedType set or ordinaryUsageAllowed false)
 
 
 def usage_path(cfg, profile):
