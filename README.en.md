@@ -8,6 +8,8 @@ sampan remembers which conversation each session is running. After an agent exit
 you can put every session back into its original conversation, one by one. It also keeps the plugins of several Claude
 profiles in sync.
 
+The main screen warns with ⚠ / ⛔ when a quota runs low, and reads the Codex daemon (`codex remote-control start`) read-only for status, quota and other conversations; without it sampan falls back to reading Codex's rollout files.
+
 ## Requirements
 
 - macOS (Linux is experimental, see [Platforms and limits](docs/en/platforms.md))

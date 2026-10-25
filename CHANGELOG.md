@@ -5,6 +5,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Quota warnings: the account line shows `⚠` from 80% and `⛔` when a quota is used up, with the reset time (Claude and Codex).
+- Read-only monitoring of the Codex daemon (`codex remote-control start`): Codex quota (saved to the state directory), tmux Codex session status and context use (⚠ above 80% of the model limit), a 「Codex 其他對話（24 小時內）」 block on the main screen for threads that are not tmux sessions, and a `sampan doctor` line. The ui reads the daemon in the background every 30 seconds (3 s per query); without the daemon quota falls back to the newest rollout file and nothing else changes.
+
 ## [0.8.1] - 2026-10-25
 
 ### Fixed

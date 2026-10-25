@@ -110,6 +110,12 @@ For scripts and schedules do not use this screen; keep using `sampan plugins syn
 
 A profile is one account (a Claude config directory, or a Codex `CODEX_HOME`). The top of the list has one line for each enabled account: `name N 個執行中・5h 42%・週 18%（17:20）`, where the time in brackets is when that quota was read; refreshed at most every 60 seconds. Where the quota comes from: for Claude you must install the status line first (below); for Codex it reads the newest rollout file. sampan never reads account credentials and never goes online for quota.
 
+**Quota warnings**: from 80% on, the account line turns into `⚠ 週 85%（10/27 09:10 重置）・5h 40%` (the tightest item first, with its reset time in brackets); used up it reads `⛔ 5h 已用完（08:28 重置）・週 73%`.
+
+**The Codex daemon**: when the Codex daemon (the app-server, started with `codex remote-control start`) is running, sampan asks it, read-only, for Codex's quota, session status and thread list (at most 3 seconds per query, every 30 seconds; the quota is also saved for later). Without it, quota falls back to the newest rollout file, the rest is not shown, and `sampan doctor` says 「Codex 常駐服務沒在執行」. With the daemon:
+- Codex sessions in tmux also show their status (waiting for approval, waiting for input, error, working, idle) and context use (⚠ above 80% of the model's limit).
+- The main screen gets a block 「Codex 其他對話（24 小時內）」: threads the daemon knows that are not tmux sessions (mostly opened in Codex Desktop), up to 10 rows, view only; Enter just says 「到 Codex Desktop 操作」.
+
 Press `o` for the accounts screen:
 
 | Key | Action |
