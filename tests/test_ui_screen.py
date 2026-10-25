@@ -714,6 +714,17 @@ class CodexOthersScreenTest(unittest.TestCase):
         from sampan.ui.codex_others import STARTING
         self.assertIn(STARTING, self._pick_started([row("a")], polled=False, start_state="starting"))
 
+    def test_starting_note_hidden_once_latest_is_set(self):
+        from sampan.ui.codex_others import SECTION_TITLE, STARTING
+        w = FakeWatcher(self.snap)
+        w.polled, w.start_state = True, "starting"
+        self.scr = FakeScr(["q"])
+        CursesScreen(self.scr, self.cfg, FakeRunner(), now_fn=lambda: NOW, watcher=w).pick([row("a")], None)
+        shown = "\n".join(self.scr.screens[0])
+        self.assertIn(SECTION_TITLE, shown)
+        self.assertIn("desk-ask", shown)
+        self.assertNotIn(STARTING, shown)
+
     def test_screen_shows_start_failed(self):
         shown = self._pick_started([row("a")], polled=True, start_state="failed", start_error="x")
         self.assertIn("啟動失敗：x", shown)

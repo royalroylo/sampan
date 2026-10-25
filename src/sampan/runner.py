@@ -1,10 +1,11 @@
 import subprocess
 
 
-def run(args, *, env=None, cwd=None, timeout=None):
+def run(args, *, env=None, cwd=None, timeout=None, stdin=None):
     """Run a command and capture text output; a missing binary returns rc 127, a timeout (seconds) rc 124."""
     try:
-        return subprocess.run(list(args), env=env, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+        return subprocess.run(list(args), env=env, cwd=cwd, capture_output=True, text=True, timeout=timeout,
+                              stdin=stdin)
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(list(args), 124, "", "timeout")
     except FileNotFoundError as e:

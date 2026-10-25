@@ -148,7 +148,7 @@ def start_daemon(codex_home, run, *, timeout=START_TIMEOUT_S):
     rc 127 / 124 instead of raising; a raising `run` is handled the same way."""
     try:
         r = run(["codex", "remote-control", "start"], env={**os.environ, "CODEX_HOME": str(codex_home)},
-                timeout=timeout)
+                timeout=timeout, stdin=subprocess.DEVNULL)  # never the curses terminal
     except FileNotFoundError:
         return "找不到 codex 指令"
     except subprocess.TimeoutExpired:
@@ -158,7 +158,10 @@ def start_daemon(codex_home, run, *, timeout=START_TIMEOUT_S):
     else:
         if r.returncode == 0:
             return None
-        if r.returncode == 127:
+        err = _first_line(r.stderr)
+        # runner.run's own FileNotFoundError text starts "[Errno 2]"; any other 127 text (e.g. an npm codex whose
+        # `env: node: No such file or directory`) is a real reason
+        if r.returncode == 127 and (not err or err.startswith("[Errno 2]")):
             return "找不到 codex 指令"
         if r.returncode == 124:
             return f"逾時 {timeout} 秒"

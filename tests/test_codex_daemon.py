@@ -350,8 +350,8 @@ class StartDaemonTests(unittest.TestCase):
     def start(self, result=None, exc=None, **kw):
         seen = {}
 
-        def run(args, *, env=None, cwd=None, timeout=None):
-            seen.update(argv=list(args), env=env, timeout=timeout)
+        def run(args, *, env=None, cwd=None, timeout=None, stdin=None):
+            seen.update(argv=list(args), env=env, timeout=timeout, stdin=stdin)
             if exc is not None:
                 raise exc
             return result
@@ -365,6 +365,9 @@ class StartDaemonTests(unittest.TestCase):
         self.assertEqual(seen["timeout"], 15)
         self.assertEqual(cd.START_TIMEOUT_S, 15)
 
+    def test_start_daemon_stdin_is_devnull(self):
+        self.assertIs(self.start(cp())[1]["stdin"], subprocess.DEVNULL)
+
     def test_start_daemon_reason_from_stderr(self):
         reason, _ = self.start(cp(2, "out", "\nerror: unrecognized subcommand 'remote-control'\n"))
         self.assertEqual(reason, "error: unrecognized subcommand 'remote-control'")
@@ -377,7 +380,13 @@ class StartDaemonTests(unittest.TestCase):
         self.assertEqual(self.start(exc=FileNotFoundError("codex"))[0], "找不到 codex 指令")
         self.assertEqual(self.start(exc=PermissionError("denied"))[0], "denied")
         # runner.run turns a missing binary / a timeout into rc 127 / 124 instead of raising
-        self.assertEqual(self.start(cp(127, "", "No such file"))[0], "找不到 codex 指令")
+        self.assertEqual(self.start(cp(127, "", ""))[0], "找不到 codex 指令")
+        self.assertEqual(self.start(cp(127, "", "[Errno 2] No such file or directory: 'codex'"))[0],
+                         "找不到 codex 指令")
+
+    def test_start_daemon_127_from_a_missing_interpreter_keeps_its_reason(self):
+        self.assertEqual(self.start(cp(127, "", "env: node: No such file or directory\n"))[0],
+                         "env: node: No such file or directory")
 
     def test_start_daemon_timeout(self):
         self.assertEqual(self.start(exc=subprocess.TimeoutExpired(["codex"], 15))[0], "逾時 15 秒")

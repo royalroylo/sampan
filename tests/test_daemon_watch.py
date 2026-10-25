@@ -133,7 +133,8 @@ class WatcherTest(unittest.TestCase):
                 time.sleep(0.01)
         finally:
             w.stop()
-        self.assertEqual(self.calls, [self.cfg.codex.home])
+        self.assertIn(self.cfg.codex.home, self.calls)  # a failed auto-start re-reads once more
+        self.assertEqual(set(self.calls), {self.cfg.codex.home})
         self.assertIsNone(w.latest)
         self.assertFalse(w._thread.is_alive())
         w.stop()  # twice is fine
@@ -231,7 +232,7 @@ class AutoStartTest(unittest.TestCase):
             return start_result
         self.run = FakeRunner(strict=True)
         return DaemonWatcher(cfg or self.cfg, self.run, snapshot_fn=snapshot_fn, now_fn=lambda: NOW,
-                             start_fn=start_fn or fake_start)
+                             start_fn=start_fn or fake_start, retry_wait=0.01)
 
     def test_first_read_starts_once_when_down_then_rereads(self):
         s = snap(self.cfg.codex.home)
@@ -247,6 +248,62 @@ class AutoStartTest(unittest.TestCase):
         w.first_read()
         self.assertEqual((w.start_state, w.start_error), ("failed", "找不到 codex 指令"))
         self.assertIsNone(w.latest)
+
+    def test_failed_start_still_rereads(self):
+        s = snap(self.cfg.codex.home)
+        w = self.make([None, s], "boom")
+        w.first_read()
+        self.assertEqual(self.reads, 2)
+        self.assertIs(w.latest, s)
+        self.assertIsNone(w.start_state)  # the daemon is up anyway: no failed note
+
+    def test_failed_start_and_still_down_keeps_failed(self):
+        w = self.make([None], "boom")
+        w.first_read()
+        self.assertEqual((w.start_state, w.start_error, self.reads), ("failed", "boom", 2))
+
+    def test_old_failed_does_not_return_after_recovery(self):
+        s = snap(self.cfg.codex.home)
+        w = self.make([None, None, s, None], "boom")
+        w.first_read()
+        self.assertEqual(w.start_state, "failed")
+        w.poll_once()  # recovered
+        self.assertIsNone(w.start_state)
+        w.poll_once()  # dies again
+        self.assertIsNone(w.latest)
+        self.assertIsNone(w.start_state)
+
+    def test_ok_start_with_socket_not_ready_gets_one_extra_read(self):
+        s = snap(self.cfg.codex.home)
+        w = self.make([None, None, s])
+        seen = []
+        orig = w.snapshot_fn
+        w.snapshot_fn = lambda *a, **k: (seen.append(w.start_state), orig(*a, **k))[1]
+        w.first_read()
+        self.assertEqual(self.reads, 3)
+        self.assertIs(w.latest, s)
+        self.assertEqual(seen, [None, "starting", "starting"])
+        self.assertIsNone(w.start_state)
+
+    def test_extra_read_happens_only_once(self):
+        w = self.make([None])
+        w.first_read()
+        self.assertEqual(self.reads, 3)
+
+    def test_stop_during_the_extra_wait_returns_fast_and_skips_the_read(self):
+        w = self.make([None])
+        w.retry_wait = 10
+        w.start()
+        deadline = time.monotonic() + 2
+        while self.reads < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(self.reads, 2)
+        t0 = time.monotonic()
+        w.stop()
+        self.assertLess(time.monotonic() - t0, 1.0)
+        time.sleep(0.1)
+        self.assertEqual(self.reads, 2)
+        self.assertIsNone(w.start_state)
 
     def test_first_read_start_ok_but_still_down_does_not_retry(self):
         w = self.make([None])

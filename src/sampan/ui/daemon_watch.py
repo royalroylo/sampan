@@ -11,6 +11,7 @@ from .. import codex_daemon
 from ..usage import record_codex
 
 DAEMON_S = 30  # seconds between two reads of the daemon
+RETRY_WAIT_S = 2  # after a start that returned 0 but left the socket not ready: one more read this much later
 STATE_LABEL = {"approval": "等你核准", "input": "等你輸入", "error": "錯誤", "working": "執行中", "idle": "閒置",
                "notloaded": "未開啟", "unknown": "?"}
 SEVERITY = ("approval", "input", "error", "working", "idle", "notloaded", "unknown")  # most urgent first
@@ -60,9 +61,9 @@ class DaemonWatcher:
     `cfg` may be replaced while running (the ui re-reads config.toml); each poll uses the current one."""
 
     def __init__(self, cfg, run, *, snapshot_fn=codex_daemon.snapshot, now_fn=_now, clock=time.monotonic,
-                 interval=DAEMON_S, start_fn=codex_daemon.start_daemon):
+                 interval=DAEMON_S, start_fn=codex_daemon.start_daemon, retry_wait=RETRY_WAIT_S):
         self.cfg, self.run, self.snapshot_fn, self.now_fn = cfg, run, snapshot_fn, now_fn
-        self.clock, self.interval, self.start_fn = clock, interval, start_fn
+        self.clock, self.interval, self.start_fn, self.retry_wait = clock, interval, start_fn, retry_wait
         self.start_state = None  # None (not tried / succeeded / over) | "starting" | "failed"
         self.start_error = None  # one-line reason while start_state == "failed"
         self._tried = False  # at most one start per watcher (= per opening of the ui)
@@ -88,6 +89,8 @@ class DaemonWatcher:
                         record_codex(cfg, p.name, snap.usage)
                     except OSError:
                         pass
+        if snap is not None:
+            self.start_state = None  # a daemon that answers ends any start note; an old "failed" must not return later
         self.latest = snap  # published only after the reading is saved, so the account lines never lag behind it
         self.polled = True
         return snap
@@ -107,12 +110,14 @@ class DaemonWatcher:
             reason = str(e) or type(e).__name__
         if reason is None:
             try:
-                self.poll_once()  # stay "starting" until the re-read is in, so the ui never flickers to "down"
-            finally:
+                if self.poll_once() is None and not self._stop.wait(self.retry_wait):
+                    self.poll_once()  # the socket may need a moment after a start that returned 0; one bounded retry
+            finally:  # stay "starting" until the reads are in, so the ui never flickers to "down"
                 self.start_state = None
         else:
             self.start_error = reason  # before the state, so the ui never sees "failed" without a reason
             self.start_state = "failed"
+            self.poll_once()  # the daemon may be up anyway (e.g. it was starting itself)
 
     def _loop(self):
         step = self.first_read  # the first round may start the daemon; later rounds only read
