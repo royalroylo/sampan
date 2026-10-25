@@ -734,8 +734,12 @@ def curses_ui(cfg, run, out, *, current_session=None, own_pane=None, exec_fn=os.
     watcher (daemon_watch.DaemonWatcher, None = none) is started here and stopped when the ui ends, however it ends."""
     pending, box = [], {}
 
+    def ui_rows(c, r):  # the daemon is read by the watcher thread only: never on the ui thread
+        return status_rows(c, r, snapshot_fn=lambda *a, **k: watcher.latest if watcher is not None else None)
+    rows_fn = kw.get("rows_fn", ui_rows)
+
     def main(scr):
-        screen = box["screen"] = CursesScreen(scr, cfg, run, rows_fn=kw.get("rows_fn", status_rows), own_pane=own_pane,
+        screen = box["screen"] = CursesScreen(scr, cfg, run, rows_fn=rows_fn, own_pane=own_pane,
                                               updater=updater, interactive=lambda args, env: run_outside(scr, args, env),
                                               watcher=watcher)
 
@@ -751,6 +755,7 @@ def curses_ui(cfg, run, out, *, current_session=None, own_pane=None, exec_fn=os.
                     choose_dir_fn=lambda start, *, allow_missing: screen.choose_dir(
                         start, home=str(cfg.home), allow_missing=allow_missing,
                         title="選搬過去的目錄" if allow_missing else "選工作目錄", **dir_context(screen.cfg)))
+        opts.update(rows_fn=rows_fn)
         opts.update(kw)
         return cmd_ui(cfg, run, screen.out, screen.ask, current_session=current_session, own_pane=own_pane,
                       updater=updater, **opts)

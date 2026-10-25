@@ -74,14 +74,14 @@ def _at_trust_prompt(tmux, panes, session, agent):
     return any(at_trust_prompt(tmux.capture(p.pane_id), agent) for p in panes if p.session == session)
 
 
-def status_rows(cfg, run):
+def status_rows(cfg, run, snapshot_fn=None):
     rows = {r.tmux: r for r in load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)}
     tmux = Tmux(run)
     panes = tmux.panes()
     if panes is None:
         return _unreadable_rows(cfg, rows, unreadable_message(tmux.unreadable_reason))
     procs = list_procs(run)
-    found, _w = live_by_pane(cfg, run, panes, procs)
+    found, _w = live_by_pane(cfg, run, panes, procs, snapshot_fn=snapshot_fn)
     multi = multi_agent_sessions(procs, panes, found)
     live_by_session = {}
     for p in panes:

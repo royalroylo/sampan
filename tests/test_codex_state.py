@@ -325,18 +325,19 @@ class LiveCodexTest(unittest.TestCase):
 
     # --- daemon-hosted TUI threads (Codex 0.164+) ---
 
-    def daemon_snap(self, threads, loaded=()):
+    def daemon_snap(self, threads, loaded=(), home=None):
         from datetime import datetime, timezone
 
         from sampan.codex_daemon import DaemonSnapshot
         at = datetime(2026, 10, 25, tzinfo=timezone.utc)
-        return DaemonSnapshot(self.home, None, tuple(threads), frozenset(loaded), at)
+        return DaemonSnapshot(home or self.home, None, tuple(threads), frozenset(loaded), at)
 
-    def thread(self, tid, cwd="/Users/u/proj", originator="codex-tui", status="idle"):
+    def thread(self, tid, cwd="/Users/u/proj", originator="codex-tui", status="idle", updated=None):
         from datetime import datetime, timezone
 
         from sampan.codex_daemon import CodexThread
-        return CodexThread(tid, "", cwd, originator, "vscode", None, status, (), datetime(2026, 10, 25, tzinfo=timezone.utc), None)
+        return CodexThread(tid, "", cwd, originator, "vscode", None, status, (),
+                           datetime.fromtimestamp(updated if updated is not None else 4_000_000_000, timezone.utc), None)
 
     def live(self, run, panes, snap_fn, now=10_000.0):
         return live_codex(self.cfg, run, panes, self.procs(), now=now, snapshot_fn=snap_fn)
@@ -397,6 +398,40 @@ class LiveCodexTest(unittest.TestCase):
         self.assertIsNone(found["%2"].thread_id)
         self.assertIsNone(found["%3"].thread_id)
         self.assertEqual(len(warnings), 2)
+
+    def test_live_codex_daemon_ignores_thread_older_than_the_process(self):
+        make_db(self.home, [])
+        run = self.runner({"211": "05:00"})  # started at 10_000 - 300
+        snap = self.daemon_snap([self.thread(TID2, updated=10_000 - 3600)], loaded=[TID2])
+        found, warnings = self.live(run, self.panes()[1:2], lambda home, run, now: snap)
+        self.assertEqual((found["%2"].thread_id, warnings), (None, []))
+        snap = self.daemon_snap([self.thread(TID2, updated=10_000 - 299)], loaded=[TID2])  # touched after the start
+        found, _ = self.live(run, self.panes()[1:2], lambda home, run, now: snap)
+        self.assertEqual(found["%2"].thread_id, TID2)
+
+    def test_live_codex_daemon_snapshot_of_another_home_is_ignored(self):
+        make_db(self.home, [])
+        run = self.runner({"211": "05:00"})
+        snap = self.daemon_snap([self.thread(TID2)], loaded=[TID2], home=Path(self.tmp.name) / "elsewhere")
+        found, warnings = self.live(run, self.panes()[1:2], lambda home, run, now: snap)
+        self.assertEqual((found["%2"].thread_id, warnings), (None, []))
+
+    def test_live_codex_daemon_skipped_when_start_time_unknown(self):
+        make_db(self.home, [])
+        run = self.runner({})
+        run.on(["ps", "-o", "etime="], cp(rc=1))
+        calls = []
+        found, _ = self.live(run, self.panes()[1:2], lambda *a, **k: calls.append(a))
+        self.assertEqual((found["%2"].thread_id, calls), (None, []))
+
+    def test_live_codex_daemon_extra_thread_outside_tmux_is_ambiguous(self):
+        make_db(self.home, [])
+        run = self.runner({"211": "05:00"})
+        # TID3 is a codex-tui running in a plain terminal in the same directory; only one tmux pane could own either
+        snap = self.daemon_snap([self.thread(TID2), self.thread(TID3)], loaded=[TID2, TID3])
+        found, warnings = self.live(run, self.panes()[1:2], lambda home, run, now: snap)
+        self.assertIsNone(found["%2"].thread_id)
+        self.assertEqual(len(warnings), 1)
 
     def test_live_codex_daemon_unavailable_changes_nothing(self):
         make_db(self.home, [])

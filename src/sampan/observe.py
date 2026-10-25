@@ -84,10 +84,11 @@ def _claude_by_pane(cfg, run, panes, procs, proc_root):
     return found, warnings
 
 
-def live_by_pane(cfg, run, panes, procs, proc_root=PROC_ROOT):
+def live_by_pane(cfg, run, panes, procs, proc_root=PROC_ROOT, snapshot_fn=None):
     """Map pane id → LiveAgent (claude or codex)."""
     found, warnings = _claude_by_pane(cfg, run, panes, procs, proc_root)
-    codex, codex_warnings = live_codex(cfg, run, [p for p in panes if p.pane_id not in found], procs)
+    codex, codex_warnings = live_codex(cfg, run, [p for p in panes if p.pane_id not in found], procs,
+                                       snapshot_fn=snapshot_fn)
     warnings += codex_warnings
     tmux = Tmux(run)
     for pane_id, lc in codex.items():

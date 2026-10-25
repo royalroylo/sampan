@@ -142,13 +142,18 @@ def threads_fallback(codex_home, cwd, started_at, exclude):
     return diffs[0][1]
 
 
-def daemon_fallback(snap, cwd, exclude):
-    """Live codex-tui threads the daemon reports in cwd that no other pane has: a thread id, AMBIGUOUS when there are
-    several, None when none. For a pane whose process start time says nothing (a `/new` long after launch)."""
+def daemon_fallback(snap, cwd, exclude, started_at, panes_in_cwd=1):
+    """Live codex-tui threads the daemon reports in cwd that no other pane has and that were touched since this process
+    started (a stale thread of an earlier TUI is not this pane's): a thread id, AMBIGUOUS when there are several or more
+    than the tmux panes that could own them (one runs outside tmux), None when none. For a pane whose db row is not
+    near its start time (a `/new` long after launch)."""
     cwds = {cwd, os.path.realpath(cwd)}
     ids = sorted({t.id for t in snap.threads
                   if t.originator == "codex-tui" and t.id not in exclude and (t.id in snap.loaded or t.status in ("active", "idle"))
-                  and (t.cwd in cwds or os.path.realpath(t.cwd) in cwds)})
+                  and (t.cwd in cwds or os.path.realpath(t.cwd) in cwds)
+                  and t.updated_at.timestamp() >= started_at - TIE_TOLERANCE})
+    if len(ids) > max(1, panes_in_cwd):
+        return AMBIGUOUS
     return ids[0] if len(ids) == 1 else AMBIGUOUS if ids else None
 
 
@@ -178,17 +183,18 @@ def live_codex(cfg, run, panes, procs, now=None, snapshot_fn=None):
         if tid is None:
             pending.append(pane)
     bound = {lc.thread_id for lc in found.values() if lc.thread_id}
-    guesses = {}
+    guesses, started_at = {}, {}
     for pane in pending:
-        started = _started_at(run, found[pane.pane_id].pid, now)
+        started = started_at[pane.pane_id] = _started_at(run, found[pane.pane_id].pid, now)
         guesses[pane.pane_id] = threads_fallback(home, pane.path, started, bound) if started is not None else None
-    unresolved = [p for p in pending if guesses[p.pane_id] is None]
+    unresolved = [p for p in pending if guesses[p.pane_id] is None and started_at[p.pane_id] is not None]
     if unresolved:  # the only daemon call: nothing is read for a machine with no Codex pane, or when lsof / db found all
         snap = (snapshot_fn or codex_daemon.snapshot)(home, run, now=datetime.fromtimestamp(now, timezone.utc))
-        if snap is not None:
+        if snap is not None and os.path.realpath(snap.home) == os.path.realpath(home):  # another CODEX_HOME's threads are not ours
             taken = bound | {t for t in guesses.values() if t and t != AMBIGUOUS}
             for pane in unresolved:
-                guesses[pane.pane_id] = daemon_fallback(snap, pane.path, taken)
+                same = sum(1 for p in unresolved if os.path.realpath(p.path) == os.path.realpath(pane.path))
+                guesses[pane.pane_id] = daemon_fallback(snap, pane.path, taken, started_at[pane.pane_id], same)
     counts = Counter(t for t in guesses.values() if t and t != AMBIGUOUS)
     warnings = []
     for pane in pending:

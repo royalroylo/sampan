@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from . import codex_daemon
 from .claude_state import transcript_problem
 from .codex_state import _is_codex, find_rollout
 from .launch import launch_line, send_line
@@ -188,9 +189,15 @@ def _watch(cfg, run, launched, timeout, sleep, out=lambda _l: None, relay=None):
     tmux = Tmux(run)
     pending = dict(launched)  # pane id → Row
     resumed, at_trust = [], []
+    memo, i = {}, 0
+
+    def snapshot(*a, **k):  # the daemon is read at most every 5th round (rounds are ~1 s apart)
+        if i % 5 == 0 or "snap" not in memo:
+            memo["snap"] = codex_daemon.snapshot(*a, **k)
+        return memo["snap"]
     for i in range(timeout + 1):
         panes = tmux.panes()  # unreadable only affects the "reattached" judgement (counted as unconfirmed) and causes nothing extra to be done
-        found, _w = live_by_pane(cfg, run, panes if panes is not None else [], list_procs(run))
+        found, _w = live_by_pane(cfg, run, panes if panes is not None else [], list_procs(run), snapshot_fn=snapshot)
         for pane_id, row in list(pending.items()):
             screen = tmux.capture(pane_id)
             if relay is not None:

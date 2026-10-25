@@ -22,7 +22,7 @@ from sampan.ui import (
     show_state,
     text_width,
 )
-from tests.fakes import FakeRunner, cp, pane_line
+from tests.fakes import FakeRunner, cp, pane_line, ps_line
 from tests.helpers import TOML, make_env, status_row
 
 NOW = datetime(2026, 10, 20, 14, 17, tzinfo=timezone.utc)
@@ -701,6 +701,20 @@ class CodexOthersScreenTest(unittest.TestCase):
         from sampan.ui.codex_others import DAEMON_DOWN
         self.pick(["q"], latest=None)  # an enabled Codex profile, but only Claude rows in the list
         self.assertNotIn(DAEMON_DOWN, "\n".join(self.scr.screens[0]))
+
+    def test_ui_reload_never_reads_the_daemon_itself(self):
+        # a Codex pane whose thread is unresolved must not make the ui thread talk to the daemon: the watcher does that
+        from unittest import mock
+
+        from sampan import codex_daemon
+        from sampan.ui.screen import curses_ui
+        r = FakeRunner()
+        r.on(["tmux", "-u", "list-panes"], cp(out=pane_line("cx", "%1", 100, "codex", "/w/proj") + "\n"))
+        r.on(["ps", "-A"], cp(out=f"{ps_line(100, 1, '-zsh', '-zsh')}\n{ps_line(101, 100, 'codex', 'codex')}\n"))
+        r.on(["ps", "-o", "etime="], cp(out="05:00\n"))
+        with mock.patch.object(codex_daemon, "snapshot", side_effect=AssertionError("daemon read on the ui thread")):
+            curses_ui(self.cfg, r, lambda _l: None, wrapper=lambda fn: fn(FakeScr(["q"])), watcher=FakeWatcher(None))
+        self.assertTrue(r.called(["ps", "-o", "etime="]))  # the pane really was unresolved after lsof
 
     def test_block_fits_any_width(self):
         self.snap = daemon_snap([desk_thread("d1", "很長的對話名稱" * 6, "active", ["waitingOnApproval"])])
