@@ -151,7 +151,7 @@ def _line(cfg, pr, usage_str=""):
 
 
 def _usage(cfg, p):
-    return usage.codex_usage(p) if p.agent == "codex" else usage.claude_usage(cfg, p.name)
+    return usage.codex_profile_usage(cfg, p) if p.agent == "codex" else usage.claude_usage(cfg, p.name)
 
 
 def cmd_profile_list(cfg, run, out, *, env=None, now=None):

@@ -5,7 +5,7 @@ from .. import statusline_setup as sl
 from ..init import _disp
 from ..registry import RegistryError
 from ..status import State, status_rows
-from ..usage import usage_text
+from ..usage import usage_alert, usage_text
 from .actions import _ask
 from .plugin_actions import reload_config
 from .text import pad, text_width
@@ -27,8 +27,9 @@ def _display_name(p):
 
 
 def account_lines(cfg, rows, now, usage_fn=None):
-    """One line per enabled profile, in config order: 「{名稱} {N} 個執行中」 plus 「・{額度}」 when there is one;
-    Codex names carry 「（Codex）」. N counts the RUNNING rows of that profile and agent.
+    """One (text, style) per enabled profile, in config order: 「{名稱} {N} 個執行中」 plus 「・{額度}」 when there is one;
+    Codex names carry 「（Codex）」. N counts the RUNNING rows of that profile and agent. style is usage_alert
+    ("err" / "warn"), "muted" when there is no alert.
     usage_fn(cfg, profile) -> Usage | None (default profile_usage)."""
     usage_fn = usage_fn or profile_usage
     out = []
@@ -36,8 +37,9 @@ def account_lines(cfg, rows, now, usage_fn=None):
         if p.disabled:
             continue
         n = sum(1 for r in rows if r.state is State.RUNNING and r.profile == p.name and r.agent == p.agent)
-        text = usage_text(usage_fn(cfg, p), now)
-        out.append(f"{_display_name(p)} {n} 個執行中" + (f"・{text}" if text else ""))
+        u = usage_fn(cfg, p)
+        text = usage_text(u, now)
+        out.append((f"{_display_name(p)} {n} 個執行中" + (f"・{text}" if text else ""), usage_alert(u, now) or "muted"))
     return out
 
 
@@ -75,8 +77,10 @@ def card_lines(cfg, pr, now, usage_fn=None):
     fields = [("目錄", _disp(pr.config_dir, cfg.home)), ("帳號", pr.account), ("label", pr.label or "—")]
     if pr.plugins is not None:
         fields.append(("plugin 數", str(pr.plugins)))
-    fields += [("額度", usage_text(usage_fn(cfg, p), now) or "—"), ("狀態列", statusline_state(p))]
-    return [head, "─" * 30] + [((pad(k, LABEL_W), "label"), (v, "")) for k, v in fields]
+    u = usage_fn(cfg, p)
+    fields += [("額度", usage_text(u, now) or "—", usage_alert(u, now)), ("狀態列", statusline_state(p), "")]
+    return [head, "─" * 30] + [((pad(k, LABEL_W), "label"), (v, st)) for k, v, st in
+                               [f if len(f) == 3 else (*f, "") for f in fields]]
 
 
 def load_rows(cfg, run, out, rows_fn=status_rows):

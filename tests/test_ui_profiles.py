@@ -48,13 +48,36 @@ class AccountLinesTest(unittest.TestCase):
                 status_row("d", profile="old"), status_row("x", State.STOPPED, agent="codex", profile="codex")]
         with local_tz("Asia/Taipei"):
             lines = pa.account_lines(self.cfg, rows, NOW, usage_fn=usage_of({"alice": ALICE_USAGE}))
-        self.assertEqual(lines, ["alice 2 個執行中・5h 42%・週 18%（12:00）", "work 0 個執行中",
-                                 "codex（Codex） 0 個執行中"])
+        self.assertEqual(lines, [("alice 2 個執行中・5h 42%・週 18%（12:00）", "muted"),  # read 30 min ago: time shown
+                                 ("work 0 個執行中", "muted"),
+                                 ("codex（Codex） 0 個執行中", "muted")])
+
+    def test_account_lines_styles(self):
+        def u(used):
+            return Usage(Window(used, NOW + timedelta(hours=2)), None, NOW)
+        lines = pa.account_lines(self.cfg, [], NOW, usage_fn=usage_of({"alice": u(100), "work": u(85), "codex": u(10)}))
+        self.assertEqual([st for _t, st in lines], ["err", "warn", "muted"])
+        self.assertTrue(lines[0][0].startswith("alice 0 個執行中・⛔ 5h 已用完"))
+        self.assertTrue(lines[1][0].startswith("work 0 個執行中・⚠ 5h 85%"))
+
+    def test_render_accounts_style(self):
+        args = dict(title="s", left=[("s1",)], cursor=0, card=[], help="q", cols=(), width=60, height=12)
+        frame = render(**args, accounts=[("x 1", "err"), "y 2"])
+        styles = {line[0][0].strip(): line[0][1] for line in frame if line[0][0].strip() in ("x 1", "y 2")}
+        self.assertEqual(styles, {"x 1": "err", "y 2": "muted"})
+
+    def test_profile_card_usage_style(self):
+        pr = pa.load_rows(self.cfg, runner(), lambda _l: None, rows_fn=lambda c, r: [])[0]
+        for used, want in ((100, "err"), (85, "warn"), (10, "")):
+            u = Usage(Window(used, NOW + timedelta(hours=2)), None, NOW)
+            lines = pa.card_lines(self.cfg, pr, NOW, usage_fn=lambda c, p, u=u: u)
+            style, = [vs for (label, _s), (_v, vs) in lines[2:] if label.strip() == "額度"]
+            self.assertEqual(style, want)
 
     def test_codex_running_counts_only_codex_rows(self):
         rows = [status_row("x", agent="codex", profile="codex"), status_row("y", profile="codex")]
         lines = pa.account_lines(self.cfg, rows, NOW, usage_fn=usage_of({}))
-        self.assertEqual(lines[-1], "codex（Codex） 1 個執行中")
+        self.assertEqual(lines[-1], ("codex（Codex） 1 個執行中", "muted"))
 
     def test_render_accounts_between_list_and_messages_and_kept_when_small(self):
         args = dict(title="sampan", left=[("s1",), ("s2",), ("s3",)], cursor=0, card=[], help="q 離開", cols=(),
@@ -129,7 +152,7 @@ class MainListTest(Base):
         with local_tz("Asia/Taipei"):
             self.assertEqual(s.pick([status_row("a")], None), ("quit", []))
         last = self.frames()[-1]
-        self.assertIn(" alice 1 個執行中・5h 42%・週 18%（12:00）", last)
+        self.assertIn(" alice 1 個執行中・5h 42%・週 18%", last)
         self.assertIn(" work 0 個執行中", last)
         self.assertIn(" codex（Codex） 0 個執行中", last)
         self.assertNotIn("old", last)

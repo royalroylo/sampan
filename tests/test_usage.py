@@ -62,7 +62,7 @@ class ClaudeUsageTest(Base):
         self.assertEqual(saved["week"], {"used": 18, "resets_at": LATER})
         u = usage.claude_usage(self.cfg, "alice")
         with local_tz("Asia/Taipei"):
-            self.assertEqual(usage.usage_text(u, NOW), "5h 42%・週 18%（12:00）")
+            self.assertEqual(usage.usage_text(u, NOW), "5h 42%・週 18%")
             # not today any more: month/day too
             self.assertEqual(usage.usage_text(u, NOW + timedelta(days=1)), "5h 42%・週 18%（10/24 12:00）")
 
@@ -81,13 +81,13 @@ class ClaudeUsageTest(Base):
         u = usage.claude_usage(self.cfg, "alice")
         self.assertIsNone(u.week)
         with local_tz("Asia/Taipei"):
-            self.assertEqual(usage.usage_text(u, NOW), "5h 42%（12:00）")
+            self.assertEqual(usage.usage_text(u, NOW), "5h 42%")
 
     def test_expired_window_dropped(self):
         usage.record_claude(self.cfg, "alice", claude_data(five=91.6, five_reset=PAST), NOW)
         u = usage.claude_usage(self.cfg, "alice")
         with local_tz("Asia/Taipei"):
-            self.assertEqual(usage.usage_text(u, NOW), "週 18%（12:00）")
+            self.assertEqual(usage.usage_text(u, NOW), "週 18%")
         usage.record_claude(self.cfg, "alice", claude_data(five_reset=PAST, week_reset=PAST), NOW)
         self.assertEqual(usage.usage_text(usage.claude_usage(self.cfg, "alice"), NOW), "")
 
@@ -168,6 +168,96 @@ class CodexUsageTest(Base):
         self.assertIsNone(usage.codex_usage(self.profile()))
 
 
+def win(used, hours):
+    return usage.Window(used, NOW + timedelta(hours=hours))
+
+
+class AlertTextTest(Base):
+    def u(self, five=None, week=None, at=NOW, reached=False):
+        return usage.Usage(five, week, at, reached)
+
+    def test_usage_text_exhausted(self):
+        u = self.u(win(100, 0.5), win(73, 72))
+        with local_tz("Asia/Taipei"):
+            self.assertEqual(usage.usage_text(u, NOW), "⛔ 5h 已用完（12:30 重置）・週 73%")
+        self.assertEqual(usage.usage_alert(u, NOW), "err")
+
+    def test_usage_text_warn_orders_worst_first(self):
+        u = self.u(win(40, 2), usage.Window(85, datetime(2026, 10, 27, 1, 10, tzinfo=timezone.utc)))
+        with local_tz("Asia/Taipei"):
+            self.assertEqual(usage.usage_text(u, NOW), "⚠ 週 85%（10/27 09:10 重置）・5h 40%")
+        self.assertEqual(usage.usage_alert(u, NOW), "warn")
+
+    def test_below_threshold_has_no_alert(self):
+        u = self.u(win(79, 2), win(18, 72))
+        self.assertEqual((usage.usage_text(u, NOW), usage.usage_alert(u, NOW)), ("5h 79%・週 18%", ""))
+
+    def test_reached_without_full_window(self):
+        u = self.u(win(98, 0.5), win(60, 72), reached=True)
+        with local_tz("Asia/Taipei"):
+            self.assertEqual(usage.usage_text(u, NOW), "⛔ 5h 已用完（12:30 重置）・週 60%")
+        self.assertEqual(usage.usage_alert(u, NOW), "err")
+
+    def test_reached_without_any_window(self):
+        u = self.u(None, None, reached=True)
+        self.assertEqual((usage.usage_text(u, NOW), usage.usage_alert(u, NOW)), ("⛔ 已用完", "err"))
+
+    def test_reached_but_all_windows_past_reset_is_not_reached(self):
+        u = self.u(win(100, -1), win(50, -2), reached=True)
+        self.assertEqual((usage.usage_text(u, NOW), usage.usage_alert(u, NOW)), ("", ""))
+
+    def test_stale_reading_time_appended(self):
+        with local_tz("Asia/Taipei"):
+            old = self.u(win(40, 2), None, at=NOW - timedelta(minutes=10))
+            self.assertEqual(usage.usage_text(old, NOW), "5h 40%（11:50）")
+            fresh = self.u(win(40, 2), None, at=NOW - timedelta(minutes=1))
+            self.assertEqual(usage.usage_text(fresh, NOW), "5h 40%")
+
+    def test_alert_clears_after_reset(self):
+        u = self.u(win(100, -1), win(30, 72))
+        self.assertEqual((usage.usage_alert(u, NOW), usage.usage_text(u, NOW)), ("", "週 30%"))
+        self.assertEqual((usage.usage_alert(None, NOW), usage.usage_text(None, NOW)), ("", ""))
+
+
+class CodexSavedTest(Base):
+    def profile(self):
+        return self.cfg.all_profiles["codex"]
+
+    def rollout(self, ts, used):
+        d = self.profile().config_dir / "sessions" / "2026" / "10" / "24"
+        d.mkdir(parents=True)
+        five = {"used_percent": used, "window_minutes": 300, "resets_at": SOON}
+        (d / "rollout-a.jsonl").write_text(codex_line(ts, "codex", five, None) + "\n")
+
+    def saved(self, at, used):
+        usage.record_codex(self.cfg, "codex", usage.Usage(win(used, 3), None, at))
+
+    def test_codex_usage_prefers_newer_saved_reading(self):
+        self.rollout("2026-10-24T04:07:00Z", 77)
+        self.saved(datetime(2026, 10, 24, 9, 0, tzinfo=timezone.utc), 100)
+        self.assertEqual(usage.codex_profile_usage(self.cfg, self.profile()).five_hour.used, 100)
+        self.saved(datetime(2026, 10, 24, 3, 0, tzinfo=timezone.utc), 50)
+        self.assertEqual(usage.codex_profile_usage(self.cfg, self.profile()).five_hour.used, 77)
+
+    def test_codex_usage_either_missing(self):
+        self.assertIsNone(usage.codex_profile_usage(self.cfg, self.profile()))
+        self.saved(NOW, 10)
+        self.assertEqual(usage.codex_profile_usage(self.cfg, self.profile()).five_hour.used, 10)
+
+    def test_record_codex_is_private_and_atomic(self):
+        usage.record_codex(self.cfg, "codex", usage.Usage(win(100, 3), win(20, 72), NOW, reached=True))
+        path = usage.usage_path(self.cfg, "codex")
+        self.assertEqual((path.stat().st_mode & 0o777, path.parent.stat().st_mode & 0o777), (0o600, 0o700))
+        self.assertEqual([f.name for f in path.parent.iterdir()], ["codex.json"])
+        u = usage.saved_usage(self.cfg, "codex")
+        self.assertEqual((u.five_hour.used, u.week.used, u.reached, u.at), (100, 20, True, NOW))
+        self.assertIs(usage.claude_usage, usage.saved_usage)
+
+    def test_saved_reached_only_reading(self):
+        usage.record_codex(self.cfg, "codex", usage.Usage(None, None, NOW, reached=True))
+        self.assertTrue(usage.saved_usage(self.cfg, "codex").reached)
+
+
 class StatuslineTest(Base):
     def setUp(self):
         super().setUp()
@@ -240,7 +330,7 @@ class StatuslineTest(Base):
             rc = self.sl(self.cfg, self.msgs.append, [], stdin=stdin, env=self.env(), run_wrapped=run,
                                       now=NOW)
         self.assertEqual(rc, 0)
-        self.assertEqual(self.msgs, ["Opus · /w/proj（main）· context 37% · 5h 42%・週 18%（12:00）"])
+        self.assertEqual(self.msgs, ["Opus · /w/proj（main）· context 37% · 5h 42%・週 18%"])
         argv, kw = run.calls[0]
         self.assertEqual(argv, ["git", "-C", "/w/proj", "branch", "--show-current"])
         self.assertEqual(kw["timeout"], 1)

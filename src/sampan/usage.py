@@ -11,6 +11,8 @@ from pathlib import Path
 from .fsutil import PRIVATE_FILE, atomic_write, private_dir
 
 CODEX_TAIL = 256 * 1024  # bytes of the newest rollout read from its end
+STALE_S = 300  # a reading older than this gets its time shown
+WARN_AT = 80  # percent: ⚠ from here, ⛔ at 100
 CODEX_WINDOWS = {300: "five_hour", 10080: "week"}  # window_minutes → field (R3: never by primary/secondary position)
 
 
@@ -68,6 +70,18 @@ def record_claude(cfg, profile, data, now):
     atomic_write(path, text + "\n", mode=PRIVATE_FILE)
 
 
+def record_codex(cfg, profile, u):
+    """Save a Codex reading (from the daemon) to usage/<profile>.json: same shape as record_claude's plus "reached"
+    (dir 700, file 600, atomic). Windows are stored as {"used", "resets_at" (epoch seconds)}."""
+    def dump(w):
+        return None if w is None else {"used": w.used, "resets_at": w.resets_at.timestamp()}
+    path = usage_path(cfg, profile)
+    private_dir(path.parent)
+    text = json.dumps({"at": u.at.isoformat(timespec="seconds"), "five_hour": dump(u.five_hour),
+                       "week": dump(u.week), "reached": bool(u.reached)})
+    atomic_write(path, text + "\n", mode=PRIVATE_FILE)
+
+
 def move_usage(cfg, old, new):
     """Follow a profile rename (new) or forget (new None) with sampan's own usage/<old>.json; returns an error or None."""
     path = usage_path(cfg, old)
@@ -85,8 +99,9 @@ def _load_window(raw):
     return _window(raw.get("used"), raw.get("resets_at")) if isinstance(raw, dict) else None
 
 
-def claude_usage(cfg, profile):
-    """The last reading sampan statusline recorded for this profile; None when there is none or it can't be read."""
+def saved_usage(cfg, profile):
+    """The last reading sampan saved for this profile (statusline for Claude, the daemon for Codex); None when there
+    is none or it can't be read."""
     try:
         saved = json.loads(usage_path(cfg, profile).read_text())
         at = datetime.fromisoformat(saved["at"])
@@ -97,7 +112,11 @@ def claude_usage(cfg, profile):
     if at.tzinfo is None:
         at = at.astimezone()
     five, week = _load_window(saved.get("five_hour")), _load_window(saved.get("week"))
-    return Usage(five, week, at) if five or week else None
+    reached = saved.get("reached") is True
+    return Usage(five, week, at, reached) if five or week or reached else None
+
+
+claude_usage = saved_usage  # older name; doctor and others still use it
 
 
 def _newest_rollout(codex_home):
@@ -162,18 +181,68 @@ def codex_usage(profile):
     return None
 
 
-def usage_text(u, now):
-    """「5h 42%・週 18%（17:20）」; the time is the reading's (month/day too when not today, local time).
-    A window past its resets_at is left out (its number no longer holds); nothing left → ""."""
+def codex_profile_usage(cfg, p):
+    """A Codex profile's usage: the saved daemon reading or the newest rollout's, whichever is newer."""
+    saved, rollout = saved_usage(cfg, p.name), codex_usage(p)
+    if saved is None or rollout is None:
+        return saved or rollout
+    return saved if saved.at >= rollout.at else rollout
+
+
+def _live(u, now):
+    """[(label, Window)] of the windows not yet past their reset."""
+    return [(label, w) for label, w in (("5h", u.five_hour), ("週", u.week)) if w is not None and w.resets_at > now]
+
+
+def _levels(u, now):
+    """([(label, window, level)], reached-without-window) with level 2 = used up, 1 = warning, 0 = fine.
+    reached with no window at 100%: the fullest window counts as used up."""
+    live = _live(u, now)
+    levels = [2 if w.used >= 100 else 1 if w.used >= WARN_AT else 0 for _l, w in live]
+    if u.reached and live and 2 not in levels:
+        levels[max(range(len(live)), key=lambda i: live[i][1].used)] = 2
+    return [(label, w, lv) for (label, w), lv in zip(live, levels)], u.reached and u.five_hour is None and u.week is None
+
+
+def usage_alert(u, now):
+    """"err" (a window used up, or the limit reached), "warn" (a window at 80% or more) or "". Windows past their
+    reset do not count."""
     if u is None:
         return ""
-    parts = [f"{label} {w.used:.0f}%" for label, w in (("5h", u.five_hour), ("週", u.week))
-             if w is not None and w.resets_at > now]
-    if not parts:
+    levels, bare = _levels(u, now)
+    top = max([lv for _l, _w, lv in levels] + [2 if bare else 0])
+    return ("", "warn", "err")[top]
+
+
+def _clock(t, now):
+    t = t.astimezone()
+    return t.strftime("%H:%M") if t.date() == now.astimezone().date() else t.strftime("%m/%d %H:%M")
+
+
+def usage_text(u, now):
+    """「5h 42%・週 18%」; from 80% 「⚠ 週 85%（10/27 09:10 重置）・5h 40%」, used up 「⛔ 5h 已用完（08:28 重置）・週 73%」
+    (worst window first, then 5h, 週; times local, with MM/DD when not today). The reading's time 「（HH:MM）」
+    is appended only when it is older than STALE_S. A window past its resets_at is left out; nothing left → ""."""
+    if u is None:
         return ""
-    at = u.at.astimezone()
-    when = at.strftime("%H:%M") if at.date() == now.astimezone().date() else at.strftime("%m/%d %H:%M")
-    return f"{'・'.join(parts)}（{when}）"
+    levels, bare = _levels(u, now)
+    if bare:
+        return "⛔ 已用完"
+    if not levels:
+        return ""
+    parts = []
+    for label, w, lv in sorted(levels, key=lambda x: -x[2]):  # stable: 5h before 週 at equal level
+        if lv == 2:
+            parts.append(f"{label} 已用完（{_clock(w.resets_at, now)} 重置）")
+        elif lv == 1:
+            parts.append(f"{label} {w.used:.0f}%（{_clock(w.resets_at, now)} 重置）")
+        else:
+            parts.append(f"{label} {w.used:.0f}%")
+    top = max(lv for _l, _w, lv in levels)
+    text = ("", "⚠ ", "⛔ ")[top] + "・".join(parts)
+    if (now - u.at).total_seconds() > STALE_S:
+        text += f"（{_clock(u.at, now)}）"
+    return text
 
 
 # ---------- sampan statusline ----------

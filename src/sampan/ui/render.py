@@ -159,7 +159,7 @@ def render(*, title, left, cursor, card, preview=None, messages=(), prompt=None,
     notice (e.g. the new-version hint) is a fixed line above the key help, kept to the end like the key help.
     extra ([(text, style)], e.g. the question and options of an agent startup prompt) goes under the message area and is also kept to the end.
     name_w, when given, is the name column width to cap at instead of the widest name in left (a filtered list keeps the full list's columns).
-    accounts (the main list's one line per profile) sit between the list area and the message area, kept to the end like notice."""
+    accounts (the main list's one line per profile, a str or (text, style)) sit between the list area and the message area, kept to the end like notice."""
     if width <= 0 or height <= 0:
         return []
     messages = list(messages)
@@ -168,7 +168,8 @@ def render(*, title, left, cursor, card, preview=None, messages=(), prompt=None,
     prompt_lines = [[(pad(" " + text, width), style)] for text, style in extra]
     prompt_lines += [[(pad(" " + prompt, width), "prompt")]] if prompt is not None else []
     prompt_lines += [[(pad(" " + notice, width), "attn")]] if notice else []
-    account_lines = [[(pad(" " + text, width), "muted")] for text in accounts]
+    account_lines = [[(pad(" " + a, width), "muted")] if isinstance(a, str) else [(pad(" " + a[0], width), a[1])]
+                     for a in accounts]
     room = height - 3 - len(prompt_lines) - len(account_lines)  # title, separator line, key help
     groups = [_wrap_message(m, width) for m in messages]
     wrapped = [piece for g in groups for piece in g]
