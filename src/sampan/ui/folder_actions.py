@@ -26,18 +26,12 @@ def _readable(cfg, out):
     return True
 
 
-def _complete(tree):
-    """Make every folder a session points at exist (load leaves implied folders out; the screen shows them)."""
-    for p in set(tree.sessions.values()):
-        F.add(tree, p)
-
-
 def _edit(cfg, out, ask, op):
     """F.edit with op(tree, merge). A taken name asks once whether to merge. Returns (rc, op's result or None)."""
     merge = False
     while True:
         try:
-            return 0, F.edit(cfg.state_dir, lambda t: (_complete(t), op(t, merge))[1])
+            return 0, F.edit(cfg.state_dir, lambda t: op(t, merge))
         except F.NameTaken as e:
             if merge:  # cannot happen with merge allowed; never hide it behind 已取消
                 out(f"❌ {e}")
@@ -72,9 +66,10 @@ def _name(out, ask, prompt):
 
 
 def save_collapsed(cfg, path, collapsed):
-    """Remember a folder's collapsed state. Silent on any failure: only the memory of it is lost."""
+    """Remember a folder's collapsed state. A folder gone since the last refresh (another sampan deleted it) is not
+    brought back. Silent on any failure: only the memory of it is lost."""
     try:
-        F.edit(cfg.state_dir, lambda t: (F.add(t, path), F.set_collapsed(t, path, collapsed)))
+        F.edit(cfg.state_dir, lambda t: path in t.folders and F.set_collapsed(t, path, collapsed))
     except Exception:  # noqa: BLE001  a broken or locked file must never disturb the list
         pass
 

@@ -1,7 +1,7 @@
 """Session folders: which folder each session sits in, kept apart from the registry (folders.json).
 
 Only the display layer reads this. `load` raises FoldersError for a file it cannot trust and nothing here ever writes
-over such a file; `resolve` makes a tree agree with the sessions that really exist. Operations are pure edits of a
+over such a file, and adds every folder a path implies (「客戶/甲」 makes 「客戶」 real); `resolve` makes a tree agree with the sessions that really exist. Operations are pure edits of a
 Tree, applied atomically (a failed operation leaves the tree as it was); `edit` wraps load, operation and save in the
 registry lock.
 """
@@ -114,6 +114,8 @@ def load(state_dir):
             raise _unreadable(f"{path} 的 session「{name}」格式不對")
         _check_path(path, p)
         tree.sessions[name] = p
+    for p in list(tree.folders) + list(tree.sessions.values()):  # 「客戶/甲」 implies 「客戶」: make it real
+        _ensure(tree, p)
     return tree
 
 

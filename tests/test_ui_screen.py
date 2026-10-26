@@ -353,6 +353,14 @@ class CursesScreenTest(unittest.TestCase):
         s.out("▶ 等待它結束…")
         self.assertIn("▶ 等待它結束…", self.scr.last())
 
+    def test_pick_stop_confirm_fits_narrow_screen(self):
+        names = [f"{i:02d}" + "n" * 18 for i in range(10)]  # 20 cells each
+        rows = [row(n) for n in names]
+        s = self.screen([" "] * 10 + ["s", "y"], w=61)
+        self.assertEqual(s.pick(rows, None), ("stop!", names))
+        shown = "\n".join(self.scr.screens[-1])
+        self.assertIn("等 10 個　確定？(y/N)", shown)
+
     def test_pick_shows_list_card_and_confirms_stop_in_place(self):
         rows = [row("a", profile="alice"), row("m", state=State.STOPPED, agent_status="-")]
         s = self.screen(["KEY_DOWN", "s", "y"])

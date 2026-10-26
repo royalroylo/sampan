@@ -495,6 +495,7 @@ class CursesScreen:
                                  help=KEYS_HELP, cols=list_cols(rows), empty=list_empty(rows, picker.query),
                                  name_w=name_w, accounts=self._account_lines(rows), dispatch=self._dispatch_line(),
                                  notice=self.warning or fnote or (self.updater.hint() if self.updater is not None else None))
+                picker.width = self.scr.getmaxyx()[1] - 2  # draw()'s width less the prompt row's leading space
                 self.prompt = picker.prompt
                 self.draw()
                 k = self.key()

@@ -804,6 +804,7 @@ class PickerJumpSearchTest(unittest.TestCase):
 
 
 from sampan.folders import Tree  # noqa: E402
+from sampan.textwidth import text_width  # noqa: E402
 from sampan.ui.tree import FolderItem  # noqa: E402
 
 
@@ -953,8 +954,30 @@ class PickerFolderTest(unittest.TestCase):
         self.press(p, " ", " ", "S")  # marks b1, x: only sessions
         self.assertEqual(p.key("y"), ("restart!", ["b1", "x"]))
         p = self.picker(current="x")
-        self.press(p, " ", "1", "k", " ", "S")  # x and the folder 客戶/甲: a folder means stopped ones stay stopped
-        self.assertEqual(p.key("y"), ("restart!", ["b1"]))
+        self.press(p, " ", "1", "k", " ", "S")  # x marked itself and the folder 客戶/甲: x was asked for by name
+        self.assertEqual(p.key("y"), ("restart!", ["b1", "x"]))
+
+    def test_restart_folder_plus_session_keeps_folder_only_stopped_stopped(self):
+        p = self.picker(current="top")
+        self.press(p, " ", "1", "k", " ", "S")  # top and the folder 客戶/甲 (b1, stopped x)
+        self.assertEqual(p.key("y"), ("restart!", ["b1", "top"]))
+        self.assertEqual(p.restart_plan.skip, [("x", "已停止")])
+
+    def test_stop_confirm_fits_width_and_keeps_all_names(self):
+        names = [f"{i:02d}" + "n" * 18 for i in range(10)]  # 20 cells each
+        rows = [row(n) for n in names]
+        p = Picker(rows, None, clock=Clock(), tree=Tree({"甲": False}, {n: "甲" for n in names}))
+        p.width = 60
+        p.key("s")  # on the folder row
+        self.assertTrue(p.prompt.endswith("確定？(y/N)"), p.prompt)
+        self.assertIn("等 10 個", p.prompt)
+        self.assertLessEqual(text_width(p.prompt), 60)
+        self.assertEqual(p.key("y"), ("stop!", names))
+        p.key("S")
+        self.assertTrue(p.prompt.endswith("確定？(y/N)"), p.prompt)
+        self.assertIn("等 10 個", p.prompt)
+        self.assertLessEqual(text_width(p.prompt), 60)
+        self.assertEqual(p.key("y"), ("restart!", names))
 
     def test_restart_nothing_to_do_shows_reason(self):
         rows = folder_rows()
@@ -1332,8 +1355,16 @@ class FolderUiTest(unittest.TestCase):
         self.msgs.clear()
         self.ui_keys(("collapse", ["客戶", "1"]))
         self.assertTrue(self.load().folders["客戶"])
-        self.ui_keys(("collapse", ["不存在/的", "0"]))  # a folder only implied: created, never an error
+        self.ui_keys(("collapse", ["不存在/的", "0"]))  # gone since the last refresh: nothing, never an error
         self.assertNotIn("❌", self.text())
+        self.assertNotIn("不存在", self.load().folders)
+
+    def test_collapse_never_recreates_a_deleted_folder(self):
+        from sampan import folders
+        self.tree(lambda t: folders.add(t, "甲"))
+        self.tree(lambda t: folders.remove(t, "甲"))  # another sampan deleted it
+        self.ui_keys(("collapse", ["甲", "1"]))
+        self.assertEqual(self.load().folders, {})
 
     def test_new_in_folder_passes_folder(self):
         seen = []

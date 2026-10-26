@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 from . import actionlog
 from .status import LABELS, State
+from .textwidth import text_width
 
 BUSY = {"busy", "working", "waiting"}  # agent_status values that mean the agent is in the middle of something
 
@@ -24,7 +25,8 @@ def _other_state(row):
 
 def plan_restart(rows, names, *, resume_stopped, own_pane=None):
     """Classify names (in the given order, each once). StatusRow.pane is the tmux pane id, the same kind of id
-    cmd_stop compares with own_pane."""
+    cmd_stop compares with own_pane. resume_stopped: True / False for every stopped session, or the collection of
+    names whose stopped session is reattached (the others are skipped as 已停止)."""
     by_name = {r.name: r for r in rows}
     plan = RestartPlan([], [], [])
     seen = set()
@@ -45,7 +47,7 @@ def plan_restart(rows, names, *, resume_stopped, own_pane=None):
             else:
                 plan.restart.append(name)
         elif row.state is State.STOPPED:
-            if resume_stopped:
+            if resume_stopped if isinstance(resume_stopped, bool) else name in resume_stopped:
                 plan.resume.append(name)
             else:
                 plan.skip.append((name, "已停止"))
@@ -63,21 +65,48 @@ def skip_text(pairs):
     return "略過：" + "、".join(f"{n}（{w}）" if w else n for n, w in pairs)
 
 
+ASK = "　確定？(y/N)"
+
+
 def _listed(items, limit):
-    if len(items) <= limit:
+    """items joined with 、; past limit (None = no limit) the first limit of them and 「等 n 個」."""
+    if limit is None or len(items) <= limit:
         return "、".join(items)
     return "、".join(items[:limit]) + f"等 {len(items)} 個"
 
 
-def confirm_line(plan, limit=8):
-    """One-line question for the ui; "" when there is nothing to restart."""
+def _fit(build, limit, width, count):
+    """build(limit), with fewer names listed (count = the longest list) until it fits in width cells (None = no
+    width), so the question that ends the line always shows."""
+    n = count if limit is None else min(limit, count)
+    line = build(limit)
+    while width is not None and text_width(line) > width and n > 0:
+        n -= 1
+        line = build(n)
+    return line
+
+
+def stop_line(names, *, limit=8, width=None):
+    """The ui's one-line question before s stops names."""
+    names = list(names)
+    return _fit(lambda n: "將停掉：" + _listed(names, n) + ASK, limit, width, len(names))
+
+
+def confirm_line(plan, limit=8, *, width=None):
+    """One-line question for the ui; "" when there is nothing to restart. limit None lists every name (--plain wraps);
+    width shortens the lists until the line fits."""
     if not plan.restart and not plan.resume:
         return ""
     go = list(plan.restart) + [n + "（背景接回）" for n in plan.resume]
-    line = "將重開：" + _listed(go, limit)
-    if plan.skip:
-        line += "　略過：" + _listed([f"{n}（{why}）" for n, why in plan.skip], limit)
-    return line + "　確定？(y/N)"
+    skip = [f"{n}（{why}）" for n, why in plan.skip]
+
+    def build(n):
+        line = "將重開：" + _listed(go, n)
+        if skip:
+            line += "　略過：" + _listed(skip, n)
+        return line + ASK
+
+    return _fit(build, limit, width, max(len(go), len(skip)))
 
 
 def cmd_restart(cfg, run, out, ask, plan, *, own_pane=None, on_prompt=None, stop_fn=None, restore_fn=None):

@@ -42,6 +42,12 @@ class StoreTest(unittest.TestCase):
             folders.load(self.dir)
         self.assertTrue(str(cm.exception).startswith("資料夾設定讀不到："))
 
+    def test_load_adds_implied_parents(self):
+        self.put('{"version": 1, "folders": {"A/B/C": {"collapsed": true}, "A": {"collapsed": true}}, '
+                 '"sessions": {"s": "D/E"}}')
+        tree = folders.load(self.dir)
+        self.assertEqual(tree.folders, {"A/B/C": True, "A": True, "A/B": False, "D": False, "D/E": False})
+
     def test_load_bad_json(self):
         self.assert_unreadable("{nope")
         self.assert_unreadable("")

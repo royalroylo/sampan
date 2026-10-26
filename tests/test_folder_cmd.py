@@ -74,6 +74,15 @@ class FolderCmdTest(unittest.TestCase):
         self.run_cmd("list")
         self.assertEqual(self.msgs, ["▾ 甲/", "  s1", "s2", "s3"])
 
+    def test_hand_written_child_makes_parent_real(self):
+        path = self.cfg.state_dir / "folders.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"version": 1, "folders": {"A/B": {}}, "sessions": {}}')
+        self.assertEqual(self.run_cmd("rename", "A", "Z"), 0, self.msgs)
+        self.assertEqual(self.tree().folders, {"Z": False, "Z/B": False})
+        self.assertEqual(self.run_cmd("rm", "Z"), 0, self.msgs)
+        self.assertEqual(self.tree().folders, {"B": False})
+
     def test_broken_file_refuses_writes_and_keeps_file(self):
         path = self.cfg.state_dir / "folders.json"
         path.parent.mkdir(parents=True, exist_ok=True)

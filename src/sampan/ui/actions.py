@@ -154,7 +154,7 @@ def _restart(cfg, run, out, ask, plan, own_pane, restart_fn, kw, *, rows=None, c
     Never attaches: the sessions are reattached in the background."""
     if not confirmed:
         plan = restart_mod.plan_restart(rows, plan, resume_stopped=True, own_pane=own_pane)
-        line = restart_mod.confirm_line(plan)
+        line = restart_mod.confirm_line(plan, limit=None)  # every name: the text output wraps
         if not line:
             why = restart_mod.skip_text(plan.skip).removeprefix("略過：") if plan.skip else ""
             out(f"沒有可以重開的：{why}" if why else "沒有可以重開的 session")

@@ -2,7 +2,7 @@
 import time
 
 from .. import folders as F
-from ..restart import confirm_line, plan_restart, skip_text
+from ..restart import confirm_line, plan_restart, skip_text, stop_line
 from ..status import State, _fmt_tokens
 from .text import BACKSPACE, ENTER, MOVES, pad
 from .tree import FolderItem, build_items, folder_key, folder_of
@@ -43,9 +43,12 @@ class Picker:
     tree.build_items' (depth, item) list and visible[:n_rows] its items, FolderItem rows included. The Picker keeps its
     own copy of the tree: collapsing (Enter, →, ←) changes it at once and returns ("collapse", [path, "1"|"0"]) for the
     caller to save. Folders are marked by path in marked_folders. s / S act on every session under a target folder
-    (collapsed ones too); S asks with restart.confirm_line, keeps the plan in restart_plan and on y/Y returns
+    (collapsed ones too); S asks with restart.confirm_line (a stopped session is resumed only when its own row is a
+    target), keeps the plan in restart_plan and on y/Y returns
     ("restart!", names). g / f return the marked items (else the cursor item) as "folder:<path>" / "session:<name>".
-    Without a tree the list is rows in the given order, as before folders existed."""
+    Without a tree the list is rows in the given order, as before folders existed.
+    width (None = unlimited) is how many cells the prompt row has: the s / S questions shorten their name lists to fit
+    it, so 確定？(y/N) always shows; what y returns always carries every name."""
 
     def __init__(self, rows, current=None, *, clock=time.monotonic, others=(), tree=None, own_pane=None):
         self.rows = rows
@@ -58,6 +61,7 @@ class Picker:
         self._stop = None
         self._restart = False
         self.restart_plan = None
+        self.width = None  # cells the prompt row has (set by the screen before each draw): confirm lines fit it
         self._notice = None
         self.query = None
         self.jump = ""
@@ -70,9 +74,9 @@ class Picker:
     @property
     def prompt(self):
         if self._stop is not None:
-            return f"將停掉：{'、'.join(self._stop)}　確定？(y/N)"
+            return stop_line(self._stop, width=self.width)
         if self._restart:
-            return confirm_line(self.restart_plan)
+            return confirm_line(self.restart_plan, width=self.width)
         if self._notice:
             return self._notice
         if self.query is not None:
@@ -299,8 +303,8 @@ class Picker:
 
     def _ask_restart(self):
         sessions, paths = self._targets()
-        plan = plan_restart(self.rows, self._names(sessions, paths), resume_stopped=not paths,
-                            own_pane=self.own_pane)
+        # a stopped session is reattached only when its own row was targeted, never when reached through a folder
+        plan = plan_restart(self.rows, self._names(sessions, paths), resume_stopped=sessions, own_pane=self.own_pane)
         if confirm_line(plan):
             self.restart_plan, self._restart = plan, True
             return

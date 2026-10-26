@@ -2,8 +2,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from sampan.restart import BUSY, RestartPlan, cmd_restart, confirm_line, plan_restart
+from sampan.restart import BUSY, RestartPlan, cmd_restart, confirm_line, plan_restart, stop_line
 from sampan.status import State
+from sampan.textwidth import text_width
 from tests.helpers import make_env, status_row
 
 
@@ -65,6 +66,41 @@ class PlanTest(unittest.TestCase):
         self.assertNotIn("i", line.replace("將重開", "").replace("確定", ""))
         line = confirm_line(RestartPlan(["a"], [], [(n, "忙") for n in names]))
         self.assertIn("h（忙）等 10 個", line)
+
+
+    def test_plan_resume_stopped_per_name(self):
+        rows = [status_row("a", State.STOPPED), status_row("b", State.STOPPED), status_row("c")]
+        plan = plan_restart(rows, ["a", "b", "c"], resume_stopped={"a"})
+        self.assertEqual(plan.restart, ["c"])
+        self.assertEqual(plan.resume, ["a"])
+        self.assertEqual(plan.skip, [("b", "已停止")])
+        plan = plan_restart(rows, ["a", "b"], resume_stopped=())
+        self.assertEqual(plan.resume, [])
+
+    def test_confirm_line_fits_width_with_question(self):
+        names = [f"{i:02d}" + "n" * 18 for i in range(10)]  # 20 cells each
+        line = confirm_line(RestartPlan(names, [], []), width=60)
+        self.assertTrue(line.endswith("確定？(y/N)"), line)
+        self.assertIn("等 10 個", line)
+        self.assertLessEqual(text_width(line), 60)
+        line = confirm_line(RestartPlan(names[:1], [], [(n, "忙") for n in names]), width=60)
+        self.assertTrue(line.endswith("確定？(y/N)"), line)
+        self.assertLessEqual(text_width(line), 60)
+        self.assertEqual(confirm_line(RestartPlan(["a"], [], []), width=60), "將重開：a　確定？(y/N)")
+
+    def test_confirm_line_without_limit_lists_all(self):
+        names = list("abcdefghij")
+        self.assertEqual(confirm_line(RestartPlan(names, [], []), limit=None),
+                         "將重開：" + "、".join(names) + "　確定？(y/N)")
+
+    def test_stop_line_shortens_and_fits(self):
+        self.assertEqual(stop_line(["a", "b"]), "將停掉：a、b　確定？(y/N)")
+        self.assertIn("h等 10 個", stop_line(list("abcdefghij")))
+        names = [f"{i:02d}" + "n" * 18 for i in range(10)]
+        line = stop_line(names, width=60)
+        self.assertTrue(line.endswith("確定？(y/N)"), line)
+        self.assertIn("等 10 個", line)
+        self.assertLessEqual(text_width(line), 60)
 
 
 class CmdTest(unittest.TestCase):
