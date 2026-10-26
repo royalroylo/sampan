@@ -18,7 +18,7 @@ from .procs import descendant_claude, is_descendant, list_procs
 from .prompts import ATTACH, SKIP, Relay
 from .registry import STATES, RegistryError, Row, id_problem, load_rows, lock, set_state, write_rows
 from .screens import CLAUDE_TRUST_OPTION, CODEX_TRUST_YES, bottom_trust_path, codex_activity
-from .send import TERMINAL, abort_new, submit_new
+from .send import TERMINAL, TERMINAL_NAME, UNREGISTERED_NAME, abort_new, submit_new
 from .tmux import SHELLS, Tmux, TmuxUnreadable
 
 WORKTREE_MARK = "/.claude/worktrees/"
@@ -85,13 +85,24 @@ def has_control(text):
     return any(unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp") for c in text)
 
 
-def check_new(cfg, run, name, target, cwd):
-    """The checks `sampan new` (and the MCP new_session tool, before it asks) runs before creating anything.
-    (agent, profile, resolved cwd) — profile "" for Codex — or why not (str, without ❌)."""
+def name_problem(name):
+    """Why a session name cannot be used (new, rename, adopt), or None: empty, control characters, . or : (tmux
+    takes them as window / pane separators), or a label sampan writes for callers that are not sessions."""
     if not name or has_control(name):
         return f"名稱不能是空的，也不能含換行或控制字元：{name!r}"
     if "." in name or ":" in name:
         return f"名稱不能含 . 或 :（tmux 會當成 window／pane 分隔）：{name}"
+    if name == TERMINAL_NAME or name.startswith(UNREGISTERED_NAME):
+        return f"「{name}」是 sampan 保留給派工來源的字，換一個名稱"
+    return None
+
+
+def check_new(cfg, run, name, target, cwd):
+    """The checks `sampan new` (and the MCP new_session tool, before it asks) runs before creating anything.
+    (agent, profile, resolved cwd) — profile "" for Codex — or why not (str, without ❌)."""
+    problem = name_problem(name)
+    if problem:
+        return problem
     if has_control(target):
         return f"target 不能含換行或控制字元：{target!r}"
     if target == "codex":
@@ -111,6 +122,8 @@ def check_new(cfg, run, name, target, cwd):
     if Tmux(run).has_session(name):
         return f"tmux session {name} 已存在"
     resolved = str(Path(cwd).expanduser().resolve())
+    if has_control(resolved):  # a clean symlink may point at a directory whose name is not
+        return f"目錄（解析後）不能含換行或控制字元：{resolved!r}"
     if not Path(resolved).is_dir():
         return f"目錄不存在：{resolved}"
     return agent, profile, resolved
@@ -228,8 +241,9 @@ def cmd_set_state(cfg, out, name, state):
 def cmd_rename(cfg, run, out, old, new):
     """Rename a tmux session and sync the registry; the agent keeps running and no keys are sent. Only the name of the registry row changes, other fields are untouched."""
     new = (new or "").strip()
-    if not new or "." in new or ":" in new:
-        out(f"❌ 名稱不能是空的，也不能含 . 或 :（tmux 會當成 window／pane 分隔）：{new!r}")
+    problem = name_problem(new)
+    if problem:
+        out(f"❌ {problem}")
         return 2
     tmux = Tmux(run)
     with lock(cfg.state_dir):

@@ -402,7 +402,7 @@ def _dispatch(cfg, args):
         sys.stdout = sys.stderr  # stdout carries only protocol messages: anything printed by accident goes to stderr
         try:
             return mcp_server.serve(cfg, run, sys.stdin.buffer, proto, caller=caller,
-                                    resolve=lambda: mcp_server.identify_caller(cfg, run, ppid))
+                                    resolve=lambda: mcp_server.lookup_caller(cfg, run, ppid))
         finally:
             sys.stdout = proto
     if cmd == "status":

@@ -16,6 +16,8 @@ from .clock import parse_iso
 from .fsutil import PRIVATE_FILE, atomic_write, private_dir, try_chmod
 
 STATES = ("queued", "sent", "done", "failed", "cancelled")
+KINDS = ("terminal", "unregistered", "session")  # who sent it; only "session" may be matched by from_name
+TERMINAL_NAME = "終端機"
 FINISHED = ("done", "failed", "cancelled")
 VERSION = 1
 KEEP_DAYS = 7
@@ -45,6 +47,11 @@ class Dispatch:
     notify: bool = False
     notified: bool = False
     thread_id: str | None = None
+    from_kind: str | None = None  # KINDS; None (an old record without it) is inferred from from_name
+
+    def __post_init__(self):
+        if self.from_kind is None:
+            self.from_kind = "terminal" if self.from_name == TERMINAL_NAME else "session"
 
 
 def new_id(existing):
@@ -75,6 +82,8 @@ def load(state_dir):
     for d in items:
         if d.state not in STATES:
             raise DispatchError(f"{path}：派工 {d.id} 的 state 是 {d.state!r}，只能是 {STATES}")
+        if d.from_kind not in KINDS:
+            raise DispatchError(f"{path}：派工 {d.id} 的 from_kind 是 {d.from_kind!r}，只能是 {KINDS}")
     return items
 
 

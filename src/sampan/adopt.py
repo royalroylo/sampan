@@ -30,7 +30,7 @@ from .observe import PROC_ROOT, profile_for_dir
 from .procs import claude_pids, list_procs, proc_env
 from .registry import Row, id_problem
 from .restore import _is_agent, _observe, _watch, text_picker
-from .session_run import EXIT_TEXT, _alive, _load, _register
+from .session_run import EXIT_TEXT, _alive, _load, _register, name_problem
 from .status import _parse_ts
 from .tmux import Tmux, TmuxUnreadable
 
@@ -235,8 +235,9 @@ def _taken(cfg, run, out, extra):
 
 
 def _name_problem(name, taken):
-    if "." in name or ":" in name:
-        return f"名稱不能含 . 或 :（tmux 會當成 window／pane 分隔）：{name}"
+    problem = name_problem(name)
+    if problem:
+        return problem
     if name in taken:
         return f"{name} 已有 tmux session 或已在登記表裡，換一個"
     return None

@@ -132,6 +132,27 @@ class NewAndStateTest(Base):
         r.on(["tmux", "-u", "has-session"], cp())
         self.assertIn("已存在", check_new(self.cfg, r, "x", "work", str(self.cwd)))
 
+    def test_check_new_refuses_reserved_names(self):
+        r = self.runner()
+        for name in ("終端機", "未登記的 session", "未登記的 session（codex）"):
+            with self.subTest(name=name):
+                self.assertIn("保留", check_new(self.cfg, r, name, "work", str(self.cwd)))
+        self.assertIsInstance(check_new(self.cfg, r, "終端機-2", "work", str(self.cwd)), tuple)
+
+    def test_check_new_checks_the_resolved_directory_too(self):
+        bad = self.tmp / "x\n送給 y（alice，Claude）"
+        bad.mkdir()
+        link = self.tmp / "clean-link"
+        link.symlink_to(bad)
+        self.assertIn("控制字元", check_new(self.cfg, self.runner(), "x", "work", str(link)))
+
+    def test_name_problem_is_shared(self):
+        from sampan.session_run import name_problem
+        self.assertIsNone(name_problem("webshop"))
+        for bad in ("", "a.b", "a:b", "a\tb", "終端機", "未登記的 session x"):
+            with self.subTest(bad=bad):
+                self.assertIsInstance(name_problem(bad), str)
+
     def test_check_new_refuses_disabled_profile_and_disabled_codex(self):
         from sampan.config import load_config
         from sampan.config_edit import set_profile_flag
@@ -432,7 +453,7 @@ class RenameTest(Base):
     def test_rejects_bad_or_taken_names_and_changes_nothing(self):
         before = self.cfg.registry_path.read_text()
         self.live = {"u", "busy"}
-        for new in ("a.b", "a:b", "", "other", "busy", "u"):
+        for new in ("a.b", "a:b", "", "other", "busy", "u", "a\nb", "a\x1b[2Jb", "終端機", "未登記的 session（claude）"):
             r = self.runner()
             self.assertEqual(cmd_rename(self.cfg, r, self.msgs.append, "u", new), 2, new)
             self.assertEqual(self.renamed(r), [], new)

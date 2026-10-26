@@ -85,10 +85,27 @@ class ToolError(Exception):
     """A refusal returned to the agent as an isError tool result (not a JSON-RPC error)."""
 
 
+class CallerUnsure(Exception):
+    """The caller could not be looked up right now (ps or the tmux pane list unreadable, registry unreadable): this
+    says nothing about whether it is a session."""
+
+
 def identify_caller(cfg, run, pid):
+    """lookup_caller, with an unsure lookup taken as an unregistered caller (what the server starts with)."""
+    try:
+        return lookup_caller(cfg, run, pid)
+    except CallerUnsure as e:
+        _log(f"認不出呼叫者：{e}")
+        return Caller(None, "", e.args[1] if len(e.args) > 1 else "", None)
+
+
+def lookup_caller(cfg, run, pid):
     """Who runs this server: the nearest claude / codex process at or above pid, the tmux pane it runs in, and the
-    registry row of that tmux session (same agent). Anything that cannot be matched → an unregistered Caller."""
+    registry row of that tmux session (same agent). No such process, no pane, no row or a row of another agent → an
+    unregistered Caller; raises CallerUnsure when ps, tmux or the registry cannot be read."""
     procs = list_procs(run)
+    if not procs:
+        raise CallerUnsure("讀不到行程表")
     agent_proc, seen, cur = None, set(), procs.get(pid)
     while cur is not None and cur.pid not in seen:
         seen.add(cur.pid)
@@ -102,14 +119,17 @@ def identify_caller(cfg, run, pid):
     if agent_proc is None:
         return Caller(None, "", "", None)
     unknown = Caller(None, "", agent, None)
-    panes = Tmux(run).panes()
-    pane = next((p for p in panes or () if is_descendant(procs, agent_proc.pid, p.pane_pid)), None)
+    tmux = Tmux(run)
+    panes = tmux.panes()
+    if panes is None:
+        raise CallerUnsure(tmux.unreadable_reason or "讀不到 tmux", agent)
+    pane = next((p for p in panes if is_descendant(procs, agent_proc.pid, p.pane_pid)), None)
     if pane is None:
         return unknown
     try:
         rows = load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)
-    except RegistryError:
-        return unknown
+    except RegistryError as e:
+        raise CallerUnsure(str(e), agent) from e
     row = next((r for r in rows if r.tmux == pane.session), None)
     if row is None or row.agent != agent:
         return unknown
@@ -320,18 +340,15 @@ class Server:
         self._result(rid, result)
 
     def _refresh_caller(self):
-        """Look the caller up again (a Codex row is registered only once its thread exists, a session may be adopted
-        or renamed). A lookup that finds no session keeps a name already known: a passing tmux or ps hiccup must not
-        turn a registered caller into an unregistered one."""
+        """Look the caller up again (a Codex row is registered only once its thread exists, a session may be adopted,
+        renamed or forgotten). Only an unsure lookup (CallerUnsure: tmux, ps or the registry unreadable) keeps the
+        identity already known; a definite answer, unregistered included, replaces it."""
         if self.resolve is None:
             return self.caller
         try:
-            fresh = self.resolve()
-        except Exception as e:
-            _log(f"認不出呼叫者：{e!r}")
-            return self.caller
-        if fresh.name is not None or self.caller.name is None:
-            self.caller = fresh
+            self.caller = self.resolve()
+        except CallerUnsure as e:
+            _log(f"這次認不出呼叫者，沿用 {send.caller_label(self.caller)}：{e.args[0] if e.args else e}")
         return self.caller
 
     def _own(self, did):
@@ -342,7 +359,7 @@ class Server:
             d = next((x for x in dispatch.load(self.cfg.state_dir) if x.id == did), None)
         except dispatch.DispatchError as e:
             raise ToolError(str(e)) from e
-        if d is None or not (did in self.mine or (caller.name is not None and d.from_name == caller.name)):
+        if d is None or not (did in self.mine or send.from_session(d, caller.name)):
             raise ToolError(f"沒有派工 {did}（或不是這個 session 發出的）")
         return d
 
@@ -461,7 +478,7 @@ class Server:
         d = self._wait(did, wait)
         out = {"dispatch": d.id, "state": d.state, "label": send.STATE_LABELS[d.state], "to": d.to_name,
                "reply": d.reply, "reason": d.reason}
-        if d.state == "done" and d.notify and d.from_name == self.caller.name:
+        if d.state == "done" and d.notify and send.from_session(d, self.caller.name):
             send.set_notify(self.cfg, d.id, False)  # the caller has the reply now: no notice needed
         return out
 
@@ -489,7 +506,7 @@ class Server:
             return
         name = self.caller.name
         for d in items:
-            if d.id in owed and (d.id in self.mine or (name is not None and d.from_name == name)):
+            if d.id in owed and (d.id in self.mine or send.from_session(d, name)):
                 try:
                     send.advance(self.cfg, self.run, d.id, sleep=self.sleep, snapshot_fn=self.snapshot_fn,
                                  status_fn=self.status_fn, now=self.now_fn())

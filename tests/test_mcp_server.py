@@ -506,6 +506,21 @@ class OwnershipTest(Base):
         self.assertEqual(c.elicits, [])
         self.assertEqual(self.dispatches()[0].state, "queued")
 
+    def test_a_session_named_like_a_reserved_label_owns_nothing_of_theirs(self):
+        self.rows["b"] = dataclasses.replace(self.rows["b"], agent_status="busy")
+        term = send.submit(self.cfg, FakeRunner(strict=True), send.TERMINAL, "b", "t", notify=False, now=NOW,
+                           status_fn=self.status_fn)
+        unreg = send.submit(self.cfg, FakeRunner(strict=True), Caller(None, "", "claude", None), "b", "u",
+                            notify=False, now=NOW, status_fn=self.status_fn)
+        for name, d in (("終端機", term), ("未登記的 session（claude）", unreg)):
+            with self.subTest(name=name), mock.patch.object(send, "advance", side_effect=AssertionError("no")):
+                c = self.serve(Client([init(1), call(2, "dispatch_result", {"id": d.id}),
+                                       call(3, "cancel_dispatch", {"id": d.id})]),
+                               confirm=False, caller=Caller(name, "alice", "claude", "%9"))
+                self.assertTrue(c.response(2)["result"]["isError"])
+                self.assertTrue(c.response(3)["result"]["isError"])
+        self.assertEqual({d.state for d in self.dispatches()}, {"queued"})
+
     def test_an_unregistered_caller_sees_only_what_this_server_sent(self):
         d = self.other()
         c = self.serve(Client([init(1), call(2, "send", {"session": "b", "message": "hi"})], answer=accept(),
@@ -535,10 +550,21 @@ class ResolveTest(Base):
         second = next(d for d in self.dispatches() if d.id != first.id)
         self.assertEqual((second.from_name, second.notify), ("a", True))
 
-    def test_a_failed_lookup_keeps_the_known_name(self):
+    def test_an_unsure_lookup_keeps_the_known_name(self):
+        def unsure():
+            raise mcp_server.CallerUnsure("tmux unreadable")
+
         c = self.serve(Client([init(1), call(2, "send", {"session": "a", "message": "me"})]), confirm=False,
-                       resolve=lambda: Caller(None, "", "", None))
+                       resolve=unsure)
         self.assertIn("不能送給自己", tool_text(c.response(2)))
+
+    def test_a_session_without_a_row_drops_to_unregistered(self):
+        self.rows["a"] = dataclasses.replace(self.rows["a"], agent_status="busy")
+        c = self.serve(Client([init(1), call(2, "send", {"session": "a", "message": "me"})]), confirm=False,
+                       resolve=lambda: Caller(None, "", "claude", None))
+        self.assertFalse(c.response(2)["result"]["isError"])
+        [d] = self.dispatches()
+        self.assertEqual((d.from_name, d.from_kind, d.notify), ("未登記的 session（claude）", "unregistered", False))
 
 
 class FormTest(Base):
@@ -643,6 +669,24 @@ class IdentifyCallerTest(Base):
         write_rows(self.cfg.registry_path, [Row("1005-x", "codex", "codex", "t1", "/w")], "t", self.cfg.history_dir)
         run = self.runner([pane_line("1005-x", "%5", 100, "claude", "/w")], self.PROCS)
         self.assertEqual(mcp_server.identify_caller(self.cfg, run, 300), Caller(None, "", "claude", None))
+
+    def test_lookup_tells_unsure_from_not_registered(self):
+        PROCS = self.PROCS
+        r = FakeRunner(strict=True)
+        r.on(["tmux", "-u", "list-panes"], cp(rc=1, err="permission denied"))
+        r.on(["ps", "-A"], cp(out="\n".join(PROCS) + "\n"))
+        with self.assertRaises(mcp_server.CallerUnsure):
+            mcp_server.lookup_caller(self.cfg, r, 300)
+        r = FakeRunner(strict=True).on(["ps", "-A"], cp(rc=1))
+        with self.assertRaises(mcp_server.CallerUnsure):
+            mcp_server.lookup_caller(self.cfg, r, 300)
+        self.cfg.registry_path.parent.mkdir(parents=True, exist_ok=True)
+        self.cfg.registry_path.write_text("{broken")
+        run = self.runner([pane_line("1005-x", "%5", 100, "claude", "/w")], PROCS)
+        with self.assertRaises(mcp_server.CallerUnsure):
+            mcp_server.lookup_caller(self.cfg, run, 300)
+        self.cfg.registry_path.unlink()
+        self.assertEqual(mcp_server.lookup_caller(self.cfg, run, 300), Caller(None, "", "claude", None))
 
     def test_unreadable_tmux_is_unregistered(self):
         r = FakeRunner(strict=True)

@@ -329,12 +329,14 @@ class CliTest(unittest.TestCase):
 
         proto = io.StringIO()
         with mock.patch("sampan.mcp_server.identify_caller", return_value=caller) as ic, \
+                mock.patch("sampan.mcp_server.lookup_caller", return_value=caller) as lc, \
                 mock.patch("sampan.mcp_server.serve", fake_serve), mock.patch("sys.stdout", proto), \
                 mock.patch("sys.stdin", io.TextIOWrapper(io.BytesIO(b""))), \
                 mock.patch("sampan.runner.run", FakeRunner(strict=True)), mock.patch("os.getppid", return_value=4321):
             self.assertEqual(cli.main(["mcp", "serve"]), 0)
             restored = sys.stdout
-        self.assertEqual([c.args[2] for c in ic.call_args_list], [4321, 4321])  # at start, and again on demand
+        self.assertEqual(ic.call_args.args[2], 4321)  # at start
+        self.assertEqual(lc.call_args.args[2], 4321)  # again on demand (unsure lookups raise, kept by the server)
         self.assertIs(seen["again"], caller)
         self.assertIs(seen["caller"], caller)
         self.assertIs(seen["stdout"], proto)

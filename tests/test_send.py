@@ -143,6 +143,21 @@ class SubmitTest(Base):
         send.set_notify(self.cfg, d.id, True)  # never turned on for a caller that is not a session
         self.assertFalse(self.stored(d.id).notify)
 
+    def test_from_kind_comes_from_the_caller(self):
+        self.assertEqual(self.submit(caller=send.TERMINAL).from_kind, "terminal")
+        self.assertEqual(self.submit(caller=Caller(None, "", "claude", None)).from_kind, "unregistered")
+        self.assertEqual(self.submit().from_kind, "session")
+
+    def test_a_session_named_like_the_terminal_does_not_get_terminal_notices(self):
+        d = self.submit(caller=send.TERMINAL)
+        send.set_notify(self.cfg, d.id, True)
+        self.assertFalse(self.stored(d.id).notify)
+        # a session really named 終端機 (made before names were checked) still owns its own dispatches
+        s = self.submit(caller=Caller("終端機", "alice", "claude", "%9"))
+        self.assertEqual(s.from_kind, "session")
+        send.set_notify(self.cfg, s.id, True)
+        self.assertTrue(self.stored(s.id).notify)
+
     def test_caller_label(self):
         self.assertEqual(send.caller_label(send.TERMINAL), "終端機")
         self.assertEqual(send.caller_label(Caller(None, "", "claude", None)), "未登記的 session（claude）")

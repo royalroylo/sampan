@@ -61,6 +61,7 @@
 |---|---|
 | `id` | 4 個小寫 hex |
 | `from_name`、`from_profile`、`from_agent` | 呼叫者（人在終端機送的，`from_name` 是「終端機」；不是 sampan session 的 agent 透過 MCP 送的，是「未登記的 session（claude）」這樣，收不到完成通知） |
+| `from_kind` | 呼叫者是哪一種：`terminal`（人在終端機）、`unregistered`（不是 sampan session 的 agent）、`session`（sampan session）。只有 `session` 才會依 `from_name` 認呼叫者（完成通知、MCP 看結果與取消）。沒有這欄的舊紀錄：`from_name` 是「終端機」視為 `terminal`，其他視為 `session` |
 | `to_name`、`to_agent`、`to_profile` | 目標 session |
 | `text` | 含來源行的完整送出內容 |
 | `state` | `queued`、`sent`、`done`、`failed`、`cancelled` 其中之一 |
@@ -77,7 +78,7 @@
 
 ## `sampan mcp serve` 的工具
 
-stdio MCP server（每行一則 JSON-RPC 2.0；協定版本 `2025-06-18`，client 要 `2025-03-26` 時用它）。由 Claude Code／Codex 啟動，呼叫者是誰從 server 的上層行程找：最近的 claude／codex 行程所在的 tmux pane，再對到登記表裡同名、同 agent 的那列；對不到就是「未登記的 session」（來源行與派工紀錄寫「未登記的 session（claude）」這樣，不會寫成「終端機」），工具照樣能用，只是收不到完成通知。每次呼叫會動作或看派工的工具前都重新找一次（Codex 要有對話後才登記、session 可能被接手或改名）；重新找不到時沿用已知的名稱。`dispatch_result`、`cancel_dispatch` 只認這個呼叫者發出的派工（這個 server 建的，或 `from_name` 是呼叫者的 session），別人的一律回「沒有派工 <編號>（或不是這個 session 發出的）」。工具回傳的文字是 JSON；拒絕（找不到對方、使用者拒絕、client 不支援核准表單）是 `isError: true` 的結果。
+stdio MCP server（每行一則 JSON-RPC 2.0；協定版本 `2025-06-18`，client 要 `2025-03-26` 時用它）。由 Claude Code／Codex 啟動，呼叫者是誰從 server 的上層行程找：最近的 claude／codex 行程所在的 tmux pane，再對到登記表裡同名、同 agent 的那列；對不到就是「未登記的 session」（來源行與派工紀錄寫「未登記的 session（claude）」這樣，不會寫成「終端機」），工具照樣能用，只是收不到完成通知。每次呼叫會動作或看派工的工具前都重新找一次（Codex 要有對話後才登記、session 可能被接手或改名）；只有讀不到（tmux、ps 或登記表讀不到）時才沿用已知的身分；確定對不到登記表（沒有那列、agent 不同）就改成未登記。`dispatch_result`、`cancel_dispatch` 只認這個呼叫者發出的派工（這個 server 建的，或 `from_kind` 是 `session` 而且 `from_name` 是呼叫者的 session），別人的一律回「沒有派工 <編號>（或不是這個 session 發出的）」。工具回傳的文字是 JSON；拒絕（找不到對方、使用者拒絕、client 不支援核准表單）是 `isError: true` 的結果。
 
 | 工具 | 參數 | 回傳 | 核准 |
 |---|---|---|---|

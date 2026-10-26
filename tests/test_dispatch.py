@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import stat
 import tempfile
@@ -38,6 +39,23 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(stat.S_IMODE((self.dir / "dispatches.json").stat().st_mode), 0o600)
         self.assertEqual(stat.S_IMODE(self.dir.stat().st_mode), 0o700)
         self.assertEqual(stat.S_IMODE((self.dir / "dispatches.lock").stat().st_mode), 0o600)
+
+    def test_from_kind_round_trips_and_is_inferred_for_old_records(self):
+        items = [mk("aaaa", from_kind="unregistered"), mk("bbbb")]
+        with dispatch.transaction(self.dir) as cur:
+            cur.extend(items)
+        self.assertEqual([d.from_kind for d in dispatch.load(self.dir)], ["unregistered", "session"])
+        old = {k: v for k, v in dataclasses.asdict(mk("cccc")).items() if k != "from_kind"}
+        term = dict(old, id="dddd", from_name="終端機", from_profile="")
+        (self.dir / "dispatches.json").write_text(json.dumps({"version": 1, "dispatches": [old, term]}))
+        self.assertEqual([d.from_kind for d in dispatch.load(self.dir)], ["session", "terminal"])
+
+    def test_bad_from_kind_raises(self):
+        self.dir.mkdir(parents=True)
+        rec = dict(dataclasses.asdict(mk()), from_kind="admin")
+        (self.dir / "dispatches.json").write_text(json.dumps({"version": 1, "dispatches": [rec]}))
+        with self.assertRaises(DispatchError):
+            dispatch.load(self.dir)
 
     def test_bad_json_raises_and_keeps_file(self):
         self.dir.mkdir(parents=True)

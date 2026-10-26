@@ -202,7 +202,7 @@ Every action also has a command, for scripts or when you prefer typing commands 
 | Look around | `sampan status`, `sampan doctor` (its first line shows the sampan version and the newest one) |
 | Update sampan | `sampan update [--yes] [--force]`: checks the newest version right then (no cache) and asks before updating; `--force` reinstalls even when up to date; `--yes` skips the question. Needs no config file and just exits when done |
 | Interactive screen | `sampan` (same as `sampan ui`): see "Using it" above. In tmux, what you pick is switched to and sampan stays in its pane; outside tmux it attaches in the foreground and returns to the list after detach. `sampan ui --plain` is the numbered menu, same rules |
-| New session | `sampan new <name> <claude:profile｜profile｜codex> <dir>` (no `.` or `:` in the name) |
+| New session | `sampan new <name> <claude:profile｜profile｜codex> <dir>` (no `.`, `:`, newline or control character in the name, and not 「終端機」 or starting with 「未登記的 session」; `rename` and `adopt` follow the same rule) |
 | Open claude / codex with an account | `sampan claude [profile] [claude args…]` (without a profile it lists a menu; a first word that is neither a profile nor starts with `-` is an error, not sent as a prompt), `sampan codex` |
 | Record each session's conversation id | `sampan save` (the schedule also runs it every 5 minutes) |
 | End agents normally (put away; `restore` brings them back) | `sampan stop [name…] [--profile <p>] [--force] [--keep-tmux]`: afterwards, if that tmux session has only this one pane left, it is closed too; with other windows or panes it is kept |
