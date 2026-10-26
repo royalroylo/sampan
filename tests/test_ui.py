@@ -965,6 +965,14 @@ class PickerFolderTest(unittest.TestCase):
         self.assertIsNone(p.key("y"))  # nothing was waiting for a y
         self.assertIsNone(p.prompt)
 
+    def test_restart_confirm_lists_own_pane_as_skipped(self):
+        rows = [dataclasses.replace(row("a"), pane="%9"), row("b")]
+        p = Picker(rows, "a", clock=Clock(), own_pane="%9")
+        p.key(" ")
+        p.key(" ")
+        p.key("S")
+        self.assertEqual(p.prompt, "將重開：b　略過：a（sampan 就在這個 pane）　確定？(y/N)")
+
     def test_new_targets_cursor_folder(self):
         p = self.picker()
         p.key("j")
@@ -1272,6 +1280,28 @@ class FolderUiTest(unittest.TestCase):
         self.assertIn("已搬到 最外層", self.text())
         self.ui_keys(("file", ["session:a"]), ["2", "維運"])
         self.assertEqual(self.load().sessions, {"a": "維運"})
+
+    def test_file_new_folder_with_taken_name_asks_merge(self):
+        from sampan import folders
+        self.tree(lambda t: folders.place_session(t, "old", "客戶"))
+        before = self.folders_file().read_bytes()
+        self.ui_keys(("file", ["session:a"]), ["2", "客戶", "n"])
+        self.assertIn("同一層已經有「客戶」，合併進去？(y/N)", "\n".join(self.asked))
+        self.assertIn("已取消", self.msgs)
+        self.assertEqual(self.folders_file().read_bytes(), before)
+        self.ui_keys(("file", ["session:a"]), ["2", "客戶", "y"])
+        self.assertEqual(self.load().sessions, {"a": "客戶", "old": "客戶"})
+        self.assertIn("✔ 已搬到 客戶", self.text())
+
+    def test_name_taken_after_merge_shows_the_error(self):
+        from unittest import mock
+
+        from sampan import folders
+        self.tree(lambda t: folders.add(t, "客戶"))
+        with mock.patch("sampan.folders.group", side_effect=folders.NameTaken("客戶")):
+            self.ui_keys(("group", ["session:a"]), ["客戶", "y"])
+        self.assertIn("❌ 同一層已經有「客戶」", self.text())
+        self.assertNotIn("已取消", self.msgs)
 
     def test_file_action_uses_the_chooser_when_given(self):
         from sampan import folders

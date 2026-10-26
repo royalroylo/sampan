@@ -39,7 +39,10 @@ def _edit(cfg, out, ask, op):
         try:
             return 0, F.edit(cfg.state_dir, lambda t: (_complete(t), op(t, merge))[1])
         except F.NameTaken as e:
-            if merge or (ask(f"同一層已經有「{e.name}」，合併進去？(y/N): ") or "").lower() != "y":
+            if merge:  # cannot happen with merge allowed; never hide it behind 已取消
+                out(f"❌ {e}")
+                return 1, None
+            if not _merge_ok(ask, e.name):
                 out("已取消")
                 return 0, None
             merge = True
@@ -49,6 +52,10 @@ def _edit(cfg, out, ask, op):
         except OSError as e:
             out(f"❌ 資料夾設定寫不進去：{e}")
             return 1, None
+
+
+def _merge_ok(ask, name):
+    return (ask(f"同一層已經有「{name}」，合併進去？(y/N): ") or "").lower() == "y"
 
 
 def _name(out, ask, prompt):
@@ -124,6 +131,9 @@ def file_flow(cfg, out, ask, names, rows, choose_fn=None):
     elif i == 1:
         dest = _name(out, ask, "新資料夾名稱：")
         if dest is None:
+            return 0
+        if dest in labels[2:] and not _merge_ok(ask, dest):  # 「新資料夾…」 with a taken name: merge only when asked
+            out("已取消")
             return 0
     else:
         dest = labels[i]

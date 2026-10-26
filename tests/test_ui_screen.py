@@ -494,7 +494,7 @@ class ListSearchScreenTest(unittest.TestCase):
     def test_help_mentions_jump_and_search(self):
         s = self.screen(["q"])
         s.pick([row("a")], None)
-        self.assertIn("↑↓ 移動　1-9 跳列　/ 搜尋　空白 勾選", self.scr.screens[0][-1])
+        self.assertIn("↑↓ 移動　/ 搜尋　空白 勾選", self.scr.screens[0][-1])
 
 
 class CursesUiTest(unittest.TestCase):
@@ -1017,6 +1017,15 @@ class FolderScreenTest(unittest.TestCase):
         self.assertEqual(action, ("restart!", [RestartPlan(["a"], [], [])]))
         self.assertIn("將重開：a　確定？(y/N)", "\n".join(self.shown(-1)))
 
+    def test_restart_confirm_skips_sampans_own_pane(self):
+        import dataclasses
+        self.rows[0] = dataclasses.replace(self.rows[0], pane="%5")
+        self.scr = FakeScr([" ", "KEY_DOWN", "KEY_DOWN", " ", "S", "q", "q"])  # mark a and d
+        s = CursesScreen(self.scr, self.cfg, self.r, now_fn=lambda: NOW, rows_fn=lambda cfg, run: self.rows,
+                         own_pane="%5")
+        s.pick(self.rows, None)
+        self.assertTrue(any("略過：a（sampan 就在這個 pane）" in "\n".join(x) for x in self.scr.screens))
+
     def test_choose_folder_list(self):
         s = self.screen(["KEY_DOWN", "KEY_DOWN", "\n"])
         self.assertEqual(s.choose_folder(["（最外層）", "新資料夾…", "客戶"]), 2)
@@ -1027,6 +1036,6 @@ class FolderScreenTest(unittest.TestCase):
     def test_help_and_row_keys_mention_S(self):
         s = self.screen(["q"])
         s.pick(self.rows, None)
-        self.assertIn("S 重開　g 包資料夾　f 搬進資料夾", self.shown()[-1])
+        self.assertIn("S 重開　R 接回　g 包資料夾　f 搬進資料夾", self.shown()[-1])
         self.assertIn("S 重開", row_keys(row("x"), {"panes": 1}))
         self.assertIn("S 背景接回", row_keys(row("x", state=State.STOPPED), {"panes": 0}))

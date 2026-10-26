@@ -47,8 +47,9 @@ class Picker:
     ("restart!", names). g / f return the marked items (else the cursor item) as "folder:<path>" / "session:<name>".
     Without a tree the list is rows in the given order, as before folders existed."""
 
-    def __init__(self, rows, current=None, *, clock=time.monotonic, others=(), tree=None):
+    def __init__(self, rows, current=None, *, clock=time.monotonic, others=(), tree=None, own_pane=None):
         self.rows = rows
+        self.own_pane = own_pane  # sampan's own pane id: S lists that session as skipped
         self.others = list(others)
         self.tree = _copy_tree(tree)
         self.marked = set()
@@ -298,7 +299,8 @@ class Picker:
 
     def _ask_restart(self):
         sessions, paths = self._targets()
-        plan = plan_restart(self.rows, self._names(sessions, paths), resume_stopped=not paths, own_pane=None)
+        plan = plan_restart(self.rows, self._names(sessions, paths), resume_stopped=not paths,
+                            own_pane=self.own_pane)
         if confirm_line(plan):
             self.restart_plan, self._restart = plan, True
             return

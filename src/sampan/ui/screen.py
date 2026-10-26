@@ -64,8 +64,9 @@ from .state import Checklist, Picker, ProfilePicker, _row_key
 from .text import BACKSPACE, ENTER, MOVES, clean_capture, text_width
 from .tree import FolderItem, build_items, folder_key, folder_of
 
-# one line at 120 columns: w (save now), Enter (on every row's card), R and A still work, they are only left out here
-KEYS_HELP = "↑↓ 移動　1-9 跳列　/ 搜尋　空白 勾選　s 停　S 重開　g 包資料夾　f 搬進資料夾　n 開新　D 派工　p plugin　o 帳號　q 離開"
+# one line at 120 columns: digits (row numbers are on every row), w (save now), Enter (on every row's card) and A
+# still work, they are only left out here
+KEYS_HELP = "↑↓ 移動　/ 搜尋　空白 勾選　s 停　S 重開　R 接回　g 包資料夾　f 搬進資料夾　n 開新　D 派工　p plugin　o 帳號　q 離開"
 RESTORE_HELP = "↑↓ 移動　空白 勾選　Enter 確認接回　q 取消"
 ADOPT_HELP = "↑↓ 移動　空白 勾選　Enter 確認接手　q 取消"
 PLUGINS_HELP = "↑↓ 移動　1-9 跳列　/ 搜尋　Enter 選 profile　u 更新這個　U 全部更新　a 新增　r 檢查新版　q 返回　Tab 切到來源"
@@ -459,7 +460,7 @@ class CursesScreen:
         if tree is not None:
             names += [folder_key(p) for p in F.resolve(tree, [r.name for r in rows]).folders]
         picker = Picker(rows, self.last_name if self.last_name in names else current, clock=self.clock,
-                        others=others, tree=tree)
+                        others=others, tree=tree, own_pane=self.own_pane)
         shot, tick, refreshed = (None, None), False, self.clock()
         self._timeout(TICK_MS)
         try:
