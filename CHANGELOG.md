@@ -7,6 +7,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 - `sampan send <name> <message|-> [--wait] [--timeout s]` hands a message to a running registered session as a dispatch, starting with a source line (「〔sampan 轉送｜來自 終端機｜派工 <id>〕」). Claude gets it pasted from a tmux buffer and Enter, only while it is idle and its prompt box is empty (a draft keeps it queued, never cleared); Codex gets it through `codex queue`. `--wait` prints the reply to this message (exit 0), the reason of a failure (exit 1), or 「還在做」 after the timeout, 600 s by default (exit 124, the dispatch stays). A `/clear`, another conversation or a stopped target fails the dispatch with 「找不到回覆」 or the reason; text from elsewhere is never returned.
+- `sampan new <name> <target> <dir> --message <message|->` sends the first message as the agent's startup prompt (`claude "$(cat <outbox file>)"`, `codex "$(cat …)"`), after any trust prompt, and records a dispatch that starts as `sent`. Without `--message` nothing changes.
 - `sampan dispatches [--all]` lists dispatches; `sampan dispatches cancel <id>` cancels one still queued. Sending, delivery and cancelling are logged in `actions.log`.
 
 ### Changed

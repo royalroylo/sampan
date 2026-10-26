@@ -52,6 +52,14 @@ class LaunchTest(unittest.TestCase):
         self.assertEqual(launch_line(self.cfg, "claude", "alice", resume=A),
                          f"env -u CLAUDE_CONFIG_DIR claude --resume {A}")
 
+    def test_prompt_file_is_the_startup_prompt_and_quoted_inside(self):
+        pf = Path("/tmp/a b/x.txt")
+        self.assertEqual(launch_line(self.cfg, "claude", "alice", session_id=A, prompt_file=pf),
+                         f"env -u CLAUDE_CONFIG_DIR claude --session-id {A} \"$(cat '/tmp/a b/x.txt')\"")
+        self.assertEqual(launch_line(self.cfg, "codex", "", cwd="/p", prompt_file=pf),
+                         "cd /p && codex -C /p \"$(cat '/tmp/a b/x.txt')\"")
+        self.assertEqual(launch_line(self.cfg, "claude", "alice", session_id=A), f"env -u CLAUDE_CONFIG_DIR claude --session-id {A}")
+
     def test_other_profile_sets_config_dir(self):
         self.assertEqual(launch_line(self.cfg, "claude", "work", session_id=A, cwd="/Users/u/p"),
                          f"cd /Users/u/p && env CLAUDE_CONFIG_DIR={self.cfg.profiles['work'].config_dir} claude --session-id {A}")

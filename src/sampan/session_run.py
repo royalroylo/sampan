@@ -3,18 +3,21 @@ import re
 import signal
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from . import actionlog
 from .claude_state import move_transcript, transcript_carry, transcript_problem
 from .clock import now_iso
 from .codex_state import _is_codex, codex_pid_in_pane, find_rollout
+from .dispatch import outbox_path
 from .launch import disabled_problem, launch_line, send_line
 from .observe import PROC_ROOT, SPLIT_HINT, live_by_pane, multi_agent_sessions
 from .procs import descendant_claude, is_descendant, list_procs
 from .prompts import ATTACH, SKIP, Relay
 from .registry import STATES, RegistryError, Row, id_problem, load_rows, lock, set_state, write_rows
 from .screens import CLAUDE_TRUST_OPTION, CODEX_TRUST_YES, bottom_trust_path, codex_activity
+from .send import TERMINAL, submit_new
 from .tmux import SHELLS, Tmux, TmuxUnreadable
 
 WORKTREE_MARK = "/.claude/worktrees/"
@@ -76,15 +79,33 @@ def _relay_stop(out, name, res):
     return False
 
 
+def _with_message(cfg, out, agent, profile, session_id, message, caller, name, cmd):
+    """The launch command to send: with a message, record its dispatch and add the startup prompt. None = failed."""
+    if message is None:
+        return cmd
+    d = submit_new(cfg, caller or TERMINAL, name, agent, profile or cfg.codex.profile, message,
+                   notify=caller is not None, now=datetime.now(timezone.utc))
+    if isinstance(d, str):
+        out(f"❌ {d}")
+        return None
+    return launch_line(cfg, agent, profile, session_id=session_id, prompt_file=outbox_path(cfg.state_dir, d.id))
+
+
 def cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.sleep, timeout=15, uuid4=uuid.uuid4,
-            on_prompt=None, wait=True):
+            on_prompt=None, wait=True, message=None, caller=None):
     """target: claude:<profile>, <profile> (taken as claude) or codex.
 
     wait=False: return as soon as the launch command is sent (the ui's n then goes straight into tmux and the user answers the startup menu there). A Claude row is
     registered before launching; Codex only has a conversation once the first prompt is sent, and sampan save registers it afterwards.
 
     on_prompt(name, agent, prompt): asked when the agent stops at a menu on startup (trust, update, hooks review) (prompts.Relay);
-    None (plain non-interactive CLI, tests) = do not look at the screen, press no keys. Time spent answering prompts does not count toward timeout."""
+    None (plain non-interactive CLI, tests) = do not look at the screen, press no keys. Time spent answering prompts does not count toward timeout.
+
+    message: the first message, given to the agent as its startup prompt (`claude "$(cat <outbox>)"`), recorded as a
+    `sent` dispatch (notify only when caller is a sampan session). Without it nothing changes."""
+    if message is not None and not message.strip():
+        out("❌ 訊息是空的")
+        return 2
     if "." in name or ":" in name:
         out(f"❌ 名稱不能含 . 或 :（tmux 會當成 window／pane 分隔）：{name}")
         return 2
@@ -115,7 +136,8 @@ def cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.sleep
     if _load(cfg, out) is None:  # registry broken: stop first, so no unregistered empty session is left behind
         return 2
     session_id = str(uuid4()) if agent == "claude" else None
-    cmd = launch_line(cfg, agent, profile, session_id=session_id)
+    cmd = launch_line(cfg, agent, profile, session_id=session_id,
+                      prompt_file=outbox_path(cfg.state_dir, "<派工編號>") if message is not None else None)
     if dry_run:
         out(f"[dry-run] 建立 tmux session {name}（{cwd}）→ {cmd}")
         return 0
@@ -127,9 +149,15 @@ def cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.sleep
         row = Row(name, "claude", profile, session_id, cwd, "active", now_iso(), tmux.server_id() or "", None)
         if not _register(cfg, out, row):
             return 2
+        cmd = _with_message(cfg, out, agent, profile, session_id, message, caller, name, cmd)
+        if cmd is None:
+            return 2
         send_line(tmux, pane, agent, cmd, sleep)
         out(f"▶ {name}（{profile}，{session_id[:8]}）已登記")
     else:
+        cmd = _with_message(cfg, out, agent, profile, session_id, message, caller, name, cmd)
+        if cmd is None:
+            return 2
         send_line(tmux, pane, agent, cmd, sleep)
         out(f"▶ {name}（codex）已開啟，等 Codex 建立對話…")
     if not wait:

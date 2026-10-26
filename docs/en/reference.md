@@ -71,6 +71,8 @@ Dispatch records: one message sent from a caller session (or the terminal) to a 
 | `notify`, `notified` | whether to notify the caller when done, and whether that happened |
 | `thread_id` | conversation identifier, or `null` |
 
+A dispatch made by `sampan new --message` starts as `sent` (`sent_at` is when the session was opened; `text` and `outbox/<id>.txt` do not end with a newline, because `$(cat …)` drops trailing newlines and the reply would not match); the conversation id is filled in by later advances from the status rows.
+
 How the state moves: `queued` → `sent` (delivered, `sent_at`) → `done` (`reply` is the reply to this message) or `failed` (`reason` says why); `cancelled` only comes from `queued` (`sampan dispatches cancel`). `done_at` is when it finished. Every step is taken inside the lock (read the latest, decide, write), so one dispatch is never delivered twice; if Enter fails after the paste (the text is already in the target's box) it becomes `failed` and is never pasted again (the same for the completion notice: it counts as notified, with the `reason` saying so). Exit codes of `sampan send`: 0 sent (`--wait`: answered), 1 failed, 2 refused or the file cannot be read, 124 `--wait` timed out (the dispatch stays). The completion notice (`notify`) goes to the caller's session through `outbox/<id>-notice.txt`.
 
 A file that cannot be read is never overwritten. Finished entries (`done`, `failed`, `cancelled`) older than 7 days are dropped, and only the newest 200 are kept. `outbox/<id>.txt` holds the exact text to deliver (mode 600).

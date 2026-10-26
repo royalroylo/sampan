@@ -233,6 +233,7 @@ After a plugin changes version, restart that profile's Claude sessions completel
 - Without `--wait`: one attempt, then it prints the dispatch id and exits; a `--wait` command, the MCP tools or an open `sampan` screen move it on later (with nobody watching it stays where it is until someone does).
 - `--wait`: checks every 2 seconds and prints the reply to stdout when the target is done (exit 0); a failure prints the reason (exit 1); past `--timeout` (600 seconds by default) it prints 「還在做，派工 <id>」 (exit 124) and the dispatch stays.
 - `sampan dispatches` lists queued dispatches and those waiting for a reply (id, from, to, state, created, reason); `--all` adds the answered, failed and cancelled ones. `sampan dispatches cancel <id>` cancels only one not sent yet.
+- Send one together with a new session: `sampan new <name> <target> <dir> --message <message｜->` (`-` reads stdin). The message is the agent's startup prompt (`claude "$(cat <file>)"`, `codex "$(cat <file>)"`), so startup prompts such as folder trust are still asked first and the message goes in once they are answered; a dispatch already in the "sent" state is recorded, and its reply is read like any other. A command typed in a terminal gets no completion notice. Without `--message` nothing changes.
 - Sending, delivery and cancelling are logged in `actions.log` (`[send]`, `[cancel]`). The scheduled `sampan save` never sends or advances a dispatch.
 
 ## What restore does

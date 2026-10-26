@@ -28,6 +28,7 @@ def build_parser():
     nw.add_argument("target", help="claude:<profile>、<profile>（當成 claude）或 codex")
     nw.add_argument("cwd")
     nw.add_argument("--dry-run", action="store_true")
+    nw.add_argument("--message", help="開場訊息，當作 agent 啟動時的第一個 prompt（會建一筆派工）；- 從 stdin 讀")
     rs = sub.add_parser("restore", help="挑選並逐一接回登記表裡的原對話（不開新對話、不送訊息）")
     rs.add_argument("names", nargs="*", help="只看這些 session（仍會先確認）")
     rs.add_argument("--all", action="store_true", help="勾選所有可接回的（仍會先確認）")
@@ -398,8 +399,11 @@ def _dispatch(cfg, args):
         from . import session_run
         if cmd == "new":
             on_prompt, want = _prompt_fn()
+            extra = {}
+            if args.message is not None:
+                extra["message"] = sys.stdin.read() if args.message == "-" else args.message
             rc = session_run.cmd_new(cfg, run, out, args.name, args.target, args.cwd, dry_run=args.dry_run,
-                                     on_prompt=on_prompt)
+                                     on_prompt=on_prompt, **extra)
             return _go_in(run, want, rc)
         if cmd == "stop":
             return session_run.cmd_stop(cfg, run, out, names=tuple(args.names), profile=args.profile,

@@ -29,13 +29,17 @@ def codex_argv(*, resume=None, extra=()):
     return ["codex", *(["resume", resume] if resume else []), *extra]
 
 
-def shell_command(argv, *, env_set, env_unset=(), cwd=None):
-    """One-line command sent to the pane; paths and arguments go through shlex quote (safe for spaces and CJK)."""
+def shell_command(argv, *, env_set, env_unset=(), cwd=None, prompt_file=None):
+    """One-line command sent to the pane; paths and arguments go through shlex quote (safe for spaces and CJK).
+    prompt_file: appended as the startup prompt, "$(cat '<file>')"; that fragment is added after the quoting
+    (shlex would turn it into a literal string) and only the path inside it is quoted."""
     parts = []
     if env_unset or env_set:
         parts = ["env", *[a for name in env_unset for a in ("-u", name)],
                  *[f"{k}={v}" for k, v in env_set.items()]]
     line = shlex.join(parts + list(argv))
+    if prompt_file is not None:
+        line += f' "$(cat {shlex.quote(str(prompt_file))})"'
     return f"cd {shlex.quote(cwd)} && {line}" if cwd else line
 
 
@@ -47,19 +51,20 @@ def codex_env(cfg):
     return {"CODEX_HOME": str(cfg.codex.home)}
 
 
-def launch_line(cfg, agent, profile_name, *, resume=None, session_id=None, cwd=None):
+def launch_line(cfg, agent, profile_name, *, resume=None, session_id=None, cwd=None, prompt_file=None):
     if resume is not None and not is_uuid(resume):
         # an empty or broken id makes claude/codex start a new conversation or show a picker: reattaching must never turn into a new conversation
         raise ValueError(f"對話 id {resume!r} 不是 UUID，不能接回")
     if agent == "codex":
         # when resuming from another directory Codex asks whether to use the recorded directory or the current one; an explicit -C avoids the question
         extra = ("-C", cwd) if cwd else ()
-        return shell_command(codex_argv(resume=resume, extra=extra), env_set=codex_env(cfg), cwd=cwd)
+        return shell_command(codex_argv(resume=resume, extra=extra), env_set=codex_env(cfg), cwd=cwd, prompt_file=prompt_file)
     profile = cfg.profiles[profile_name]
     argv = claude_argv(profile, resume=resume, session_id=session_id)
     if profile.default:
-        return shell_command(argv, env_set={}, env_unset=("CLAUDE_CONFIG_DIR",), cwd=cwd)
-    return shell_command(argv, env_set={"CLAUDE_CONFIG_DIR": str(profile.config_dir)}, cwd=cwd)
+        return shell_command(argv, env_set={}, env_unset=("CLAUDE_CONFIG_DIR",), cwd=cwd, prompt_file=prompt_file)
+    return shell_command(argv, env_set={"CLAUDE_CONFIG_DIR": str(profile.config_dir)}, cwd=cwd,
+                         prompt_file=prompt_file)
 
 
 def send_line(tmux, target, agent, line, sleep):

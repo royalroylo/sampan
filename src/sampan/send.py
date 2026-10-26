@@ -88,24 +88,52 @@ def submit(cfg, run, caller, to, message, *, notify, now, snapshot_fn=None, stat
     problem = _target_problem(row, to)
     if problem:
         return problem
+    r = _create(cfg, caller, to, row.agent, row.profile, message, "queued", now, notify=notify,
+                thread_id=(row.sid or None) if row.agent == "codex" else None)
+    if isinstance(r, str):
+        return r
+    actionlog.append(cfg, "send", [f"派工 {r.id}：{_who(r)} → {to}（{row.agent}）：{_preview(message)}"])
+    return r
+
+
+def _who(d):
+    return d.from_name if d.from_profile == "" else f"{d.from_name}（{d.from_profile}）"
+
+
+def _create(cfg, caller, to, to_agent, to_profile, message, state, now, *, notify, thread_id=None, strip=False):
+    """Write the outbox and record a dispatch under the lock. A copy of it, or why not (str).
+    strip: drop trailing newlines from the text (a startup prompt goes through `$(cat …)`, which drops them)."""
     try:
         with dispatch.transaction(cfg.state_dir) as items:
             did = dispatch.new_id({d.id for d in items})
             text = deliver.compose(caller.name, caller.profile, did, message)
+            if strip:
+                text = text.rstrip("\n")
             dispatch.write_outbox(cfg.state_dir, did, text)
             d = dispatch.Dispatch(
                 did, caller.name if caller.name is not None else TERMINAL_NAME, caller.profile, caller.agent,
-                to, row.agent, row.profile, text, "queued", _iso(now),
-                notify=bool(notify and caller.name is not None),
-                thread_id=(row.sid or None) if row.agent == "codex" else None)
+                to, to_agent, to_profile, text, state, _iso(now),
+                sent_at=_iso(now) if state == "sent" else None,
+                notify=bool(notify and caller.name is not None), thread_id=thread_id)
             kept = dispatch.prune(items, now)
             _drop_outboxes(cfg, {x.id for x in items} - {x.id for x in kept})
             items[:] = kept + [d]
     except (dispatch.DispatchError, OSError) as e:
         return str(e)
-    who = d.from_name if caller.name is None else f"{d.from_name}（{d.from_profile}）"
-    actionlog.append(cfg, "send", [f"派工 {did}：{who} → {to}（{row.agent}）：{_preview(message)}"])
     return replace(d)
+
+
+def submit_new(cfg, caller, to, to_agent, to_profile, message, *, notify, now):
+    """Record the dispatch for `sampan new --message`: the message is the new session's startup prompt, so it is
+    `sent` at once (the session does not exist yet to be checked) and the outbox file is what `$(cat …)` reads.
+    Dispatch, or why not (str)."""
+    if not message.strip():
+        return "訊息是空的"
+    r = _create(cfg, caller, to, to_agent, to_profile, message, "sent", now, notify=notify, strip=True)
+    if isinstance(r, str):
+        return r
+    actionlog.append(cfg, "send", [f"派工 {r.id}：{_who(r)} → {to}（{to_agent}，開場訊息）：{_preview(message)}"])
+    return r
 
 
 def _drop_outboxes(cfg, ids):

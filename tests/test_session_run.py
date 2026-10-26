@@ -1,10 +1,12 @@
 import dataclasses
+import shlex
 import tempfile
 import unittest
 from pathlib import Path
 
-from sampan import actionlog
+from sampan import actionlog, deliver, dispatch
 from sampan.registry import Row, load_rows, write_rows
+from sampan.send import Caller
 from sampan.session_run import cmd_forget, cmd_new, cmd_rename, cmd_set_state
 from tests.fakes import FakeRunner, cp, pane_line, ps_line
 from tests.helpers import make_env
@@ -61,6 +63,45 @@ class NewAndStateTest(Base):
         self.assertEqual(self.keys_sent(r)[0][1],
                          f"env CLAUDE_CONFIG_DIR={self.cfg.profiles['work'].config_dir} claude --session-id {B}")
         self.assertTrue(any("信任" in m for m in self.msgs))
+
+    def test_new_with_message_sends_it_as_startup_prompt_and_records_a_sent_dispatch(self):
+        r = self.runner()
+        msg = "line1\n$HOME `x` 中文\n"
+        rc = cmd_new(self.cfg, r, self.msgs.append, "new-x", "claude:work", str(self.cwd),
+                     sleep=lambda _: None, timeout=1, uuid4=lambda: B, message=msg)
+        self.assertEqual(rc, 1)
+        keys = self.keys_sent(r)
+        self.assertEqual(len(keys), 1)  # only the launch command (+ Enter)
+        [d] = dispatch.load(self.cfg.state_dir)
+        out_path = dispatch.outbox_path(self.cfg.state_dir, d.id)
+        self.assertTrue(keys[0][1].endswith(f"claude --session-id {B} \"$(cat {shlex.quote(str(out_path))})\""))
+        self.assertEqual(out_path.read_text(), d.text)
+        self.assertEqual(d.text, deliver.compose(None, "", d.id, msg).rstrip("\n"))
+        self.assertFalse(d.text.endswith("\n"))
+        self.assertEqual((d.state, d.to_name, d.to_agent, d.to_profile, d.from_name, d.notify),
+                         ("sent", "new-x", "claude", "work", "終端機", False))
+        self.assertIsNotNone(d.sent_at)
+
+    def test_new_with_message_and_caller_notifies_that_caller(self):
+        r = self.runner()
+        caller = Caller("boss", "work", "claude", "%1")
+        cmd_new(self.cfg, r, self.msgs.append, "new-x", "work", str(self.cwd), sleep=lambda _: None, timeout=1,
+                uuid4=lambda: B, message="hi", caller=caller)
+        [d] = dispatch.load(self.cfg.state_dir)
+        self.assertEqual((d.from_name, d.from_profile, d.from_agent, d.notify), ("boss", "work", "claude", True))
+        self.assertIn("來自 boss（work）", d.text)
+
+    def test_new_with_message_dry_run_creates_nothing(self):
+        r = self.runner()
+        self.assertEqual(cmd_new(self.cfg, r, self.msgs.append, "new-x", "work", str(self.cwd), dry_run=True,
+                                 message="hi"), 0)
+        self.assertEqual(dispatch.load(self.cfg.state_dir), [])
+        self.assertIn("$(cat", self.msgs[0])
+
+    def test_new_with_blank_message_is_refused(self):
+        r = self.runner()
+        self.assertEqual(cmd_new(self.cfg, r, self.msgs.append, "new-x", "work", str(self.cwd), message="  \n"), 2)
+        self.assertEqual(self.keys_sent(r), [])
 
     def test_new_bare_profile_is_claude_and_confirms_when_session_file_appears(self):
         r = self.runner()
