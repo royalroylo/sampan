@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-27
+
 ### Added
 - `Ctrl-q` jumps out of a session sampan manages and back to the `sampan` screen (detaches a client attached from outside tmux; switches back when sampan switched over from inside tmux); in other tmux sessions the key reaches the program. sampan binds it in the running tmux server (never `~/.tmux.conf`) when its screen opens and before attaching, and marks its sessions with the `@sampan` session option. `[ui] detach_key` changes the key, `""` turns it off; a binding of the key that sampan did not write is never overwritten, and `sampan doctor` warns about it.
 - `Tab` / `Shift+Tab` on the `sampan` screen filter the list by state: 全部, 閒置 (running and idle, what `S` restarts), 忙碌 (running, not idle), 已停止 and 異常 (mismatch, unregistered, no agent, several agents, unknown, waiting for trust); retired ones only under 全部. The title shows the filter and its count (`› 閒置（12）`), folders list and count only their matching sessions and are hidden when none match, 「Codex 其他對話」 shows only under 全部, `/` searches within the filter, and an empty result says so (「沒有閒置的 session」). Checkmarks never stay on a session the filter hides, and `s` / `S` on a folder row act only on its matching sessions; when checkmarks go that way, the next `s` / `S` / `g` / `f` says to check again instead of acting on the cursor row. The filter stays across actions, not between runs; not in `--plain`.
@@ -358,7 +360,8 @@ First public release. Versions up to 0.5.3 were released privately under the nam
 ### Security
 - Credentials in git URLs are no longer shown in output.
 
-[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/royalroylo/sampan/releases/tag/v0.13.0
 [0.12.0]: https://github.com/royalroylo/sampan/releases/tag/v0.12.0
 [0.11.1]: https://github.com/royalroylo/sampan/releases/tag/v0.11.1
 [0.11.0]: https://github.com/royalroylo/sampan/releases/tag/v0.11.0
