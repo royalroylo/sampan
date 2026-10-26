@@ -289,6 +289,45 @@ class CliTest(unittest.TestCase):
             self.assertEqual(cli.main(["new", "x", "claude:work", "/tmp"]), 2)
         self.assertEqual(buf.getvalue().splitlines(), ["❌ profile work 已停用（sampan profile enable work）"] * 3)
 
+    def test_send_passes_message_wait_and_timeout(self):
+        with mock.patch("sampan.send.cmd_send", return_value=124) as cs, mock.patch("sampan.runner.run", FakeRunner(strict=True)):
+            self.assertEqual(cli.main(["send", "api", "多行\n訊息", "--wait", "--timeout", "30"]), 124)
+        self.assertEqual(cs.call_args.args[3:], ("api", "多行\n訊息"))
+        self.assertEqual(cs.call_args.kwargs, {"wait": True, "timeout": 30})
+        with mock.patch("sampan.send.cmd_send", return_value=0) as cs:
+            self.assertEqual(cli.main(["send", "api", "hi"]), 0)
+        self.assertEqual(cs.call_args.kwargs, {"wait": False, "timeout": 600})
+
+    def test_send_dash_reads_stdin(self):
+        with mock.patch("sampan.send.cmd_send", return_value=0) as cs, mock.patch("sys.stdin", io.StringIO("from\nstdin $x `y`\n")):
+            cli.main(["send", "api", "-"])
+        self.assertEqual(cs.call_args.args[4], "from\nstdin $x `y`\n")
+
+    def test_dispatches_list_and_cancel(self):
+        with mock.patch("sampan.send.cmd_dispatches", return_value=0) as cd:
+            self.assertEqual(cli.main(["dispatches"]), 0)
+            self.assertEqual(cli.main(["dispatches", "--all"]), 0)
+        self.assertEqual([c.kwargs["all_"] for c in cd.call_args_list], [False, True])
+        with mock.patch("sampan.send.cmd_cancel", return_value=2) as cc:
+            self.assertEqual(cli.main(["dispatches", "cancel", "ab12"]), 2)
+        self.assertEqual(cc.call_args.args[2], "ab12")
+        buf = io.StringIO()
+        with mock.patch("sampan.send.cmd_cancel") as cc, redirect_stdout(buf):
+            self.assertEqual(cli.main(["dispatches", "cancel"]), 2)
+        self.assertEqual(cc.call_count, 0)
+        self.assertIn("用法", buf.getvalue())
+
+    def test_dispatches_cancel_end_to_end(self):
+        from sampan import dispatch
+        with dispatch.transaction(self.cfg.state_dir) as items:
+            items.append(dispatch.Dispatch("ab12", "終端機", "", "", "b", "claude", "alice", "x", "queued",
+                                           "2026-10-26T12:00:00+00:00"))
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            self.assertEqual(cli.main(["dispatches", "cancel", "ab12"]), 0)
+            self.assertEqual(cli.main(["dispatches", "cancel", "ab12"]), 2)  # already cancelled
+        self.assertEqual(dispatch.load(self.cfg.state_dir)[0].state, "cancelled")
+
 
 class EntryPointTest(unittest.TestCase):
     def test_pyproject_declares_only_the_sampan_entry_point(self):

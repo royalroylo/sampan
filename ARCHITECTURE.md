@@ -20,8 +20,8 @@ What does not happen: nothing in detection, the registry or the leaf modules imp
    - `registry.py` reads and writes `registry.json`; `dispatch.py` stores dispatch records (`dispatches.json`, its own lock, `outbox/`); `config.py` reads `config.toml`; `fsutil.py` does atomic writes;
      `clock.py` stores times in UTC and formats them in local time.
 3. **Actions** (change things, always on explicit command)
-   - `save.py`, `restore.py`, `session_run.py` (new / stop / move / rename), `adopt.py`, `launch.py`, `prompts.py`, `deliver.py` (paste a dispatch into an empty Claude prompt, or `codex queue`)
-     (answering startup prompts through a `Relay`), `plugins.py` (read-only status and `sync` for scripts), `plugin_view.py` / `marketplace_view.py` (what the plugin screen shows: rows, cards, save previews; pure), `plugin_apply.py` (runs the `claude plugin` commands of a save, backs up and edits the config, restarts the sessions of chosen profiles), `config_edit.py` (byte-preserving edits of `config.toml`), `actionlog.py` (appends action messages to `actions.log`), `profile_ops.py` (profile list / rename / disable / enable / forget / add and the `[codex]` conversion; edits `config.toml` and the registry), `statusline_setup.py` (wraps / unwraps the `statusLine` command in a profile's `settings.json`), `hook.py`, `launchd.py`, `init.py`, `update.py`.
+   - `save.py`, `restore.py`, `session_run.py` (new / stop / move / rename), `adopt.py`, `launch.py`, `prompts.py`
+     (answering startup prompts through a `Relay`), `deliver.py` (paste a dispatch into an empty Claude prompt, or `codex queue`), `send.py` (submit a dispatch, advance it queued → sent → done / failed inside the dispatch lock, read the reply, notify the caller; `sampan send` / `sampan dispatches`), `plugins.py` (read-only status and `sync` for scripts), `plugin_view.py` / `marketplace_view.py` (what the plugin screen shows: rows, cards, save previews; pure), `plugin_apply.py` (runs the `claude plugin` commands of a save, backs up and edits the config, restarts the sessions of chosen profiles), `config_edit.py` (byte-preserving edits of `config.toml`), `actionlog.py` (appends action messages to `actions.log`), `profile_ops.py` (profile list / rename / disable / enable / forget / add and the `[codex]` conversion; edits `config.toml` and the registry), `statusline_setup.py` (wraps / unwraps the `statusLine` command in a profile's `settings.json`), `hook.py`, `launchd.py`, `init.py`, `update.py`.
 4. **Interfaces**
    - `cli.py` (argparse and dispatch, exit codes), `ui/` (curses screen), `doctor.py` (diagnostics).
    - `usage.py` is the quota reader plus the `sampan statusline` command that Claude Code runs on every refresh (light imports only): it stores the status-line JSON's rate limits and reads Codex's from the newest rollout; the ui shows them as account lines.
@@ -36,8 +36,9 @@ callable (`runner.py`). That is what makes the suite fast and safe: tests pass a
 
 - One agent per tmux session. A session with more than one agent is not saved, restored, stopped or moved.
 - Resume never starts a new conversation in place of the recorded one. If it cannot be found, the session is skipped.
-- sampan presses no key the user did not choose. The only automatic answer is `sampan move` pressing "trust" when the
-  prompt's path is exactly the destination. A prompt that cannot be read gets no keys.
+- sampan presses no key the user did not choose. The exceptions are `sampan move` pressing "trust" when the prompt's
+  path is exactly the destination, and delivering a dispatch the user sent or approved (`sampan send`, the MCP tools)
+  together with its completion notice — and only into an empty prompt. A prompt that cannot be read gets no keys.
 - `save` (and so the schedule) never restores, starts, moves or stops anything.
 - The registry never deletes a row by itself; only `sampan forget` or `X` in the ui (which asks first) removes one.
   A session whose tmux is gone becomes "stopped", not removed. If tmux itself cannot be read, the state is "unknown",

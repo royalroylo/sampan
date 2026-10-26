@@ -33,6 +33,9 @@ no account. The complete list of what it changes or touches:
   `sampan` screen or an interactive terminal. The one exception is `sampan move`, which presses "trust" when the prompt shows a
   path exactly equal to the destination directory; that grants the agent trust over that directory. Anything else gets no keys.
 - `sampan adopt` never presses anything in the original terminal; you exit the agent yourself.
+- A dispatch you sent (`sampan send`): its text pasted from a tmux buffer into the target Claude's prompt and Enter, only
+  when the target is idle and the prompt box is empty (Codex gets it through `codex queue`, no keys); and the one-line
+  completion notice into the caller's session the same way, when the caller asked for one.
 
 **Commands it runs**
 

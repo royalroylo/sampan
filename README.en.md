@@ -44,7 +44,7 @@ Tip: sampan is a long name to type, and on macOS `sam` plus Tab collides with `/
 - Config goes in `~/.config/sampan/`; the registry and history in `~/.local/state/sampan/`.
 - macOS: one launchd job runs `sampan save` every 5 minutes. It only saves.
 - Claude's `settings.json` is not touched unless you run `sampan init --hook` (or accept repairing a hook installed earlier).
-- It types into tmux panes only when you act: open, resume, stop or move.
+- It types into tmux panes only when you act: open, resume, stop, move or send (`sampan send`, only into an empty prompt).
 - Network: while the UI is open it checks sampan's version tags on GitHub at most every 6 hours; `U` checks again right away when no newer version is known yet, and `sampan update` always checks again.
 - `sampan init` asks questions and must be run by you in a terminal. It refuses to run without one unless `--yes` is given.
 

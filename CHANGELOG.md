@@ -5,6 +5,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `sampan send <name> <message|-> [--wait] [--timeout s]` hands a message to a running registered session as a dispatch, starting with a source line (「〔sampan 轉送｜來自 終端機｜派工 <id>〕」). Claude gets it pasted from a tmux buffer and Enter, only while it is idle and its prompt box is empty (a draft keeps it queued, never cleared); Codex gets it through `codex queue`. `--wait` prints the reply to this message (exit 0), the reason of a failure (exit 1), or 「還在做」 after the timeout, 600 s by default (exit 124, the dispatch stays). A `/clear`, another conversation or a stopped target fails the dispatch with 「找不到回覆」 or the reason; text from elsewhere is never returned.
+- `sampan dispatches [--all]` lists dispatches; `sampan dispatches cancel <id>` cancels one still queued. Sending, delivery and cancelling are logged in `actions.log`.
+
 ### Changed
 - The launchd auto-save now runs every 5 minutes (minute 0, 5, ... 55) instead of every hour. An hourly plist counts as an old schedule: `sampan doctor` warns and `sampan init` offers to reinstall it.
 - A `history/` snapshot of the registry is kept only when a session really changed; a save that differs only in `seen_at`, `pid` or `server` no longer adds one (the registry itself is still written every time), so the newest 20 snapshots span much more than 20 saves.

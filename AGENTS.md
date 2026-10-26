@@ -12,7 +12,7 @@ which conversation each session runs, so sessions can be resumed after an agent 
    - `~/.config/sampan/` and `~/.local/state/sampan/` (config, registry, history).
    - macOS: one launchd job that runs `sampan save` every hour. It only saves.
    - Claude's `settings.json` is untouched unless they run `sampan init --hook`.
-   - It types into tmux panes only when the user acts: open, resume, stop or move.
+   - It types into tmux panes only when the user acts: open, resume, stop, move or send (`sampan send`, only into an empty prompt).
 
 ## Installing for a user
 

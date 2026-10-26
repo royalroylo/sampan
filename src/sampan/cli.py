@@ -60,6 +60,15 @@ def build_parser():
     for verb, help_ in (("retire", "標記為不再重開"), ("activate", "恢復為重開")):
         sv = sub.add_parser(verb, help=help_)
         sv.add_argument("name")
+    sd = sub.add_parser("send", help="傳訊息給一個執行中的 session（對方閒著才送，忙就排隊）")
+    sd.add_argument("name")
+    sd.add_argument("message", help="訊息；- 從 stdin 讀")
+    sd.add_argument("--wait", action="store_true", help="等對方回覆，把回覆印出來")
+    sd.add_argument("--timeout", type=int, default=600, help="--wait 最多等幾秒（預設 600；逾時結束碼 124，派工照樣留著）")
+    ds = sub.add_parser("dispatches", usage="sampan dispatches [--all] | sampan dispatches cancel <編號>", help="列派工（預設只列排隊中與等回覆的）；dispatches cancel <編號> 取消還沒送出的")
+    ds.add_argument("action", nargs="?", choices=["cancel"], help=argparse.SUPPRESS)
+    ds.add_argument("id", nargs="?", help=argparse.SUPPRESS)
+    ds.add_argument("--all", action="store_true", help="也列已完成、失敗、取消的")
     sub.add_parser("status", help="登記表與實際狀態的差異、最後活動、context 用量")
     sv = sub.add_parser("save", help="記錄每個 tmux session 的 agent、profile 與對話 id")
     sv.add_argument("--quiet", action="store_true", help="沒有警告時不輸出（給 launchd 用）")
@@ -370,6 +379,18 @@ def _dispatch(cfg, args):
         interactive = sys.stdin.isatty() and sys.stdout.isatty()
         return cmd_adopt(cfg, run, out, input, dry_run=args.dry_run,
                          picker_fn=curses_adopt_checklist if interactive else None)
+    if cmd == "send":
+        from .send import cmd_send
+        message = sys.stdin.read() if args.message == "-" else args.message
+        return cmd_send(cfg, run, out, args.name, message, wait=args.wait, timeout=args.timeout)
+    if cmd == "dispatches":
+        from .send import cmd_cancel, cmd_dispatches
+        if args.action == "cancel":
+            if not args.id:
+                out("❌ 用法：sampan dispatches cancel <編號>")
+                return 2
+            return cmd_cancel(cfg, out, args.id)
+        return cmd_dispatches(cfg, out, all_=args.all)
     if cmd == "status":
         from .status import cmd_status
         return cmd_status(cfg, run, out)

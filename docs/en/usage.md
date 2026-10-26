@@ -213,12 +213,27 @@ Every action also has a command, for scripts or when you prefer typing commands 
 | Move a session to another directory | `sampan move <name> <dir>` (or `m` in the ui): ends the agent, resumes the same conversation in the new directory, trusts the new directory automatically (only when the path shown in the prompt is exactly the new directory) and updates the registry. A missing directory is created; busy sessions, worktrees and the pane you are in are left alone |
 | Never resume this one again | `sampan retire <name>` (undo: `sampan activate <name>`); `sampan restore <name>` on a retired session says "<name> 是 retired；先 sampan activate <name>" |
 | Remove a session that is not running from the registry | `sampan forget <name> [--dry-run]` (or `X` in the ui): only for a stopped or retired session (run `sampan stop` first if it is still in tmux); the ui asks first. Afterwards it prints the command to resume it by hand; the conversation files are never deleted and the previous registry stays in `history/` |
+| Send a message to a session | `sampan send <name> <message｜-> [--wait] [--timeout seconds]`, see "Sending a message to a session" |
+| List / cancel dispatches | `sampan dispatches [--all]`, `sampan dispatches cancel <id>` |
 | Plugin versions per profile | `sampan plugins status` (manage them interactively with `p` in the ui) |
 | New plugin version / remove a plugin | edit `config.toml`, then `sampan plugins sync` (kept for scripts); `sampan plugins sync --prune --dry-run` previews what would be removed |
 | Account management | `sampan profile list｜add｜rename｜disable｜enable｜forget` (`add <name> [--dir D] [--codex]`), see "Account management"; `o` in the ui |
 | Let sampan see Claude's quota | `sampan statusline install｜uninstall [--profile P] [--yes]`, see "Account management" |
 
 After a plugin changes version, restart that profile's Claude sessions completely for it to take effect (stop, then restore).
+
+## Sending a message to a session
+
+`sampan send <name> <message>` hands one message to a running session (`-` reads it from stdin; several lines, quotes and `$` arrive as written). sampan creates a "dispatch", and the message starts with a source line: `〔sampan 轉送｜來自 終端機｜派工 7f3a〕`.
+
+- Only a session in the sampan registry that is running gets it; an unknown name, a session that is not running, or sending to yourself is refused (exit code 2), never guessed.
+- **Claude**: only when the target is idle (activity idle in `sampan status`) **and its prompt box is empty** does sampan paste the whole message through tmux and press Enter. A busy target, one waiting for your answer, a menu or prompt on screen, or half-typed text in the box (「對方輸入框有未送出的字」) → nothing is sent and the dispatch stays queued; someone else's draft is never cleared.
+- **Codex**: `codex queue` hands it to the conversation, and Codex runs it after the current turn.
+- The reply belongs to **this message**: sampan finds the message in the target's transcript and takes the last answer after it, once the target is idle again. If the target `/clear`s, switches conversation or is stopped meanwhile, the dispatch fails with the reason (for example 「找不到回覆」); text from elsewhere is never passed off as the reply.
+- Without `--wait`: one attempt, then it prints the dispatch id and exits; a `--wait` command, the MCP tools or an open `sampan` screen move it on later (with nobody watching it stays where it is until someone does).
+- `--wait`: checks every 2 seconds and prints the reply to stdout when the target is done (exit 0); a failure prints the reason (exit 1); past `--timeout` (600 seconds by default) it prints 「還在做，派工 <id>」 (exit 124) and the dispatch stays.
+- `sampan dispatches` lists queued dispatches and those waiting for a reply (id, from, to, state, created, reason); `--all` adds the answered, failed and cancelled ones. `sampan dispatches cancel <id>` cancels only one not sent yet.
+- Sending, delivery and cancelling are logged in `actions.log` (`[send]`, `[cancel]`). The scheduled `sampan save` never sends or advances a dispatch.
 
 ## What restore does
 

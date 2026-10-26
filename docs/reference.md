@@ -68,4 +68,6 @@
 | `notify`、`notified` | 是否要在完成時通知呼叫者、是否已通知 |
 | `thread_id` | 對話識別，或 `null` |
 
+狀態怎麼走：`queued`（排隊）→ `sent`（已送出，`sent_at`）→ `done`（`reply` 是這則訊息的回覆）或 `failed`（`reason` 寫原因）；`cancelled` 只能從 `queued` 來（`sampan dispatches cancel`）。`done_at` 是結束的時間。推進只在鎖裡做（先讀最新的再判斷再寫），所以同一筆不會被送兩次。`sampan send` 的結束碼：0 送出（`--wait`：已回覆）、1 失敗、2 拒絕或讀不到檔、124 `--wait` 逾時（派工照樣留著）。完成通知（`notify`）用 `outbox/<id>-notice.txt` 送到呼叫者的 session。
+
 讀不懂的檔不會覆蓋。已完成（`done`、`failed`、`cancelled`）超過 7 天的會被清掉，總數只留最新 200 筆。`outbox/<id>.txt` 放要送出的原文（檔 600）。

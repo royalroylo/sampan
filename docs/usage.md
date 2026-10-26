@@ -189,12 +189,27 @@ Claude Code 只在狀態列指令的輸入裡提供 5h／週額度，所以要�
 | session 換到別的工作目錄 | `sampan move <名稱> <目錄>`（或 ui 按 m）：結束 agent、在新目錄接回同一段對話、自動信任新目錄（只在提示顯示的路徑就是新目錄時）、更新登記表。目錄不存在會建立；忙碌中、worktree、自己的 pane 不動 |
 | 某個 session 以後不用重開 | `sampan retire <名稱>`（恢復：`sampan activate <名稱>`）；對 retired 的 session 打 `sampan restore <名稱>` 會說「<名稱> 是 retired；先 sampan activate <名稱>」 |
 | 把沒在跑的 session 從登記表移除 | `sampan forget <名稱> [--dry-run]`（或 ui 按 X）：只限已停止或 retired 的（還在 tmux 裡的先 `sampan stop`）；ui 裡會先問確定。移除後印出手動接回的指令；對話紀錄永遠不刪，移除前的登記表留在 `history/` |
+| 傳訊息給一個 session | `sampan send <名稱> <訊息｜-> [--wait] [--timeout 秒]`，見「傳訊息給 session」 |
+| 看／取消派工 | `sampan dispatches [--all]`、`sampan dispatches cancel <編號>` |
 | 看各 profile 的 plugin 版本 | `sampan plugins status`（互動管理在 ui 按 `p`） |
 | plugin 有新版／拿掉 plugin | 改 `config.toml` 後 `sampan plugins sync`（給腳本用，仍然可用）；`sampan plugins sync --prune --dry-run` 先看要移除什麼 |
 | 帳號管理 | `sampan profile list｜add｜rename｜disable｜enable｜forget`（`add <名稱> [--dir D] [--codex]`），見「帳號管理」；ui 裡按 `o` |
 | 讓 sampan 看到 Claude 額度 | `sampan statusline install｜uninstall [--profile P] [--yes]`，見「帳號管理」 |
 
 多數會動到 session 的指令都有 `--dry-run`。plugin 換版後，要把該 profile 的 Claude session 整個重開才會生效（stop 後再 restore）。
+
+## 傳訊息給 session
+
+`sampan send <名稱> <訊息>` 把一則訊息交給一個執行中的 session（訊息寫 `-` 就從 stdin 讀，多行、引號、`$` 都照原樣）。sampan 先建一筆「派工」，對方開頭會先看到一行來源：`〔sampan 轉送｜來自 終端機｜派工 7f3a〕`。
+
+- 只送給 sampan 登記表裡、狀態是執行中的 session；找不到、沒在執行、送給自己都會拒絕（結束碼 2），不猜。
+- **Claude**：對方閒著（`sampan status` 的活動是 idle）**而且輸入框是空的**，才用 tmux 貼上整則訊息再按 Enter。對方在忙、在等你回答、畫面停在選單或提示、輸入框裡有人打了一半的字（「對方輸入框有未送出的字」）→ 不送、繼續排隊，不會清掉別人的草稿。
+- **Codex**：用 `codex queue` 交給它的對話，Codex 自己排在目前這輪之後。
+- 回覆只認**這則訊息**：在對方的逐字稿找到這則訊息，取它之後、對方回到閒著時的最後一段回答。對方中途 `/clear`、換了對話或被停掉 → 派工變「失敗」並寫明原因（例如「找不到回覆」），不拿別段文字充數。
+- 不帶 `--wait`：試送一次，印出派工編號就結束；之後由 `--wait` 的指令、MCP 工具或開著的 `sampan` 畫面接著推進（沒人盯時派工停在原狀態，下次有人盯再接著做）。
+- `--wait`：每 2 秒看一次，對方回完就把回覆印到 stdout（結束碼 0）；失敗印原因（結束碼 1）；超過 `--timeout`（預設 600 秒）印「還在做，派工 <編號>」（結束碼 124），派工照樣留著。
+- `sampan dispatches` 列排隊中與等回覆的派工（編號、從誰、給誰、狀態、建立時間、原因）；`--all` 連已回覆、失敗、取消的一起列。`sampan dispatches cancel <編號>` 只能取消還沒送出的。
+- 送出、送達、取消都記在 `actions.log`（`[send]`、`[cancel]`）。排程的 `sampan save` 永遠不送、不推進派工。
 
 ## restore 的規則
 
