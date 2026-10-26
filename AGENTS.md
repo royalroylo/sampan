@@ -29,7 +29,7 @@ which conversation each session runs, so sessions can be resumed after an agent 
 - To open an agent session for the user (also from another machine over SSH), use
   `sampan new <name> <claude:profile|codex> <dir>` instead of `tmux new-session … claude`: it registers the session
   and records its conversation, so it can be resumed later.
-- `sampan mcp install` / `uninstall` edit the Claude profiles' and Codex's config (through `claude mcp add` / `codex mcp add`): `mcp install` also edits Codex's `config.toml` directly (only sampan's `[mcp_servers.sampan.tools.*]` tables, after a backup `config.toml.bak-sampan-<time>`). Run them only when the user asks, and `--dry-run` first if unsure.
+- `sampan mcp install` / `uninstall` edit the Claude profiles' and Codex's config (through `claude mcp add` / `codex mcp add`): they also edit Codex's `config.toml` directly, only sampan's `[mcp_servers.sampan.tools.*]` tables and each time after a backup `config.toml.bak-sampan-<time>`: `mcp install` with `[mcp] confirm` on adds them, `mcp install` with confirm off and `mcp uninstall` remove them. Run them only when the user asks, and `--dry-run` first if unsure.
 - While `[mcp] confirm` is on, `sampan send`, `sampan new … --message` and `sampan dispatches cancel` run by an agent are refused; use the sampan MCP tools instead (the user is asked each time).
 - `sampan update` is not read-only: it reinstalls sampan. Only run it if the user asks, and do not pass `--yes` to `sampan update` on the user's behalf.
 
