@@ -3,6 +3,7 @@ import os
 import shutil
 import sqlite3
 import sys
+import tomllib
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -277,11 +278,17 @@ def _codex_daemon(cfg, run, snapshot_fn=None):
 
 def _codex_approval(cfg):
     """Codex's approval_mode tables for sampan's acting tools disagree with [mcp] confirm (e.g. the user chose
-    "always allow" in Codex, which writes "approve"). Broken or absent config.toml: quiet here."""
+    "always allow" in Codex, which writes "approve"), or a config.toml Codex cannot read. Absent: quiet."""
     try:
         text = (Path(cfg.codex.home) / "config.toml").read_text()
-    except (OSError, UnicodeDecodeError):
+    except FileNotFoundError:
         return []
+    except (OSError, UnicodeDecodeError) as e:
+        return [Check("warn", f"Codex config.toml 讀不了：{e}")]
+    try:
+        tomllib.loads(text)
+    except tomllib.TOMLDecodeError as e:
+        return [Check("warn", f"Codex config.toml 讀不了：{e}")]
     if not codex_approval.needs_fix(text, cfg.mcp_confirm):
         return []
     if cfg.mcp_confirm:
@@ -293,11 +300,8 @@ def _mcp(cfg):
     """Where the sampan MCP is installed; quiet when it is nowhere."""
     st = mcp_install.status(cfg)
     here = [n for n, v in st.items() if v]
-    if not here:
-        return []
-    if cfg.codex.enabled and st.get(cfg.codex.profile or "codex"):
-        return _mcp_where(st, here) + _codex_approval(cfg)
-    return _mcp_where(st, here)
+    codex = _codex_approval(cfg) if cfg.codex.enabled else []  # a broken config.toml reads as "not installed" in st
+    return (_mcp_where(st, here) if here else []) + codex
 
 
 def _mcp_where(st, here):

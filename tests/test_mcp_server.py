@@ -2,6 +2,7 @@
 import dataclasses
 import io
 import json
+import os
 import queue
 import tempfile
 import threading
@@ -106,6 +107,9 @@ class Base(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.cfg = make_env(Path(self._tmp.name))
+        env = mock.patch.dict("os.environ", {"CODEX_HOME": str(self.cfg.codex.home)})  # never the real ~/.codex
+        env.start()
+        self.addCleanup(env.stop)
         self.rows = {
             "a": status_row("a", sid="sa", pane="%1"),
             "b": status_row("b", sid="sb", pane="%2"),
@@ -281,6 +285,33 @@ class FailClosedTest(Base):
                 self.assertEqual(self.dispatches(), [])  # send never went out
                 if text is not approve_send:
                     self.assertEqual(tmux_writes(run), [])
+
+    def test_codex_check_reads_the_codex_home_codex_runs_with(self):
+        prompt = codex_approval.with_prompt('[mcp_servers.sampan]\ncommand = "sampan"\n')
+        other = Path(self._tmp.name) / "other-codex"
+        other.mkdir()
+        send_b = call(2, "send", {"session": "b", "message": "hi"})
+        self.codex_toml(prompt)  # sampan's configured home says prompt, the one Codex runs with does not
+        (other / "config.toml").write_text('[mcp_servers.sampan]\ncommand = "sampan"\n')
+        with mock.patch.dict("os.environ", {"CODEX_HOME": str(other)}):
+            c = self.serve(Client([init(1, client="codex-mcp-client"), send_b]), run=tmux_runner())
+        self.assertEqual(tool_text(c.response(2)), mcp_server.CODEX_NOT_PROMPT)
+        self.codex_toml('[mcp_servers.sampan]\ncommand = "sampan"\n')  # and the reverse
+        (other / "config.toml").write_text(prompt)
+        with mock.patch.dict("os.environ", {"CODEX_HOME": str(other)}):
+            c = self.serve(Client([init(1, client="codex-mcp-client"), send_b]), run=tmux_runner())
+        self.assertFalse(c.response(2)["result"]["isError"])
+
+    def test_codex_check_without_codex_home_uses_dot_codex_in_home(self):
+        home = Path(self._tmp.name) / "fakehome"
+        (home / ".codex").mkdir(parents=True)
+        (home / ".codex" / "config.toml").write_text(
+            codex_approval.with_prompt('[mcp_servers.sampan]\ncommand = "sampan"\n'))
+        with mock.patch.dict("os.environ"), mock.patch("pathlib.Path.home", return_value=home):
+            os.environ.pop("CODEX_HOME", None)
+            c = self.serve(Client([init(1, client="codex-mcp-client"), call(2, "send", {"session": "b", "message": "hi"})]),
+                           run=tmux_runner())
+        self.assertFalse(c.response(2)["result"]["isError"])
 
     def test_codex_read_only_tools_and_confirm_off_need_no_tables(self):
         c = self.serve(Client([init(1, client="codex-mcp-client"), call(2, "list_sessions", {})]))

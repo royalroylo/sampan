@@ -152,6 +152,33 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(self.path.read_text(), INSTALLED)
         self.assertEqual(self.backups(), [])
 
+    def test_crlf_file_keeps_its_bytes(self):
+        crlf = ORIGINAL.replace("\n", "\r\n").encode()
+        self.path.write_bytes(crlf)
+        self.assertTrue(ca.apply(self.path, True, now=NOW).startswith("已更新"))
+        self.assertEqual((self.dir / BACKUP).read_bytes(), crlf)  # byte-identical backup
+        new = self.path.read_bytes()
+        kept = (OTHERS_BEFORE + OTHERS_AFTER).replace("\n", "\r\n").encode()
+        self.assertTrue(new.startswith(kept), new)
+        tail = new[len(kept):]
+        self.assertEqual(tail, "".join(f'\r\n{ca.section(t)}\r\napproval_mode = "prompt"\r\n'
+                                       for t in ca.ACTING_TOOLS).encode())
+        self.assertEqual(modes(new.decode()), {t: "prompt" for t in ca.ACTING_TOOLS})
+        self.assertTrue(ca.apply(self.path, False, now=NOW).startswith("已更新"))
+        self.assertEqual(self.path.read_bytes(), kept)
+
+    def test_unrecognised_sampan_tables_get_their_own_message(self):
+        for text in ('mcp_servers = { sampan = { command = "x", tools = { send = { approval_mode = "approve" } } } }\n',
+                     INSTALLED + '\n[mcp_servers."sampan".tools."send"]\napproval_mode = "approve"\n'):
+            with self.subTest(text=text):
+                self.path.write_text(text)
+                with self.assertRaises(ValueError) as e:
+                    ca.apply(self.path, True, now=NOW)
+                self.assertEqual(str(e.exception), ca.NOT_TABLES)
+                self.assertNotIn("不是合法的 TOML", str(e.exception))
+                self.assertEqual(self.path.read_text(), text)
+                self.assertEqual(self.backups(), [])
+
     def test_backup_in_the_same_second_keeps_the_first(self):
         self.path.write_text(INSTALLED)
         ca.apply(self.path, True, now=NOW)

@@ -366,6 +366,13 @@ class McpDoctorTest(DoctorTest):
         self.assertEqual(self.approval_titles(),
                          ["Codex 的 sampan 工具還設著每次詢問（[mcp] confirm = false）：跑 sampan mcp install 拿掉"])
 
+    def test_doctor_says_when_codex_config_is_broken(self):
+        self.codex_toml('[mcp_servers.sampan]\ncommand = "sampan"\n[x')
+        hits = [c for c in self.checks() if c.title.startswith("Codex config.toml 讀不了：")]
+        self.assertEqual(len(hits), 1, [c.title for c in self.checks()])
+        self.assertEqual(hits[0].level, "warn")
+        self.assertEqual(self.approval_titles(), [])
+
     def test_doctor_quiet_when_codex_prompt_set(self):
         installed = '[mcp_servers.sampan]\ncommand = "sampan"\n'
         self.codex_toml(codex_approval.with_prompt(installed))

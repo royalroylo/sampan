@@ -13,6 +13,8 @@ from .mcp_server import ACTING_TOOLS
 
 PROMPT = "prompt"
 NOT_TOML = "Codex config.toml 不是合法的 TOML："
+NOT_TABLES = ('Codex config.toml 的 sampan 設定不是用 [mcp_servers.sampan.tools.<工具>] 表寫的，sampan 改不了；'
+              '請手動設 approval_mode = "prompt"')
 
 
 def section(tool: str) -> str:
@@ -24,7 +26,7 @@ def strip_sections(text: str, tools=ACTING_TOOLS) -> str:
     before the header goes too; blank and comment lines just before the next header stay (they belong to it)."""
     heads = {section(t) for t in tools}
     out, tail, inside = [], [], False
-    for line in text.splitlines(keepends=True):
+    for line in _lines(text):
         s = line.strip()
         if s.startswith("["):
             if inside:
@@ -45,13 +47,21 @@ def strip_sections(text: str, tools=ACTING_TOOLS) -> str:
     return "".join(out + tail)
 
 
+def _lines(text):
+    """text split after each \n only (str.splitlines also splits at \x0c, \u2028…); each line keeps its \r\n or \n."""
+    parts = text.split("\n")
+    return [p + "\n" for p in parts[:-1]] + ([parts[-1]] if parts[-1] else [])
+
+
 def with_prompt(text: str, tools=ACTING_TOOLS) -> str:
-    """text with one `approval_mode = "prompt"` table per tool at the end (any earlier sampan table removed)."""
+    """text with one `approval_mode = "prompt"` table per tool at the end (any earlier sampan table removed), in the
+    file's own line ending (\r\n when it has any)."""
+    nl = "\r\n" if "\r\n" in text else "\n"
     out = strip_sections(text, tools)
     if out and not out.endswith("\n"):
-        out += "\n"
+        out += nl
     for tool in tools:
-        out += f'\n{section(tool)}\napproval_mode = "{PROMPT}"\n'
+        out += f'{nl}{section(tool)}{nl}approval_mode = "{PROMPT}"{nl}'
     return out
 
 
@@ -96,8 +106,8 @@ def _parse(text):
         raise ValueError(f"{NOT_TOML}{e}") from None
 
 
-def _backup(path, text, mode, now):
-    """Write text next to path as config.toml.bak-sampan-<time> with mode; never overwrites an earlier backup."""
+def _backup(path, raw, mode, now):
+    """Write the bytes raw next to path as config.toml.bak-sampan-<time> with mode; never overwrites an earlier backup."""
     base = f"{path.name}.bak-sampan-{now:%Y%m%d-%H%M%S}"
     for n in range(100):
         target = path.with_name(base if n == 0 else f"{base}-{n}")
@@ -106,8 +116,8 @@ def _backup(path, text, mode, now):
         except FileExistsError:
             continue
         try:
-            with os.fdopen(fd, "w") as fh:
-                fh.write(text)
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(raw)
             os.chmod(target, mode)
         except BaseException:
             target.unlink(missing_ok=True)
@@ -122,19 +132,29 @@ def apply(path: Path, confirm: bool, *, now, dry_run=False) -> str:
     `[mcp_servers.sampan]` (or no file) is left alone: tables alone would give Codex a server with no command."""
     path = Path(path)
     try:
-        text = path.read_text()
+        raw = path.read_bytes()  # bytes: read_text would turn \r\n into \n and rewrite every line
     except FileNotFoundError:
         return "不用改"
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise ValueError(f"{NOT_TOML}{e}") from None
     data = _parse(text)
     if confirm and _sampan(data) is None:
         return "不用改"
     new = with_prompt(text) if confirm else strip_sections(text)
     if new == text:
         return "不用改"
-    _parse(new)
+    try:
+        tomllib.loads(new)
+        ok = not needs_fix(new, confirm)
+    except tomllib.TOMLDecodeError:
+        ok = False
+    if not ok:  # sampan's entry is written in a form strip/with_prompt do not see (inline or quoted tables)
+        raise ValueError(NOT_TABLES)
     if dry_run:
         return "會更新"
     mode = stat.S_IMODE(path.stat().st_mode)
-    backup = _backup(path, text, mode, now)
-    fsutil.atomic_write(path, new)  # keeps the file's mode
+    backup = _backup(path, raw, mode, now)
+    fsutil.atomic_write(path, new)  # keeps the file's mode; text mode writes \r\n unchanged on POSIX
     return f"已更新（備份：{backup.name}）"

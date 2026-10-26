@@ -9,6 +9,7 @@ every 3 seconds while the server is alive. Every write to stdout holds one lock.
 """
 import copy
 import json
+import os
 import sys
 import threading
 import time
@@ -84,6 +85,11 @@ def tools_list(confirm):
             if t["name"] in ACTING_TOOLS:
                 t["_meta"] = {INTERACTION_META: True}
     return tools
+
+
+def _running_codex_home():
+    """The CODEX_HOME of the Codex that started this server (its child, same environment), not sampan's configured one."""
+    return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
 
 
 def _utcnow():
@@ -246,9 +252,9 @@ class Server:
             return None
         if self.client_name not in ASKING_CLIENTS:
             return NOT_ASKING
-        if self.client_name == CODEX:  # Codex asks only when its config.toml says so; read now, the user may change it
+        if self.client_name == CODEX:  # Codex asks only when its config.toml says so; read now, the user may change it.
             from . import codex_approval  # imports this module (ACTING_TOOLS)
-            if not codex_approval.tool_prompts(Path(self.cfg.codex.home) / "config.toml", tool):
+            if not codex_approval.tool_prompts(_running_codex_home() / "config.toml", tool):
                 return CODEX_NOT_PROMPT
         return None
 
