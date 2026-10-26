@@ -225,6 +225,18 @@ class AdvanceClaudeTest(Base):
         self.assertEqual(d.reason, "對方輸入框有未送出的字")
         self.assertEqual(tmux_writes(run), [])
 
+    def test_failed_enter_after_paste_fails_and_is_never_pasted_again(self):
+        d = self.submit()
+        run = tmux_runner().on(["tmux", "-u", "send-keys"], cp(1, "", "can't find pane"))
+        d = self.advance(run, d.id)
+        self.assertEqual(d.state, "failed")
+        self.assertIn("can't find pane", d.reason)
+        self.assertIn("已貼進", d.reason)
+        run = tmux_runner()
+        self.assertEqual(self.advance(run, d.id, later(5)).state, "failed")
+        self.assertEqual(run.calls, [])
+        self.assertEqual(send.cmd_cancel(self.cfg, lambda line: None, d.id), 2)
+
     def test_mid_turn_text_is_not_done_until_idle(self):
         d = self.submit()
         self.advance(tmux_runner(), d.id)
@@ -422,6 +434,18 @@ class NotifyTest(Base):
         self.assertTrue(d.notified)
         self.assertEqual(len(tmux_writes(run, "%1")), 2)  # paste + Enter
         self.assertNotIn(d.id, send.pending(self.cfg))
+
+    def test_notice_pasted_without_enter_is_not_pasted_again(self):
+        d = self.done_dispatch()
+        run = tmux_runner().on(["tmux", "-u", "send-keys"], cp(1, "", "lost pane"))
+        d = self.advance(run, d.id, later(5))
+        self.assertEqual(d.state, "done")
+        self.assertTrue(d.notified)
+        self.assertIn("lost pane", d.reason)
+        self.assertNotIn(d.id, send.pending(self.cfg))
+        run = tmux_runner()
+        self.advance(run, d.id, later(10))
+        self.assertEqual(run.calls, [])
 
     def test_caller_with_a_draft_is_tried_again_later(self):
         d = self.done_dispatch()

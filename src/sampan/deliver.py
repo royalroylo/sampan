@@ -16,6 +16,11 @@ REASON_DRAFT = "對方輸入框有未送出的字"
 REASON_BLOCKED = "對方畫面停在選單或提示"
 
 
+class Pasted(str):
+    """A to_claude reason meaning the text is already in the target's prompt box but Enter failed: the caller must
+    not paste it again (a plain str reason means nothing was pasted)."""
+
+
 def source_line(from_name, from_profile, did):
     who = "終端機" if from_name is None else f"{from_name}（{from_profile}）"
     return f"〔sampan 轉送｜來自 {who}｜派工 {did}〕"
@@ -26,7 +31,8 @@ def compose(from_name, from_profile, did, message):
 
 
 def to_claude(tmux, pane_id, outbox, did, sleep):
-    """Paste the outbox file into an empty prompt and press Enter. None on success, else why nothing was sent."""
+    """Paste the outbox file into an empty prompt and press Enter. None on success; else the reason, as a plain str when
+    nothing was pasted, or as Pasted when the text is in the box but Enter failed."""
     state = claude_input_state(tmux.capture(pane_id, escapes=True))
     if state == "draft":
         return REASON_DRAFT
@@ -40,7 +46,7 @@ def to_claude(tmux, pane_id, outbox, did, sleep):
     sleep(PASTE_SETTLE_S)
     r = tmux.send_keys(pane_id, "Enter")
     if r.returncode != 0:
-        return first_line(r.stderr) or f"tmux 結束碼 {r.returncode}"  # the text is already in the box
+        return Pasted(first_line(r.stderr) or f"tmux 結束碼 {r.returncode}")  # the text is already in the box
     return None
 
 

@@ -28,6 +28,7 @@ REASON_NOT_SEEN = "還沒在對方的對話裡看到這則訊息"
 REASON_NOT_FOUND = "找不到回覆：對方的對話裡沒有這則訊息（可能 /clear、換了對話）"
 REASON_NO_THREAD = "對方還沒有對話編號"
 REASON_AGENT_CHANGED = "對方的 agent 換了"
+REASON_PASTED = "已貼進輸入框但沒按到 Enter（請自己到那個 session 確認）"
 BUSY = {"busy": "對方正在忙", "working": "對方正在忙", "waiting": "對方在等使用者回應"}
 STATE_LABELS = {"queued": "排隊中", "sent": "已送出、等回覆", "done": "已回覆", "failed": "失敗", "cancelled": "已取消"}
 LOG_PREVIEW = 100
@@ -171,6 +172,10 @@ def _deliver(cfg, run, d, row, sleep, now):
         if not outbox.exists():
             outbox = dispatch.write_outbox(cfg.state_dir, d.id, d.text)
         why = deliver.to_claude(Tmux(run), row.pane, outbox, d.id, sleep)
+    if isinstance(why, deliver.Pasted):  # in the box but not submitted: never paste the same dispatch twice
+        _finish(d, "failed", now, f"{REASON_PASTED}：{why}")
+        actionlog.append(cfg, "send", [f"派工 {d.id}：{d.reason}"])
+        return
     if why:
         d.reason = why
         return
@@ -222,7 +227,7 @@ def _check(cfg, d, row, now):
 
 def notify_caller(cfg, run, d, sleep, *, rows=None, snapshot_fn=None, status_fn=None):
     """Send the completion notice to the caller (with Enter) if it is a running sampan session that can take it.
-    Changes d (notified, or notify=False when the caller is gone); call it inside dispatch.transaction. True if sent."""
+    Changes d (notified; notified plus a reason when the notice was pasted but Enter failed, never pasted twice; notify=False when the caller is gone); call it inside dispatch.transaction. True if sent."""
     if not _owes_notice(d):
         return False
     rows = rows if rows is not None else _rows(cfg, run, snapshot_fn, status_fn)
@@ -240,6 +245,11 @@ def notify_caller(cfg, run, d, sleep, *, rows=None, snapshot_fn=None, status_fn=
             return False
         nid = _notice_id(d.id)
         why = deliver.to_claude(Tmux(run), row.pane, dispatch.write_outbox(cfg.state_dir, nid, text), nid, sleep)
+    if isinstance(why, deliver.Pasted):  # the notice sits in the caller's box: count it as given, never paste it again
+        d.notified = True
+        d.reason = f"完成通知{REASON_PASTED}：{why}"
+        actionlog.append(cfg, "send", [f"派工 {d.id}：{d.reason}"])
+        return False
     if why is not None:
         return False
     d.notified = True

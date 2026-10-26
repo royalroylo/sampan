@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from sampan.deliver import compose, source_line, to_claude, to_codex
+from sampan.deliver import Pasted, compose, source_line, to_claude, to_codex
 from sampan.dispatch import write_outbox
 from sampan.tmux import Tmux
 from tests.fakes import FakeRunner, cp
@@ -87,7 +87,15 @@ class ToClaudeTest(unittest.TestCase):
         run.on(["tmux", "-u", "capture-pane"], cp(0, screen("claude_empty_placeholder.ansi")))
         run.on(["tmux", "-u", "load-buffer"], cp()).on(["tmux", "-u", "paste-buffer"], cp())
         run.on(["tmux", "-u", "send-keys"], cp(1, "", "can't find pane\nx"))
-        self.assertEqual(self.deliver(Tmux(run)), "can't find pane")
+        r = self.deliver(Tmux(run))
+        self.assertEqual(r, "can't find pane")
+        self.assertIsInstance(r, Pasted)  # the text is already in the box: the caller must not paste it again
+
+    def test_refusals_are_not_pasted(self):
+        run, tmux = tmux_with(screen("claude_draft.ansi"))
+        self.assertNotIsInstance(self.deliver(tmux), Pasted)
+        run, tmux = tmux_with(screen("claude_empty_placeholder.ansi"), buffer_rc=1)
+        self.assertNotIsInstance(self.deliver(tmux), Pasted)
 
     def test_message_is_byte_exact_and_never_in_argv(self):
         msg = 'line1\n「中文」 "q" $HOME `x` \\n ' + "字" * 5000
