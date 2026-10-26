@@ -258,10 +258,10 @@ session 可以放進資料夾（多層用 `/`，例如 `客戶/甲`）。資料�
 `sampan mcp serve` 是一個 stdio MCP server：agent（Claude Code、Codex）透過它的工具 `list_sessions`、`send`、`new_session`、`dispatch_result`、`cancel_dispatch` 傳訊息給其他 session、開新 session、看回覆，規則跟 `sampan send` 一樣。用 `sampan mcp install` 把它登記到每個啟用的 Claude profile 與 Codex（`sampan mcp uninstall` 移除，兩者都有 `--dry-run`），裝好後重開該 profile 的 session 才看得到工具。
 
 - 預設 `[mcp] confirm = true`：會動作的工具（`send`、`new_session`、`cancel_dispatch`）每次都由 agent 自己的權限詢問問你。sampan 在這三個工具上標記「需要使用者互動」，Claude Code 每次呼叫都會跳自己的權限提示（終端機每次都問，auto／bypass 模式也問，沒有「不再詢問」；Remote Control 照官方文件應該會顯示完整的權限提示、不給一鍵核准，但還沒在手機上實測過）；Codex 靠 `approval_mode = "prompt"`，`sampan mcp install` 會替你寫進 Codex 的 `config.toml`（先備份）。提示裡看得到工具與完整參數；不同意就回「不要」，要改訊息就請 agent 改了再送。看狀態的工具永遠不問。
-- 失敗就關：`confirm = true` 時，這三個工具只給確定會先問人的 client（`claude-code`、`codex-mcp-client`）用，其他 client 會被拒絕（「這個 client 不會先問使用者；要用請在 config 設 [mcp] confirm = false」），不是由 `claude`／`codex` 直接啟動的 `sampan mcp serve`（例如從 shell 灌 JSON-RPC 進去）也一樣；`codex exec` 在 approval policy 為 `never` 時這三個工具會被 Codex 拒絕（已實測），不會不問就執行；Codex 的 sampan 工具沒設成每次詢問時也拒絕（「Codex 的 sampan 工具沒設成每次詢問（<路徑>）：跑 sampan mcp install」）。
+- 失敗就關：`confirm = true` 時，這三個工具只給確定會先問人的 client（`claude-code`、`codex-mcp-client`）用，其他 client 會被拒絕（「這個 client 不會先問使用者；要用請在 config 設 [mcp] confirm = false」），不是由 `claude`／`codex` 直接啟動的 `sampan mcp serve`（例如從 shell 灌 JSON-RPC 進去）也被拒絕（只看行程名稱，可被假冒，見下方「做不到的事」）；`codex exec` 在 approval policy 為 `never` 時這三個工具會被 Codex 拒絕（已實測），不會不問就執行；Codex 的 sampan 工具沒設成每次詢問時也拒絕（「Codex 的 sampan 工具沒設成每次詢問（<路徑>）：跑 sampan mcp install」）。
 - `confirm = true` 時，agent 從 Bash 跑 `sampan send`、`sampan new … --message`、`sampan dispatches cancel` 會被拒絕（結束碼 2，「agent 請改用 sampan MCP 的工具（會先問使用者）；要讓 agent 直接用指令，在 config 設 [mcp] confirm = false」）；人在終端機跑照舊。
 - 改 `[mcp] confirm` 之後：Claude 在 MCP server 重啟時才讀到（開新 session，或 `/mcp` 重新連線）；Codex 要再跑一次 `sampan mcp install`。
-- 做不到的事：這擋不住自己對 tmux pane 打字的 agent（`tmux send-keys`）。Claude Code 的 sandbox 可以擋，但 sampan 不替你設定。
+- 做不到的事：這擋不住自己對 tmux pane 打字的 agent（`tmux send-keys`）。Claude Code 的 sandbox 可以擋，但 sampan 不替你設定。上層行程檢查只看名稱，擋得住單純灌 JSON-RPC 的 agent，但名稱可以假冒（`exec -a claude`、叫 claude 的連結），所以跟 `tmux send-keys`、改 `[mcp] confirm` 一樣，擋不住刻意繞過 sampan 的 agent。
 - `send` 不等的話馬上回派工編號；對方做完時 sampan 往呼叫者的 session 送一行通知（`〔sampan：<對方> 已回覆派工 <編號>，用 sampan 工具 dispatch_result 看內容〕`，會按 Enter），失敗時也送一行（`〔sampan：給 <對方> 的派工 <編號> 失敗：<原因>〕`），同意派工就算同意這則通知。`wait=true` 最多等 60 秒，等到就連回覆一起回。
 - 呼叫者不是 sampan 管的 session（例如不在 tmux 裡）→ 工具照樣能用，只是收不到完成通知，自己用 `dispatch_result` 查。
 - 工具的參數與回傳見 [reference](reference.md#sampan-mcp-serve-的工具)。

@@ -121,8 +121,8 @@ stdio MCP server（每行一則 JSON-RPC 2.0；協定版本 `2025-06-18`，clien
 `[mcp] confirm = true` 的做法（失敗就關）：
 
 - **Claude Code**：工具帶 `anthropic/requiresUserInteraction`，每次呼叫都問，連 auto／bypass 模式也問。
-- **Codex**：`sampan mcp install` 在 Codex 的 `config.toml` 寫 `[mcp_servers.sampan.tools.<工具>]` 的 `approval_mode = "prompt"`（`send`、`new_session`、`cancel_dispatch`）。`confirm = false` 或 `uninstall` 時把這幾段拿掉。改檔前先備份成 `config.toml.bak-sampan-<YYYYmmdd-HHMMSS>`，只動 sampan 的那幾段，其他每個位元組（含 CRLF、註解）原樣保留，檔案以 UTF-8 讀寫；改完驗證不是合法 TOML 就不寫。使用者在 Codex 的詢問裡選「always allow」時，Codex 會把它改成 `approve`：`sampan doctor` 會報出來，再跑 `sampan mcp install` 就改回 `prompt`。
-- **只認會先問人的 client**：`confirm = true` 時這三個工具只給 `claude-code`、`codex-mcp-client` 用，其他 client 回「這個 client 不會先問使用者；要用請在 config 設 [mcp] confirm = false」。`sampan mcp serve` 的直接上層行程還要是 `claude` 或 `codex`（啟動時查一次，查不到也算不是）：從 shell 把 JSON-RPC 灌進 `sampan mcp serve`、自稱 `claude-code` 也回同一句。`codex exec` 在 approval policy 為 `never` 時不會問人，這三個工具會被 Codex 拒絕（已實測），不會不問就執行。Codex 還要求那個工具在 Codex 實際使用的 `CODEX_HOME`（沒設就 `~/.codex`）與 sampan 設定的 Codex 家目錄兩邊都是 `approval_mode = "prompt"`，否則回「Codex 的 sampan 工具沒設成每次詢問（<路徑>）：跑 sampan mcp install」。
+- **Codex**：`sampan mcp install` 在 Codex 的 `config.toml` 寫 `[mcp_servers.sampan.tools.<工具>]` 的 `approval_mode = "prompt"`（`send`、`new_session`、`cancel_dispatch`）。`confirm = false` 或 `uninstall` 時只拿掉設成 `prompt` 的那幾段（使用者自己改成 `approve` 的不動）。改檔前先備份成 `config.toml.bak-sampan-<YYYYmmdd-HHMMSS>`，只動 sampan 的那幾段，其他每個位元組（含 CRLF、註解）原樣保留，檔案以 UTF-8 讀寫；改完驗證不是合法 TOML 就不寫。使用者在 Codex 的詢問裡選「always allow」時，Codex 會把它改成 `approve`：`sampan doctor` 會報出來，再跑 `sampan mcp install` 就改回 `prompt`。
+- **只認會先問人的 client**：`confirm = true` 時這三個工具只給 `claude-code`、`codex-mcp-client` 用，其他 client 回「這個 client 不會先問使用者；要用請在 config 設 [mcp] confirm = false」。`sampan mcp serve` 的直接上層行程還要是 `claude` 或 `codex`（啟動時查一次，查不到也算不是）：從 shell 把 JSON-RPC 灌進 `sampan mcp serve`、自稱 `claude-code` 會被拒絕，但只看名稱、可以假冒（見下方限制）。`codex exec` 在 approval policy 為 `never` 時不會問人，這三個工具會被 Codex 拒絕（已實測），不會不問就執行。Codex 還要求那個工具在 Codex 實際使用的 `CODEX_HOME`（沒設就 `~/.codex`）與 sampan 設定的 Codex 家目錄兩邊都是 `approval_mode = "prompt"`，否則回「Codex 的 sampan 工具沒設成每次詢問（<路徑>）：跑 sampan mcp install」。
 - **`sampan doctor`** 會檢查：「Codex 的 sampan 工具沒設成每次詢問（[mcp] confirm = true）：跑 sampan mcp install 補上」、「…還設著每次詢問（[mcp] confirm = false）：跑 sampan mcp install 拿掉」、「Codex config.toml 讀不了：…」。
 - **agent 從 Bash 跑指令**：`confirm = true` 時，`sampan send`、`sampan new … --message`、`sampan dispatches cancel` 由 agent（不是終端機前的人）執行會被拒絕（結束碼 2）；要讓 agent 直接用指令，設 `[mcp] confirm = false`。
 - **改 `[mcp] confirm` 之後**：Claude 在 MCP server 重啟時才讀到（新 session 或 `/mcp` 重新連線）；Codex 要再跑一次 `sampan mcp install`。
@@ -130,6 +130,7 @@ stdio MCP server（每行一則 JSON-RPC 2.0；協定版本 `2025-06-18`，clien
 限制：
 - 用 `--dangerously-bypass-approvals-and-sandbox` 開的 Codex 還會不會問，官方沒有說明，沒有驗證過，視為未確認。
 - 這擋不住自己對 tmux pane 打字的 agent（`tmux send-keys`）。Claude Code 的 sandbox 可以擋，但 sampan 不替你設定。
+- 上層行程檢查只看名稱：它擋得住單純把 JSON-RPC 灌進 `sampan mcp serve` 的 agent，但名稱可以假冒（例如 `exec -a claude`，或叫 claude 的連結），所以跟 `tmux send-keys`、改 `[mcp] confirm` 一樣，擋不住刻意繞過 sampan 的 agent。
 
 ## `sampan restart <名稱…>`
 
