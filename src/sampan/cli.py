@@ -66,10 +66,12 @@ def build_parser():
     sd.add_argument("message", help="訊息；- 從 stdin 讀")
     sd.add_argument("--wait", action="store_true", help="等對方回覆，把回覆印出來")
     sd.add_argument("--timeout", type=int, default=600, help="--wait 最多等幾秒（預設 600；逾時結束碼 124，派工照樣留著）")
-    ds = sub.add_parser("dispatches", usage="sampan dispatches [--all] | sampan dispatches cancel <編號>", help="列派工（預設只列排隊中與等回覆的）；dispatches cancel <編號> 取消還沒送出的")
-    ds.add_argument("action", nargs="?", choices=["cancel"], help=argparse.SUPPRESS)
+    ds = sub.add_parser("dispatches", usage="sampan dispatches [--all] | sampan dispatches show <編號> [--wait 秒] | sampan dispatches cancel <編號>",
+                        help="列派工（預設只列排隊中與等回覆的）；show <編號> 看狀態與完整回覆；cancel <編號> 取消排隊中的、或不再等已送出的")
+    ds.add_argument("action", nargs="?", choices=["cancel", "show"], help=argparse.SUPPRESS)
     ds.add_argument("id", nargs="?", help=argparse.SUPPRESS)
     ds.add_argument("--all", action="store_true", help="也列已完成、失敗、取消的")
+    ds.add_argument("--wait", type=int, default=0, metavar="秒", help="show：最多等幾秒等它做完（逾時結束碼 124）")
     mc = sub.add_parser("mcp", help="MCP server：讓 agent 用工具傳訊息給其他 session").add_subparsers(dest="action", required=True)
     mc.add_parser("serve", help="stdio MCP server（由 Claude Code／Codex 啟動，不是給人直接跑的）")
     for verb, help_ in (("install", "把 sampan MCP 裝進各啟用的 Claude profile 與 Codex"), ("uninstall", "從各 profile 與 Codex 移除 sampan MCP")):
@@ -388,15 +390,19 @@ def _dispatch(cfg, args):
         return cmd_adopt(cfg, run, out, input, dry_run=args.dry_run,
                          picker_fn=curses_adopt_checklist if interactive else None)
     if cmd == "send":
-        from .send import cmd_send
+        from .send import cmd_send, command_caller
         message = sys.stdin.read() if args.message == "-" else args.message
-        return cmd_send(cfg, run, out, args.name, message, wait=args.wait, timeout=args.timeout)
+        # an agent running this through its shell tool is that session (or unregistered), not a person at the terminal
+        return cmd_send(cfg, run, out, args.name, message, wait=args.wait, timeout=args.timeout,
+                        caller=command_caller(cfg, run, os.getpid()))
     if cmd == "dispatches":
-        from .send import cmd_cancel, cmd_dispatches
-        if args.action == "cancel":
+        from .send import cmd_cancel, cmd_dispatches, cmd_show
+        if args.action in ("cancel", "show"):
             if not args.id:
-                out("❌ 用法：sampan dispatches cancel <編號>")
+                out(f"❌ 用法：sampan dispatches {args.action} <編號>")
                 return 2
+            if args.action == "show":
+                return cmd_show(cfg, run, out, args.id, wait=args.wait)
             return cmd_cancel(cfg, out, args.id)
         return cmd_dispatches(cfg, out, all_=args.all)
     if cmd == "mcp" and args.action in ("install", "uninstall"):
@@ -408,6 +414,8 @@ def _dispatch(cfg, args):
         return mcp_install.uninstall(cfg, run, out, dry_run=args.dry_run)
     if cmd == "mcp":
         from . import mcp_server
+        from .runner import no_stdin
+        run = no_stdin(run)  # a child must never read the JSON-RPC stream on our stdin
         ppid = os.getppid()
         caller = mcp_server.identify_caller(cfg, run, ppid)
         proto = sys.stdout
@@ -426,7 +434,9 @@ def _dispatch(cfg, args):
             on_prompt, want = _prompt_fn()
             extra = {}
             if args.message is not None:
+                from .send import command_caller
                 extra["message"] = sys.stdin.read() if args.message == "-" else args.message
+                extra.update(caller=command_caller(cfg, run, os.getpid()), notify=False)
             rc = session_run.cmd_new(cfg, run, out, args.name, args.target, args.cwd, dry_run=args.dry_run,
                                      on_prompt=on_prompt, **extra)
             return _go_in(run, want, rc)

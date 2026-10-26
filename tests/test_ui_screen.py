@@ -531,7 +531,7 @@ class FakeWatcher:
     def start(self):
         self.events.append("start")
 
-    def stop(self):
+    def stop(self, **_kw):
         self.events.append("stop")
 
 

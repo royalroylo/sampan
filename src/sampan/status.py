@@ -57,6 +57,7 @@ class StatusRow:
     tokens: int | None = None
     context_window: int | None = None  # Codex only: the model's window (Claude: None → CONTEXT_LIMIT)
     pane: str | None = None
+    tmux_alive: bool = False  # the tmux session exists (a STOPPED row may still have its tmux, e.g. while starting)
 
     @property
     def display(self):
@@ -88,7 +89,8 @@ def status_rows(cfg, run, snapshot_fn=None):
         if p.pane_id in found:
             live_by_session.setdefault(p.session, found[p.pane_id])
     result = Rows()
-    for name in sorted(set(rows) | {p.session for p in panes}):
+    alive = {p.session for p in panes}
+    for name in sorted(set(rows) | alive):
         row, lc = rows.get(name), live_by_session.get(name)
         detail = ""
         if name in multi:
@@ -113,7 +115,8 @@ def status_rows(cfg, run, snapshot_fn=None):
         agent = src.agent if src is not None else "-"
         last, tokens, window = _activity(cfg, agent, src.profile if src is not None else None, sid)
         result.append(StatusRow(name, agent, (src.profile or "-") if src else "-", sid, state, detail,
-                                lc.status if lc else "-", last, tokens, window, lc.pane_id if lc else None))
+                                lc.status if lc else "-", last, tokens, window, lc.pane_id if lc else None,
+                                name in alive))
     return result
 
 

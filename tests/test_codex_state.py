@@ -481,7 +481,7 @@ def _done(turn, last):
 class ReplyToTest(unittest.TestCase):
     def test_real_rollout_0164(self):
         f = FIXTURES / "codex_rollout_0164.jsonl"
-        self.assertEqual(reply_to(f, "ok"), Reply(True, True, "Ready\u2014what would you like to work on?"))
+        self.assertEqual(reply_to(f, "ok"), Reply(True, True, "Ready\u2014what would you like to work on?", closed=True))
         self.assertEqual(reply_to(f, "只回覆 queue-ok，不要執行任何指令"), Reply(True, True, "queue-ok"))
 
     def test_no_match(self):
@@ -508,7 +508,7 @@ class ReplyToTest(unittest.TestCase):
     def test_later_turn_not_taken(self):
         f = _jl([_item("t1", "UserMessage", "hi"), _item("t2", "UserMessage", "next"),
                  _item("t2", "AgentMessage", "for next", "final_answer"), _done("t2", "for next")])
-        self.assertEqual(reply_to(f, "hi"), Reply(True, False, ""))
+        self.assertEqual(reply_to(f, "hi"), Reply(True, False, "", closed=True))  # final review 4: window closed
 
     def test_duplicate_sent_takes_last(self):
         f = _jl([_item("t1", "UserMessage", "hi"), _item("t1", "AgentMessage", "one", "final_answer"),

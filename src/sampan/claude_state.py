@@ -162,10 +162,12 @@ def _last_user_text(path):
 
 @dataclass(frozen=True)
 class Reply:
-    """found: the sent message is in the transcript; done: text is the reply (an assistant text exists after it)."""
+    """found: the sent message is in the transcript; done: text is the reply (an assistant text exists after it);
+    closed: a later message was typed after it, so no more reply text can come."""
     found: bool
     done: bool
     text: str
+    closed: bool = False
 
 
 def _assistant_text(rec):
@@ -213,13 +215,14 @@ def _reply_to(path, sent):
             continue
         content = _user_content(rec, join=True)
         if content is not None and _bound_text(content) == sent.rstrip("\n"):
-            window = []
+            window, closed = [], False
             for later in reversed(after):  # oldest first, up to the next typed message
                 if _user_content(later, join=True) is not None:
+                    closed = True
                     break
                 window.append(later)
             texts = [t for t in map(_assistant_text, window) if t]
-            return Reply(True, True, texts[-1]) if texts else Reply(True, False, "")
+            return Reply(True, True, texts[-1], closed) if texts else Reply(True, False, "", closed)
         after.append(rec)
     return Reply(False, False, "")
 

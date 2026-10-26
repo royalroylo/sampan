@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from sampan.deliver import Pasted, compose, source_line, to_claude, to_codex
+from sampan.deliver import Pasted, Unsure, compose, source_line, to_claude, to_codex
 from sampan.dispatch import write_outbox
 from sampan.tmux import Tmux
 from tests.fakes import FakeRunner, cp
@@ -22,6 +22,7 @@ def screen(name):
 def tmux_with(screen_text, *, buffer_rc=0):
     run = FakeRunner(strict=True)
     run.on(["tmux", "-u", "capture-pane"], cp(0, screen_text))
+    run.on(["tmux", "-u", "display-message"], cp(0, "0\n"))
     run.on(["tmux", "-u", "load-buffer"], cp(buffer_rc))
     run.on(["tmux", "-u", "paste-buffer"], cp())
     run.on(["tmux", "-u", "send-keys"], cp())
@@ -29,7 +30,7 @@ def tmux_with(screen_text, *, buffer_rc=0):
 
 
 def writes(run):
-    return [c["args"] for c in run.calls if not {"capture-pane"} & set(c["args"])]
+    return [c["args"] for c in run.calls if not {"capture-pane", "display-message"} & set(c["args"])]
 
 
 class SourceLineTest(unittest.TestCase):
@@ -81,6 +82,7 @@ class ToClaudeTest(unittest.TestCase):
     def test_load_failure_is_reported_and_nothing_is_pasted(self):
         run = FakeRunner(strict=True)
         run.on(["tmux", "-u", "capture-pane"], cp(0, screen("claude_empty_placeholder.ansi")))
+        run.on(["tmux", "-u", "display-message"], cp(0, "0\n"))
         run.on(["tmux", "-u", "load-buffer"], cp(1, "", "no such file\nmore"))
         reason = to_claude(Tmux(run), "%3", self.outbox, "ab12", self.sleeps.append)
         self.assertIn("no such file", reason)
@@ -89,11 +91,33 @@ class ToClaudeTest(unittest.TestCase):
     def test_failed_enter_is_reported(self):
         run = FakeRunner(strict=True)
         run.on(["tmux", "-u", "capture-pane"], cp(0, screen("claude_empty_placeholder.ansi")))
+        run.on(["tmux", "-u", "display-message"], cp(0, "0\n"))
         run.on(["tmux", "-u", "load-buffer"], cp()).on(["tmux", "-u", "paste-buffer"], cp())
         run.on(["tmux", "-u", "send-keys"], cp(1, "", "can't find pane\nx"))
         r = self.deliver(Tmux(run))
         self.assertEqual(r, "can't find pane")
         self.assertIsInstance(r, Pasted)  # the text is already in the box: the caller must not paste it again
+
+    def test_copy_mode_or_unreadable_mode_sends_nothing(self):  # final review 8
+        for out, rc, reason in (("1\n", 0, "對方畫面在捲動模式（tmux copy mode）"), ("", 1, "對方畫面停在選單或提示"),
+                                ("?\n", 0, "對方畫面停在選單或提示")):
+            with self.subTest(out=out, rc=rc):
+                run, tmux = tmux_with(screen("claude_empty_placeholder.ansi"))
+                run.on(["tmux", "-u", "display-message"], cp(rc, out))
+                self.assertEqual(self.deliver(tmux), reason)
+                self.assertEqual(writes(run), [])
+                self.assertEqual(run.called(["tmux", "-u", "display-message"])[0]["args"][-3:],
+                                 ["-t", "%3", "#{pane_in_mode}"])
+
+    def test_failed_paste_deletes_the_buffer(self):
+        run, tmux = tmux_with(screen("claude_empty_placeholder.ansi"))
+        run.on(["tmux", "-u", "paste-buffer"], cp(1, "", "pane gone"))
+        run.on(["tmux", "-u", "delete-buffer"], cp())
+        r = self.deliver(tmux)
+        self.assertEqual(r, "pane gone")
+        self.assertNotIsInstance(r, Pasted)
+        self.assertEqual(writes(run)[-1], ["tmux", "-u", "delete-buffer", "-b", "sampan-ab12"])
+        self.assertEqual(run.called(["tmux", "-u", "send-keys"]), [])
 
     def test_refusals_are_not_pasted(self):
         run, tmux = tmux_with(screen("claude_draft.ansi"))
@@ -141,6 +165,13 @@ class ToCodexTest(unittest.TestCase):
         self.assertEqual(to_codex(self.cfg, run, TID, "m"), "找不到 codex 指令")
         run = FakeRunner(strict=True).on(["codex"], cp(2))
         self.assertEqual(to_codex(self.cfg, run, TID, "m"), "結束碼 2")
+
+    def test_timeout_is_unsure_never_a_plain_reason(self):  # final review 3
+        run = FakeRunner(strict=True).on(["codex"], cp(124, "", "timeout"))
+        r = to_codex(self.cfg, run, TID, "m")
+        self.assertIsInstance(r, Unsure)
+        self.assertNotIsInstance(r, Pasted)
+        self.assertIn("可能已送出", r)
 
 
 if __name__ == "__main__":

@@ -343,10 +343,11 @@ def _reply_to(path, sent):
 
 
 def _reply_from(turn, events):
-    finals, others, complete, done = [], [], None, False
+    finals, others, complete, done, closed = [], [], None, False, False
     for kind, payload in events:
         text, uturn = _user_event(kind, payload)
         if text is not None and (turn is None or uturn != turn):  # the next message starts another turn (legacy: no turn ids)
+            closed = True
             break
         if turn is not None and payload.get("turn_id") not in (None, turn):
             continue
@@ -362,4 +363,4 @@ def _reply_from(turn, events):
             if isinstance(last, str) and last.strip():
                 complete = last
     text = (finals or others)[-1] if (finals or others) else (complete or "")
-    return Reply(True, done, text)
+    return Reply(True, done, text, closed)

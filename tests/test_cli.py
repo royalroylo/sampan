@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 from sampan import cli
+from sampan.send import TERMINAL, Caller
 from tests.fakes import FakeRunner, cp
 from tests.helpers import make_env
 
@@ -291,16 +292,37 @@ class CliTest(unittest.TestCase):
         self.assertEqual(buf.getvalue().splitlines(), ["❌ profile work 已停用（sampan profile enable work）"] * 3)
 
     def test_send_passes_message_wait_and_timeout(self):
-        with mock.patch("sampan.send.cmd_send", return_value=124) as cs, mock.patch("sampan.runner.run", FakeRunner(strict=True)):
+        with mock.patch("sampan.send.cmd_send", return_value=124) as cs, mock.patch("sampan.runner.run", FakeRunner(strict=True)), \
+                mock.patch("sampan.send.command_caller", return_value=TERMINAL):
             self.assertEqual(cli.main(["send", "api", "多行\n訊息", "--wait", "--timeout", "30"]), 124)
         self.assertEqual(cs.call_args.args[3:], ("api", "多行\n訊息"))
-        self.assertEqual(cs.call_args.kwargs, {"wait": True, "timeout": 30})
-        with mock.patch("sampan.send.cmd_send", return_value=0) as cs:
+        self.assertEqual(cs.call_args.kwargs, {"wait": True, "timeout": 30, "caller": TERMINAL})
+        with mock.patch("sampan.send.cmd_send", return_value=0) as cs, \
+                mock.patch("sampan.send.command_caller", return_value=TERMINAL):
             self.assertEqual(cli.main(["send", "api", "hi"]), 0)
-        self.assertEqual(cs.call_args.kwargs, {"wait": False, "timeout": 600})
+        self.assertEqual(cs.call_args.kwargs, {"wait": False, "timeout": 600, "caller": TERMINAL})
+
+    def test_send_run_by_an_agent_is_labelled_as_that_session(self):  # final review 9
+        agent = Caller("a", "alice", "claude", "%1")
+        with mock.patch("sampan.send.cmd_send", return_value=0) as cs, \
+                mock.patch("sampan.send.command_caller", return_value=agent) as cc:
+            cli.main(["send", "api", "hi"])
+        self.assertEqual(cc.call_args.args[2], os.getpid())  # looked up from this process, like the MCP server
+        self.assertIs(cs.call_args.kwargs["caller"], agent)
+
+    def test_dispatches_show(self):
+        with mock.patch("sampan.send.cmd_show", return_value=124) as sh:
+            self.assertEqual(cli.main(["dispatches", "show", "ab12", "--wait", "5"]), 124)
+        self.assertEqual(sh.call_args.args[3], "ab12")
+        self.assertEqual(sh.call_args.kwargs, {"wait": 5})
+        buf = io.StringIO()
+        with mock.patch("sampan.send.cmd_show") as sh, redirect_stdout(buf):
+            self.assertEqual(cli.main(["dispatches", "show"]), 2)
+        self.assertEqual(sh.call_count, 0)
 
     def test_send_dash_reads_stdin(self):
-        with mock.patch("sampan.send.cmd_send", return_value=0) as cs, mock.patch("sys.stdin", io.StringIO("from\nstdin $x `y`\n")):
+        with mock.patch("sampan.send.cmd_send", return_value=0) as cs, mock.patch("sys.stdin", io.StringIO("from\nstdin $x `y`\n")), \
+                mock.patch("sampan.send.command_caller", return_value=TERMINAL):
             cli.main(["send", "api", "-"])
         self.assertEqual(cs.call_args.args[4], "from\nstdin $x `y`\n")
 
@@ -325,14 +347,17 @@ class CliTest(unittest.TestCase):
 
         def fake_serve(cfg, run, stdin, stdout, *, caller, resolve):
             seen.update(stdin=stdin, stdout=stdout, caller=caller, sys_stdout=sys.stdout, again=resolve())
+            run(["tmux", "-u", "list-panes"])
+            run(["codex", "queue"], stdin="given")
             return 0
 
         proto = io.StringIO()
+        fake_run = FakeRunner()
         with mock.patch("sampan.mcp_server.identify_caller", return_value=caller) as ic, \
                 mock.patch("sampan.mcp_server.lookup_caller", return_value=caller) as lc, \
                 mock.patch("sampan.mcp_server.serve", fake_serve), mock.patch("sys.stdout", proto), \
                 mock.patch("sys.stdin", io.TextIOWrapper(io.BytesIO(b""))), \
-                mock.patch("sampan.runner.run", FakeRunner(strict=True)), mock.patch("os.getppid", return_value=4321):
+                mock.patch("sampan.runner.run", fake_run), mock.patch("os.getppid", return_value=4321):
             self.assertEqual(cli.main(["mcp", "serve"]), 0)
             restored = sys.stdout
         self.assertEqual(ic.call_args.args[2], 4321)  # at start
@@ -343,6 +368,9 @@ class CliTest(unittest.TestCase):
         self.assertIsNot(seen["sys_stdout"], proto)  # a stray print cannot corrupt the protocol stream
         self.assertIs(restored, proto)
         self.assertIsInstance(seen["stdin"], io.BufferedIOBase)
+        import subprocess
+        # a child never inherits the JSON-RPC stdin (an explicit stdin is kept)
+        self.assertEqual([c["stdin"] for c in fake_run.calls], [subprocess.DEVNULL, "given"])
 
     def test_dispatches_cancel_end_to_end(self):
         from sampan import dispatch

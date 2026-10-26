@@ -130,7 +130,7 @@ def check_new(cfg, run, name, target, cwd):
 
 
 def cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.sleep, timeout=15, uuid4=uuid.uuid4,
-            on_prompt=None, wait=True, message=None, caller=None):
+            on_prompt=None, wait=True, message=None, caller=None, notify=None):
     """target: claude:<profile>, <profile> (taken as claude) or codex.
 
     wait=False: return as soon as the launch command is sent (the ui's n then goes straight into tmux and the user answers the startup menu there). A Claude row is
@@ -140,7 +140,8 @@ def cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.sleep
     None (plain non-interactive CLI, tests) = do not look at the screen, press no keys. Time spent answering prompts does not count toward timeout.
 
     message: the first message, given to the agent as its startup prompt (`claude "$(cat <outbox>)"`), recorded as a
-    `sent` dispatch (notify only when caller is a sampan session). Without it nothing changes."""
+    `sent` dispatch (notify only when caller is a sampan session; notify None = when a caller is given, False for the
+    `sampan new` command, whose caller reads the reply with `sampan dispatches show`). Without it nothing changes."""
     if message is not None and not message.strip():
         out("❌ 訊息是空的")
         return 2
@@ -161,7 +162,7 @@ def cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.sleep
     did = None
     if message is not None:  # record first: if that fails nothing has been created yet
         d = submit_new(cfg, caller or TERMINAL, name, agent, profile or cfg.codex.profile, message,
-                       notify=caller is not None, now=datetime.now(timezone.utc))
+                       notify=caller is not None if notify is None else notify, now=datetime.now(timezone.utc))
         if isinstance(d, str):
             out(f"❌ {d}")
             return 2

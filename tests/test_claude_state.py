@@ -297,7 +297,13 @@ class ReplyToTest(unittest.TestCase):
 
     def test_later_user_message_ends_the_window(self):
         f = write_jsonl([u("hi"), a(text("mine")), u("next question"), a(text("answer to next"))])
-        self.assertEqual(reply_to(f, "hi"), Reply(True, True, "mine"))
+        self.assertEqual(reply_to(f, "hi"), Reply(True, True, "mine", closed=True))
+
+    def test_closed_without_text_and_open_window(self):  # final review 4: the window closes at a later typed message
+        f = write_jsonl([u("hi"), u("typed on"), a(text("answer to typed on"))])
+        self.assertEqual(reply_to(f, "hi"), Reply(True, False, "", closed=True))
+        f = write_jsonl([u("hi")])
+        self.assertEqual(reply_to(f, "hi"), Reply(True, False, "", closed=False))
 
     def test_text_list_content_matches(self):
         f = write_jsonl([u([text("multi\nline")]), a(text("ok"))])

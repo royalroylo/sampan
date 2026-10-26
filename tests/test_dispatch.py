@@ -81,6 +81,27 @@ class StoreTest(unittest.TestCase):
         with self.assertRaises(DispatchError):
             dispatch.load(self.dir)
 
+    def test_unknown_fields_are_ignored_and_startup_defaults_off(self):  # forward compatibility
+        self.dir.mkdir(parents=True)
+        rec = {k: v for k, v in dataclasses.asdict(mk()).items() if k != "startup"}
+        rec["added_by_a_newer_sampan"] = 1
+        (self.dir / "dispatches.json").write_text(json.dumps({"version": 1, "dispatches": [rec]}))
+        [d] = dispatch.load(self.dir)
+        self.assertEqual((d.id, d.startup), ("ab12", False))
+        (self.dir / "dispatches.json").write_text(json.dumps({"version": 1, "dispatches": ["nope"]}))
+        with self.assertRaises(DispatchError):
+            dispatch.load(self.dir)
+
+    def test_checkpoint_writes_inside_the_transaction_and_survives_an_exception(self):
+        with dispatch.transaction(self.dir) as cur:
+            cur.append(mk("aaaa"))
+        with self.assertRaises(KeyboardInterrupt):
+            with dispatch.transaction(self.dir) as cur:
+                cur[0].state = "sent"
+                dispatch.checkpoint(self.dir, cur)
+                raise KeyboardInterrupt  # killed while delivering
+        self.assertEqual(dispatch.load(self.dir)[0].state, "sent")
+
     def test_exception_does_not_write(self):
         with dispatch.transaction(self.dir) as cur:
             cur.append(mk("aaaa"))

@@ -90,6 +90,16 @@ class Tmux:
     def load_buffer(self, name, path):
         return self._tmux("load-buffer", "-b", name, str(path))
 
+    def delete_buffer(self, name):
+        return self._tmux("delete-buffer", "-b", name)
+
+    def pane_in_mode(self, target):
+        """Whether the pane is in a mode (copy mode after scrolling, …), where keys go to tmux instead of the program:
+        True / False, None when it cannot be read."""
+        r = self._tmux("display-message", "-p", "-t", target, "#{pane_in_mode}")
+        val = r.stdout.strip() if r.returncode == 0 else ""
+        return {"0": False, "1": True}.get(val)
+
     def paste_buffer(self, name, target):
         """Bracketed paste (-p: the agent takes it as one input, newlines included) and delete the buffer afterwards (-d)."""
         return self._tmux("paste-buffer", "-p", "-d", "-b", name, "-t", target)

@@ -217,18 +217,22 @@ CANCEL_WAIT_S = 0.3  # the ui never waits longer than this for the dispatches lo
 
 
 def cancel_flow(cfg, out, ask, d, *, cancel_fn=None):
-    """D list, x: cancel a queued dispatch after asking; any other state says why not. 0 done or declined, 1 refused."""
-    if d.state != "queued":
-        out(f"派工 {d.id} 是「{send_mod.STATE_LABELS[d.state]}」，只能取消還沒送出的（排隊中）")
+    """D list, x: cancel a queued dispatch, or stop waiting for the reply of a sent one, after asking; any other state
+    says why not. 0 done or declined, 1 refused."""
+    refusal = send_mod.cancel_refusal(d)
+    if refusal:
+        out(refusal)
         return 1
-    if (_ask(ask, f"取消派工 {d.id}（給 {d.to_name}）？(y/N): ") or "").lower() != "y":
+    question = (f"取消派工 {d.id}（給 {d.to_name}）？(y/N): " if d.state == "queued"
+                else f"不再等派工 {d.id} 的回覆？訊息已送到 {d.to_name}，收不回 (y/N): ")
+    if (_ask(ask, question) or "").lower() != "y":
         out("已取消")
         return 0
     r = (cancel_fn or (lambda c, did: send_mod.cancel(c, did, wait_s=CANCEL_WAIT_S)))(cfg, d.id)
     if isinstance(r, str):
         out(f"❌ {r}")
         return 1
-    out(f"已取消派工 {d.id}")
+    out(send_mod.cancel_done_text(r))
     return 0
 
 

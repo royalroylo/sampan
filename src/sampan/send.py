@@ -12,14 +12,17 @@ from . import actionlog, deliver, dispatch
 from .claude_state import Reply, find_transcript
 from .claude_state import reply_to as claude_reply_to
 from .clock import fmt_local, parse_iso
-from .codex_state import find_rollout
+from .codex_state import _is_codex, find_rollout
 from .codex_state import reply_to as codex_reply_to
-from .registry import RegistryError
+from .procs import is_descendant, list_procs
+from .registry import RegistryError, load_rows
 from .status import State, status_rows
+from .textwidth import text_width
 from .tmux import Tmux
 
 POLL_S = 2
 NOT_SEEN_GRACE_S = 15  # right after delivery the transcript may not have the message yet
+STARTUP_GRACE_S = 120  # `sampan new --message`: how long a session that is not seen yet may take to come up
 TERMINAL_NAME = dispatch.TERMINAL_NAME  # only a person at the terminal
 UNREGISTERED_NAME = "未登記的 session"  # an agent that is not a sampan session (e.g. an MCP caller outside tmux)
 GONE = (State.STOPPED, State.RETIRED, State.UNREGISTERED, State.NO_AGENT)  # the session is not there to answer
@@ -30,6 +33,12 @@ REASON_NOT_FOUND = "找不到回覆：對方的對話裡沒有這則訊息（可
 REASON_NO_THREAD = "對方還沒有對話編號"
 REASON_AGENT_CHANGED = "對方的 agent 換了"
 REASON_PASTED = "已貼進輸入框但沒按到 Enter（請自己到那個 session 確認）"
+REASON_SENDING = "送出中"  # written before any key is pressed: if sampan dies now, the dispatch is never sent again
+REASON_STARTING = "對方 session 還在啟動"
+REASON_SKIPPED = "對方沒回這則就換了下一則"
+REASON_NO_TEXT_YET = "對方閒著，但還沒看到回覆文字"
+REASON_NO_TEXT = "對方這輪結束了，但沒有回覆文字"
+REASON_STOP_WATCHING = "不再等回覆"
 BUSY = {"busy": "對方正在忙", "working": "對方正在忙", "waiting": "對方在等使用者回應"}
 STATE_LABELS = {"queued": "排隊中", "sent": "已送出、等回覆", "done": "已回覆", "failed": "失敗", "cancelled": "已取消"}
 LOG_PREVIEW = 100
@@ -37,11 +46,13 @@ LOG_PREVIEW = 100
 
 @dataclass
 class Caller:
-    """Who sends: a sampan session, or the terminal / an unregistered session (name None, never notified)."""
+    """Who sends: a sampan session, or the terminal / an unregistered session (name None, never notified).
+    kind: force a dispatch.KINDS value; "unregistered" with agent "" is an agent sampan could not identify."""
     name: str | None
     profile: str
     agent: str
     pane: str | None
+    kind: str | None = None
 
 
 TERMINAL = Caller(None, "", "", None)
@@ -49,10 +60,12 @@ TERMINAL = Caller(None, "", "", None)
 
 def caller_label(caller):
     """The from_name recorded for a caller: its session name, 「未登記的 session（<agent>）」 for an agent that is not a
-    sampan session, or 「終端機」 for a person at the terminal."""
+    sampan session (「未登記的 session」 when its agent is unknown), or 「終端機」 for a person at the terminal."""
     if caller.name is not None:
         return caller.name
-    return f"{UNREGISTERED_NAME}（{caller.agent}）" if caller.agent else TERMINAL_NAME
+    if caller_kind(caller) == "unregistered":
+        return f"{UNREGISTERED_NAME}（{caller.agent}）" if caller.agent else UNREGISTERED_NAME
+    return TERMINAL_NAME
 
 
 def caller_kind(caller):
@@ -60,7 +73,66 @@ def caller_kind(caller):
     label can never be taken for the terminal or an unregistered agent (or the other way round)."""
     if caller.name is not None:
         return "session"
+    if caller.kind is not None:
+        return caller.kind
     return "unregistered" if caller.agent else "terminal"
+
+
+class CallerUnsure(Exception):
+    """The caller could not be looked up right now (ps or the tmux pane list unreadable, registry unreadable): this
+    says nothing about whether it is a session. args: (reason, agent found or "")."""
+
+
+def lookup_caller(cfg, run, pid):
+    """Who runs pid: the nearest claude / codex process at or above it, the tmux pane it runs in, and the registry row
+    of that tmux session (same agent). No agent process → TERMINAL (a person); no pane, no row or a row of another
+    agent → an unregistered Caller; raises CallerUnsure when ps, tmux or the registry cannot be read."""
+    procs = list_procs(run)
+    if not procs:
+        raise CallerUnsure("讀不到行程表", "")
+    agent_proc, seen, cur = None, set(), procs.get(pid)
+    while cur is not None and cur.pid not in seen:
+        seen.add(cur.pid)
+        if cur.comm == "claude" and not cur.zombie:
+            agent_proc, agent = cur, "claude"
+            break
+        if _is_codex(cur):
+            agent_proc, agent = cur, "codex"
+            break
+        cur = procs.get(cur.ppid)
+    if agent_proc is None:
+        return TERMINAL
+    unknown = Caller(None, "", agent, None)
+    tmux = Tmux(run)
+    panes = tmux.panes()
+    if panes is None:
+        raise CallerUnsure(tmux.unreadable_reason or "讀不到 tmux", agent)
+    pane = next((p for p in panes if is_descendant(procs, agent_proc.pid, p.pane_pid)), None)
+    if pane is None:
+        return unknown
+    try:
+        rows = load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)
+    except RegistryError as e:
+        raise CallerUnsure(str(e), agent) from e
+    row = next((r for r in rows if r.tmux == pane.session), None)
+    if row is None or row.agent != agent:
+        return unknown
+    return Caller(row.tmux, row.profile, agent, pane.pane_id)
+
+
+def unsure_caller(e):
+    """The Caller to use when lookup_caller raised CallerUnsure e: an unregistered agent, never the terminal (it
+    cannot be told that nobody but a person is there)."""
+    return Caller(None, "", e.args[1] if len(e.args) > 1 else "", None, kind="unregistered")
+
+
+def command_caller(cfg, run, pid):
+    """Who runs a `sampan send` / `sampan new --message` command: a sampan session when an agent runs it through its
+    shell tool, an unregistered agent, or the terminal only when no agent process is above it."""
+    try:
+        return lookup_caller(cfg, run, pid)
+    except CallerUnsure as e:
+        return unsure_caller(e)
 
 
 def from_session(d, name):
@@ -69,6 +141,9 @@ def from_session(d, name):
 
 
 def notice_text(d):
+    if d.state == "failed":
+        reason = " ".join((d.reason or "").split())
+        return f"〔sampan：給 {d.to_name} 的派工 {d.id} 失敗：{reason}〕"
     return f"〔sampan：{d.to_name} 已回覆派工 {d.id}，用 sampan 工具 dispatch_result 看內容〕"
 
 
@@ -123,7 +198,8 @@ def _who(d):
     return d.from_name if d.from_profile == "" else f"{d.from_name}（{d.from_profile}）"
 
 
-def _create(cfg, caller, to, to_agent, to_profile, message, state, now, *, notify, thread_id=None, strip=False):
+def _create(cfg, caller, to, to_agent, to_profile, message, state, now, *, notify, thread_id=None, strip=False,
+            startup=False):
     """Write the outbox and record a dispatch under the lock. A copy of it, or why not (str).
     strip: drop trailing newlines from the text (a startup prompt goes through `$(cat …)`, which drops them)."""
     try:
@@ -137,7 +213,8 @@ def _create(cfg, caller, to, to_agent, to_profile, message, state, now, *, notif
                 did, caller_label(caller), caller.profile, caller.agent,
                 to, to_agent, to_profile, text, state, _iso(now),
                 sent_at=_iso(now) if state == "sent" else None,
-                notify=bool(notify and caller.name is not None), thread_id=thread_id, from_kind=caller_kind(caller))
+                notify=bool(notify and caller.name is not None), thread_id=thread_id, from_kind=caller_kind(caller),
+                startup=startup)
             kept = dispatch.prune(items, now)
             _drop_outboxes(cfg, {x.id for x in items} - {x.id for x in kept})
             items[:] = kept + [d]
@@ -152,7 +229,7 @@ def submit_new(cfg, caller, to, to_agent, to_profile, message, *, notify, now):
     Dispatch, or why not (str)."""
     if not message.strip():
         return "訊息是空的"
-    r = _create(cfg, caller, to, to_agent, to_profile, message, "sent", now, notify=notify, strip=True)
+    r = _create(cfg, caller, to, to_agent, to_profile, message, "sent", now, notify=notify, strip=True, startup=True)
     if isinstance(r, str):
         return r
     actionlog.append(cfg, "send", [f"派工 {r.id}：{_who(r)} → {to}（{to_agent}，開場訊息）：{_preview(message)}"])
@@ -166,6 +243,7 @@ def abort_new(cfg, did, reason, *, now):
             d = next((x for x in items if x.id == did), None)
             if d is not None and d.state == "sent":
                 _finish(d, "failed", now, reason)
+                d.notify = False  # the caller is told right away by `sampan new` / new_session
     except (dispatch.DispatchError, OSError):
         return
     actionlog.append(cfg, "send", [f"派工 {did}：{reason}"])
@@ -185,7 +263,7 @@ def _notice_id(did):
 
 
 def _owes_notice(d):
-    return d.state == "done" and d.notify and not d.notified
+    return d.state in ("done", "failed") and d.notify and not d.notified
 
 
 def advance(cfg, run, did, *, sleep, snapshot_fn=None, status_fn=None, now=None):
@@ -198,17 +276,23 @@ def advance(cfg, run, did, *, sleep, snapshot_fn=None, status_fn=None, now=None)
             raise dispatch.DispatchError(f"沒有派工 {did}")
         if d.state in ("queued", "sent") or _owes_notice(d):
             rows = _rows(cfg, run, snapshot_fn, status_fn)
+
+            def save():
+                dispatch.checkpoint(cfg.state_dir, items)
             if d.state == "queued":
-                _deliver(cfg, run, d, rows.get(d.to_name), sleep, now)
+                _deliver(cfg, run, d, rows.get(d.to_name), sleep, now, save)
             elif d.state == "sent":
                 _check(cfg, d, rows.get(d.to_name), now)
             if _owes_notice(d):
-                notify_caller(cfg, run, d, sleep, rows=rows)
+                notify_caller(cfg, run, d, sleep, rows=rows, save=save)
         result = replace(d)
     return result
 
 
-def _deliver(cfg, run, d, row, sleep, now):
+def _deliver(cfg, run, d, row, sleep, now, save):
+    """Two-phase: the record is written as `sent` (「送出中」) before any key is pressed or `codex queue` runs, so a
+    process killed in the middle never sends it again (at most once: it later fails as 找不到回覆). It goes back to
+    queued only when the step says nothing was sent."""
     if row is None or row.state in GONE:
         d.reason = REASON_NOT_RUNNING
         return
@@ -223,6 +307,7 @@ def _deliver(cfg, run, d, row, sleep, now):
             d.reason = REASON_NO_THREAD
             return
         d.thread_id = row.sid
+        _sending(d, now, save)
         why = deliver.to_codex(cfg, run, row.sid, d.text)  # `codex queue` waits for the turn by itself
     else:
         if row.agent_status != "idle":
@@ -234,16 +319,22 @@ def _deliver(cfg, run, d, row, sleep, now):
         outbox = dispatch.outbox_path(cfg.state_dir, d.id)
         if not outbox.exists():
             outbox = dispatch.write_outbox(cfg.state_dir, d.id, d.text)
+        _sending(d, now, save)
         why = deliver.to_claude(Tmux(run), row.pane, outbox, d.id, sleep)
-    if isinstance(why, deliver.Pasted):  # in the box but not submitted: never paste the same dispatch twice
-        _finish(d, "failed", now, f"{REASON_PASTED}：{why}")
+    if isinstance(why, deliver.Unsure):  # it may have reached the target: never send the same dispatch twice
+        _finish(d, "failed", now, f"{REASON_PASTED}：{why}" if isinstance(why, deliver.Pasted) else str(why))
         actionlog.append(cfg, "send", [f"派工 {d.id}：{d.reason}"])
         return
     if why:
-        d.reason = why
+        d.state, d.sent_at, d.reason = "queued", None, why  # nothing was sent: try again later
         return
-    d.state, d.sent_at, d.reason = "sent", _iso(now), ""
+    d.reason = ""
     actionlog.append(cfg, "send", [f"派工 {d.id}：已送到 {d.to_name}"])
+
+
+def _sending(d, now, save):
+    d.state, d.sent_at, d.reason = "sent", _iso(now), REASON_SENDING
+    save()
 
 
 def _finish(d, state, now, reason="", reply=None):
@@ -258,7 +349,27 @@ def _reply(cfg, row, text):
     return claude_reply_to(path, text) if path else Reply(False, False, "")
 
 
+def _starting(d, row, now):
+    """A startup dispatch whose new session is not seen as a running sampan session yet: a Codex that has no thread
+    (UNREGISTERED: as long as that agent runs there), or a tmux session without the agent seen (NO_AGENT, or a Claude
+    row STOPPED while its tmux is there) for STARTUP_GRACE_S after it was sent."""
+    if not d.startup or row is None:
+        return False
+    if row.state == State.UNREGISTERED:
+        return row.agent == d.to_agent
+    if row.state == State.NO_AGENT or (row.state == State.STOPPED and row.tmux_alive):
+        sent = parse_iso(d.sent_at)
+        return sent is None or (now - sent).total_seconds() < STARTUP_GRACE_S
+    return False
+
+
 def _check(cfg, d, row, now):
+    was_starting = d.reason == REASON_STARTING
+    if _starting(d, row, now) or (d.startup and row is not None and row.state == State.AWAIT_TRUST):
+        d.reason = REASON_STARTING  # wait, do not judge
+        return
+    if was_starting:
+        d.reason = ""
     if row is None or row.state in GONE or row.agent != d.to_agent:
         _finish(d, "failed", now, REASON_AGENT_CHANGED if row is not None and row.state not in GONE else REASON_STOPPED)
         return
@@ -271,16 +382,29 @@ def _check(cfg, d, row, now):
         d.thread_id = row.sid
     reply = _reply(cfg, row, d.text)
     idle = row.agent_status == "idle"  # Claude's reply.done only means "some assistant text exists"
-    if reply.found:
-        if reply.done and idle:
-            _finish(d, "done", now, reply=reply.text)
-        else:
+    if not idle:  # a mark is about two idle looks in a row: a busy look in between starts over
+        if reply.found or d.reason in (REASON_NOT_SEEN, REASON_NO_TEXT_YET, REASON_SENDING, REASON_NO_THREAD):
             d.reason = ""
         return
-    if not idle:
-        return
     sent = parse_iso(d.sent_at)
-    if sent is not None and (now - sent).total_seconds() < NOT_SEEN_GRACE_S:
+    grace = STARTUP_GRACE_S if d.startup else NOT_SEEN_GRACE_S
+    # the first look at a new session that has just come up never judges either
+    early = was_starting or (sent is not None and (now - sent).total_seconds() < grace)
+    if reply.found:
+        if reply.text and (reply.done or reply.closed):
+            _finish(d, "done", now, reply=reply.text)
+        elif reply.closed:  # another message was typed after it, with no reply text in between
+            _finish(d, "failed", now, REASON_SKIPPED)
+        elif row.agent == "codex" and reply.done:  # the turn is complete and said nothing
+            _finish(d, "failed", now, REASON_NO_TEXT)
+        elif early:
+            d.reason = ""
+        elif d.reason == REASON_NO_TEXT_YET:  # idle twice in a row with no text: the turn ended without one
+            _finish(d, "failed", now, REASON_NO_TEXT)
+        else:
+            d.reason = REASON_NO_TEXT_YET
+        return
+    if early:
         return
     if d.reason == REASON_NOT_SEEN:  # seen idle without the message twice in a row: it is not coming
         _finish(d, "failed", now, REASON_NOT_FOUND)
@@ -288,9 +412,12 @@ def _check(cfg, d, row, now):
         d.reason = REASON_NOT_SEEN
 
 
-def notify_caller(cfg, run, d, sleep, *, rows=None, snapshot_fn=None, status_fn=None):
-    """Send the completion notice to the caller (with Enter) if it is a running sampan session that can take it.
-    Changes d (notified; notified plus a reason when the notice was pasted but Enter failed, never pasted twice; notify=False when the caller is gone); call it inside dispatch.transaction. True if sent."""
+def notify_caller(cfg, run, d, sleep, *, rows=None, snapshot_fn=None, status_fn=None, save=None):
+    """Send the completion (or failure) notice to the caller (with Enter) if it is a running sampan session that can
+    take it. Changes d (notified; notified plus a reason when the notice may have arrived but Enter failed or
+    `codex queue` timed out, never sent twice; notify=False when the caller is gone); call it inside
+    dispatch.transaction. save: write the record now, before any key (notified is set first, so a crash in the middle
+    never sends the notice again). True if sent."""
     if not _owes_notice(d):
         return False
     if d.from_kind != "session":
@@ -304,19 +431,23 @@ def notify_caller(cfg, run, d, sleep, *, rows=None, snapshot_fn=None, status_fn=
     if row.state != State.RUNNING or (row.agent == "codex" and not row.sid):
         return False
     text = notice_text(d)
+    if row.agent != "codex" and (row.agent_status != "idle" or row.pane is None):
+        return False
+    d.notified = True
+    if save is not None:
+        save()
     if row.agent == "codex":
         why = deliver.to_codex(cfg, run, row.sid, text)
     else:
-        if row.agent_status != "idle" or row.pane is None:
-            return False
         nid = _notice_id(d.id)
         why = deliver.to_claude(Tmux(run), row.pane, dispatch.write_outbox(cfg.state_dir, nid, text), nid, sleep)
-    if isinstance(why, deliver.Pasted):  # the notice sits in the caller's box: count it as given, never paste it again
-        d.notified = True
-        d.reason = f"完成通知{REASON_PASTED}：{why}"
-        actionlog.append(cfg, "send", [f"派工 {d.id}：{d.reason}"])
+    if isinstance(why, deliver.Unsure):  # the notice may be with the caller: count it as given, never send it again
+        note = f"完成通知{REASON_PASTED}：{why}" if isinstance(why, deliver.Pasted) else f"完成通知{why}"
+        d.reason = f"{d.reason}；{note}" if d.state == "failed" and d.reason else note
+        actionlog.append(cfg, "send", [f"派工 {d.id}：{note}"])
         return False
     if why is not None:
+        d.notified = False  # nothing was sent: try again later
         return False
     d.notified = True
     actionlog.append(cfg, "send", [f"派工 {d.id}：已通知 {d.from_name}"])
@@ -336,26 +467,44 @@ def set_notify(cfg, did, on):
 
 
 def pending(cfg):
-    """Ids a watcher should keep advancing: queued, sent, and done ones whose notice is still owed."""
+    """Ids a watcher should keep advancing: queued, sent, and finished ones whose notice is still owed."""
     return [d.id for d in dispatch.load(cfg.state_dir) if d.state in ("queued", "sent") or _owes_notice(d)]
 
 
+def cancel_refusal(d):
+    """Why dispatch d cannot be cancelled, or None (queued: not sent yet; sent: stop waiting for its reply)."""
+    if d.state in ("queued", "sent"):
+        return None
+    return f"派工 {d.id} 是「{STATE_LABELS[d.state]}」，只能取消排隊中的，或不再等已送出的"
+
+
 def cancel(cfg, did, *, now=None, wait_s=None):
-    """Cancel a queued dispatch. The cancelled Dispatch, or why not (str). wait_s: give up on a busy lock after that many
-    seconds (the ui, which must not stall behind a delivery); None waits."""
+    """Cancel a queued dispatch (it is never sent), or stop waiting for the reply of a sent one (the message is
+    already with the target; reason 「不再等回覆」, no notice). The cancelled Dispatch, or why not (str).
+    wait_s: give up on a busy lock after that many seconds (the ui, which must not stall behind a delivery); None waits."""
     try:
         with dispatch.transaction(cfg.state_dir, wait_s=wait_s) as items:
             d = next((x for x in items if x.id == did), None)
             if d is None:
                 return f"沒有派工 {did}"
-            if d.state != "queued":
-                return f"派工 {did} 是「{STATE_LABELS[d.state]}」，只能取消還沒送出的（排隊中）"
-            _finish(d, "cancelled", now or _utcnow(), "已取消")
+            refusal = cancel_refusal(d)
+            if refusal:
+                return refusal
+            was = d.state
+            _finish(d, "cancelled", now or _utcnow(), "已取消" if was == "queued" else REASON_STOP_WATCHING)
             result = replace(d)
     except (dispatch.DispatchError, OSError) as e:
         return str(e)
-    actionlog.append(cfg, "cancel", [f"派工 {did}：取消（給 {result.to_name}）"])
+    what = "取消" if was == "queued" else REASON_STOP_WATCHING
+    actionlog.append(cfg, "cancel", [f"派工 {did}：{what}（給 {result.to_name}）"])
     return result
+
+
+def cancel_done_text(d):
+    """What to tell the user after cancel returned d."""
+    if d.reason == REASON_STOP_WATCHING:
+        return f"不再等派工 {d.id} 的回覆（訊息已送到 {d.to_name}）"
+    return f"已取消派工 {d.id}"
 
 
 def cmd_cancel(cfg, out, did):
@@ -363,42 +512,85 @@ def cmd_cancel(cfg, out, did):
     if isinstance(r, str):
         out(f"❌ {r}")
         return 2
-    out(f"已取消派工 {did}")
+    out(cancel_done_text(r))
     return 0
 
 
+def _advance_until(cfg, run, did, wait_s, *, sleep, clock, snapshot_fn, status_fn, now_fn):
+    """Advance once, then every 2 s while it is not finished and wait_s has not passed. The last copy."""
+    start = clock()
+    while True:
+        d = advance(cfg, run, did, sleep=sleep, snapshot_fn=snapshot_fn, status_fn=status_fn, now=now_fn())
+        if d.state in dispatch.FINISHED or clock() - start >= wait_s:
+            return d
+        sleep(POLL_S)
+
+
 def cmd_send(cfg, run, out, to, message, *, wait, timeout=600, sleep=time.sleep, clock=time.monotonic,
-             snapshot_fn=None, status_fn=None, now_fn=_utcnow):
-    """`sampan send`: the caller is the terminal. Without wait: try once, print the id (rc 0). With wait: advance every
-    2 s; done → the reply (rc 0), failed → the reason (rc 1), timeout → rc 124 (the dispatch stays)."""
-    r = submit(cfg, run, TERMINAL, to, message, notify=False, now=now_fn(), snapshot_fn=snapshot_fn, status_fn=status_fn)
+             snapshot_fn=None, status_fn=None, now_fn=_utcnow, caller=TERMINAL):
+    """`sampan send`. caller: who runs it (command_caller: an agent running it through its shell tool is that session
+    or an unregistered agent, never the terminal). Without wait: try once, print the id (rc 0, also when it is only
+    queued). With wait: advance every 2 s; done → the reply (rc 0), failed → the reason (rc 1), timeout → rc 124
+    (the dispatch stays), Ctrl-C → rc 130 (the dispatch stays)."""
+    r = submit(cfg, run, caller, to, message, notify=False, now=now_fn(), snapshot_fn=snapshot_fn, status_fn=status_fn)
     if isinstance(r, str):
         out(f"❌ {r}")
         return 2
-    did, start = r.id, clock()
+    did = r.id
     try:
-        while True:
-            try:
-                d = advance(cfg, run, did, sleep=sleep, snapshot_fn=snapshot_fn, status_fn=status_fn, now=now_fn())
-            except (dispatch.DispatchError, RegistryError) as e:
-                out(f"❌ {e}")
-                return 2
-            if not wait:
-                out(f"派工 {did}：{STATE_LABELS[d.state]}" + (f"（{d.reason}）" if d.reason else ""))
-                return 0
-            if d.state == "done":
-                out(d.reply or "")
-                return 0
-            if d.state in ("failed", "cancelled"):
-                out(f"❌ 派工 {did}{STATE_LABELS[d.state]}：{d.reason}")
-                return 1
-            if clock() - start >= timeout:
-                out(f"還在做，派工 {did}（sampan dispatches 看狀態）")
-                return 124
-            sleep(POLL_S)
+        try:
+            d = _advance_until(cfg, run, did, timeout if wait else 0, sleep=sleep, clock=clock,
+                               snapshot_fn=snapshot_fn, status_fn=status_fn, now_fn=now_fn)
+        except (dispatch.DispatchError, RegistryError) as e:
+            out(f"❌ {e}")
+            return 2
+        if not wait:
+            out(f"派工 {did}：{STATE_LABELS[d.state]}" + (f"（{d.reason}）" if d.reason else "")
+                + (f"；sampan dispatches show {did} 看回覆" if d.state in ("queued", "sent") else ""))
+            return 0
+        if d.state == "done":
+            out(d.reply or "")
+            return 0
+        if d.state in ("failed", "cancelled"):
+            out(f"❌ 派工 {did}{STATE_LABELS[d.state]}：{d.reason}")
+            return 1
+        out(f"還在做，派工 {did}（sampan dispatches show {did} 看狀態）")
+        return 124
     except KeyboardInterrupt:
-        out(f"\n不等了，派工 {did} 照樣留著（sampan dispatches 看狀態）")
+        out(f"\n不等了，派工 {did} 照樣留著（sampan dispatches show {did} 看狀態）")
         return 130
+
+
+def cmd_show(cfg, run, out, did, *, wait=0, sleep=time.sleep, clock=time.monotonic, snapshot_fn=None, status_fn=None,
+             now_fn=_utcnow):
+    """`sampan dispatches show <id> [--wait N]`: advance it once (or every 2 s for up to N seconds until it is
+    finished), then print its state, who to whom, the reason and the full reply. rc 0 done or still going (no wait),
+    1 failed / cancelled, 2 unknown id or unreadable, 124 still going after --wait, 130 Ctrl-C."""
+    try:
+        try:
+            d = _advance_until(cfg, run, did, max(0, wait), sleep=sleep, clock=clock, snapshot_fn=snapshot_fn,
+                               status_fn=status_fn, now_fn=now_fn)
+        except (dispatch.DispatchError, RegistryError) as e:
+            out(f"❌ {e}")
+            return 2
+    except KeyboardInterrupt:
+        out(f"\n不等了，派工 {did} 照樣留著")
+        return 130
+    out(f"派工 {d.id}：{STATE_LABELS[d.state]}")
+    out(f"從 {_who(d)} 給 {d.to_name}（{d.to_agent}），建立 {fmt_local(parse_iso(d.created))}")
+    if d.reason:
+        out(f"說明：{d.reason}")
+    if d.state == "done":
+        out("──── 回覆 ────")
+        out(d.reply or "")
+    if d.state in ("failed", "cancelled"):
+        return 1
+    return 124 if wait > 0 and d.state not in dispatch.FINISHED else 0
+
+
+def _ljust(text, width):
+    """Pad by display width (CJK takes two cells); a longer text is kept whole."""
+    return text + " " * max(0, width - text_width(text))
 
 
 def cmd_dispatches(cfg, out, *, all_):
@@ -411,9 +603,10 @@ def cmd_dispatches(cfg, out, *, all_):
     if not shown:
         out("沒有派工" if all_ else "沒有進行中的派工（--all 看全部）")
         return 0
-    out(f"{'編號':<6} {'從':<24} {'給':<24} {'狀態':<10} {'建立':<11} 說明")
+    widths = (6, 24, 24, 14, 11)
+    out(" ".join(_ljust(h, w) for h, w in zip(("編號", "從", "給", "狀態", "建立"), widths)) + " 說明")
     for d in shown:
         note = d.reason or (_preview(d.reply) if d.state == "done" and d.reply else "")
-        out(f"{d.id:<6} {d.from_name:<24} {d.to_name:<24} {STATE_LABELS[d.state]:<10} "
-            f"{fmt_local(parse_iso(d.created)):<11} {note}")
+        cells = (d.id, d.from_name, d.to_name, STATE_LABELS[d.state], fmt_local(parse_iso(d.created)))
+        out(" ".join(_ljust(c, w) for c, w in zip(cells, widths)) + f" {note}")
     return 0

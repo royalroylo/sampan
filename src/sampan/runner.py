@@ -10,3 +10,13 @@ def run(args, *, env=None, cwd=None, timeout=None, stdin=None):
         return subprocess.CompletedProcess(list(args), 124, "", "timeout")
     except FileNotFoundError as e:
         return subprocess.CompletedProcess(list(args), 127, "", str(e))
+
+
+def no_stdin(run):
+    """run, with stdin=DEVNULL unless the call passes its own: a child that inherits our stdin would read what is
+    meant for us (the curses ui's keystrokes, the MCP server's JSON-RPC stream)."""
+    def wrapped(args, **kw):
+        if kw.get("stdin") is None:
+            kw["stdin"] = subprocess.DEVNULL
+        return run(args, **kw)
+    return wrapped

@@ -10,15 +10,13 @@ import json
 import sys
 import threading
 import time
+from dataclasses import replace
 from datetime import datetime, timezone
 
 from . import dispatch, send, session_run
-from .codex_state import _is_codex
-from .procs import is_descendant, list_procs
 from .registry import RegistryError, load_rows
-from .send import Caller
+from .send import Caller, CallerUnsure, lookup_caller  # noqa: F401  (CallerUnsure, lookup_caller re-exported)
 from .status import status_rows
-from .tmux import Tmux
 from .update import current_version
 
 PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26")  # the first is answered when the client asks for another one
@@ -26,7 +24,7 @@ WATCH_S = 3
 WAIT_MAX_S = 60  # a tool call may not block longer than this (MCP clients time tool calls out themselves)
 ELICIT_TIMEOUT_S = 600
 SEPARATOR = "──── 訊息內容（由 agent 提供）────"  # everything below it in a form is the agent's text
-NOTICE = "完成後會在你的 session 送出一則通知"
+NOTICE = "完成或失敗後會在你的 session 送出一則通知"
 NO_ELICITATION = "這個 client 不支援核准表單；要用請在 config 設 [mcp] confirm = false"
 DECLINED = "使用者拒絕"
 AGENT_LABELS = {"claude": "Claude", "codex": "Codex"}
@@ -44,7 +42,7 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "send",
      "description": "傳一則訊息給另一個執行中的 sampan session（對方閒著才送，忙就排隊）。回傳派工編號；"
-                    "wait=true 時最多等 60 秒，做完就連回覆一起回。沒等到的，完成時會在你的 session 送出一則通知，"
+                    "wait=true 時最多等 60 秒，做完就連回覆一起回。沒等到的，完成或失敗時會在你的 session 送出一則通知，"
                     "或用 dispatch_result 查。",
      "inputSchema": {"type": "object", "properties": {
          "session": _str("對方的 session 名稱（list_sessions 看）"),
@@ -67,7 +65,7 @@ TOOLS = [
                   "default": 0}},
          "required": ["id"]}},
     {"name": "cancel_dispatch",
-     "description": "取消一筆還沒送出的（排隊中）派工。",
+     "description": "取消一筆還沒送出的（排隊中）派工；已送出、等回覆的，改成不再等它的回覆（訊息已在對方那裡，收不回）。",
      "inputSchema": {"type": "object", "properties": {"id": _str("派工編號")}, "required": ["id"]}},
 ]
 TOOL_NAMES = {t["name"] for t in TOOLS}
@@ -85,55 +83,19 @@ class ToolError(Exception):
     """A refusal returned to the agent as an isError tool result (not a JSON-RPC error)."""
 
 
-class CallerUnsure(Exception):
-    """The caller could not be looked up right now (ps or the tmux pane list unreadable, registry unreadable): this
-    says nothing about whether it is a session."""
+def mcp_caller(caller):
+    """An MCP caller is an agent, never a person at the terminal: no agent process found above the server still
+    makes it an unregistered caller."""
+    return replace(caller, kind="unregistered") if send.caller_kind(caller) == "terminal" else caller
 
 
 def identify_caller(cfg, run, pid):
     """lookup_caller, with an unsure lookup taken as an unregistered caller (what the server starts with)."""
     try:
-        return lookup_caller(cfg, run, pid)
+        return mcp_caller(lookup_caller(cfg, run, pid))
     except CallerUnsure as e:
-        _log(f"認不出呼叫者：{e}")
-        return Caller(None, "", e.args[1] if len(e.args) > 1 else "", None)
-
-
-def lookup_caller(cfg, run, pid):
-    """Who runs this server: the nearest claude / codex process at or above pid, the tmux pane it runs in, and the
-    registry row of that tmux session (same agent). No such process, no pane, no row or a row of another agent → an
-    unregistered Caller; raises CallerUnsure when ps, tmux or the registry cannot be read."""
-    procs = list_procs(run)
-    if not procs:
-        raise CallerUnsure("讀不到行程表")
-    agent_proc, seen, cur = None, set(), procs.get(pid)
-    while cur is not None and cur.pid not in seen:
-        seen.add(cur.pid)
-        if cur.comm == "claude" and not cur.zombie:
-            agent_proc, agent = cur, "claude"
-            break
-        if _is_codex(cur):
-            agent_proc, agent = cur, "codex"
-            break
-        cur = procs.get(cur.ppid)
-    if agent_proc is None:
-        return Caller(None, "", "", None)
-    unknown = Caller(None, "", agent, None)
-    tmux = Tmux(run)
-    panes = tmux.panes()
-    if panes is None:
-        raise CallerUnsure(tmux.unreadable_reason or "讀不到 tmux", agent)
-    pane = next((p for p in panes if is_descendant(procs, agent_proc.pid, p.pane_pid)), None)
-    if pane is None:
-        return unknown
-    try:
-        rows = load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)
-    except RegistryError as e:
-        raise CallerUnsure(str(e), agent) from e
-    row = next((r for r in rows if r.tmux == pane.session), None)
-    if row is None or row.agent != agent:
-        return unknown
-    return Caller(row.tmux, row.profile, agent, pane.pane_id)
+        _log(f"認不出呼叫者：{e.args[0] if e.args else e}")
+        return send.unsure_caller(e)
 
 
 def _who(caller):
@@ -288,13 +250,13 @@ class Server:
                 return
         _log(f"收到不認得的回應 id {rid!r}")
 
-    def _elicit(self, message, properties):
+    def _elicit(self, message, properties, required=()):
         """Ask the user through the client's form. The accepted content (dict); ToolError when not accepted."""
         if not self.elicitation:
             raise ToolError(NO_ELICITATION)
         schema = {"type": "object", "properties": properties}
-        if properties:
-            schema["required"] = list(properties)
+        if required:
+            schema["required"] = list(required)
         with self._cv:
             self._next_id += 1
             rid = self._next_id
@@ -317,13 +279,14 @@ class Server:
         return content if isinstance(content, dict) else {}
 
     def _approve_message(self, text, message):
-        """With [mcp] confirm: ask, and return the message as the user left it (they may edit it)."""
+        """With [mcp] confirm: ask, and return the message as the user left it. The field is optional (a client
+        need not prefill `default`): empty or absent means unchanged, a non-empty value is the edited message."""
         if not self.cfg.mcp_confirm:
             return message
-        content = self._elicit(text, {"message": {"type": "string", "title": "訊息", "description": "可以改了再送",
-                                                  "default": message}})
+        content = self._elicit(text, {"message": {"type": "string", "title": "訊息",
+                                                  "description": "可以改了再送；留空＝照原訊息送", "default": message}})
         edited = content.get("message")
-        return edited if isinstance(edited, str) else message
+        return edited if isinstance(edited, str) and edited.strip() else message
 
     # --- tools -----------------------------------------------------------------------------------------------
 
@@ -346,7 +309,7 @@ class Server:
         if self.resolve is None:
             return self.caller
         try:
-            self.caller = self.resolve()
+            self.caller = mcp_caller(self.resolve())
         except CallerUnsure as e:
             _log(f"這次認不出呼叫者，沿用 {send.caller_label(self.caller)}：{e.args[0] if e.args else e}")
         return self.caller
@@ -478,21 +441,26 @@ class Server:
         d = self._wait(did, wait)
         out = {"dispatch": d.id, "state": d.state, "label": send.STATE_LABELS[d.state], "to": d.to_name,
                "reply": d.reply, "reason": d.reason}
-        if d.state == "done" and d.notify and send.from_session(d, self.caller.name):
+        if d.state in ("done", "failed") and d.notify and send.from_session(d, self.caller.name):
             send.set_notify(self.cfg, d.id, False)  # the caller has the reply now: no notice needed
         return out
 
     def tool_cancel_dispatch(self, args):
         did = _arg_str(args, "id")
         d = self._own(did)
-        if d.state != "queued":
-            raise ToolError(f"派工 {did} 是「{send.STATE_LABELS[d.state]}」，只能取消還沒送出的（排隊中）")
+        refusal = send.cancel_refusal(d)
+        if refusal:
+            raise ToolError(refusal)
         if self.cfg.mcp_confirm:
-            self._elicit(_form([f"取消派工 {did}（給 {d.to_name}）／從 {_who(self.caller)}"], d.text), {})
+            what = "取消派工" if d.state == "queued" else "不再等回覆：派工"
+            self._elicit(_form([f"{what} {did}（給 {d.to_name}）／從 {_who(self.caller)}"], d.text), {})
         r = send.cancel(self.cfg, did, now=self.now_fn())
         if isinstance(r, str):
             raise ToolError(r)
-        return {"dispatch": did, "state": r.state}
+        out = {"dispatch": did, "state": r.state}
+        if r.reason == send.REASON_STOP_WATCHING:
+            out["reason"] = r.reason
+        return out
 
     # --- watcher ---------------------------------------------------------------------------------------------
 

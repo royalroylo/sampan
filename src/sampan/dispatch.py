@@ -9,7 +9,7 @@ import os
 import secrets
 import time
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from datetime import timedelta
 from pathlib import Path
 
@@ -49,6 +49,7 @@ class Dispatch:
     notified: bool = False
     thread_id: str | None = None
     from_kind: str | None = None  # KINDS; None (an old record without it) is inferred from from_name
+    startup: bool = False  # the startup prompt of `sampan new --message`: the session may not be registered yet
 
     def __post_init__(self):
         if self.from_kind is None:
@@ -75,10 +76,11 @@ def load(state_dir):
         data = json.loads(path.read_text())
         if data["version"] != VERSION:
             raise DispatchError(f"{path} 是未知的版本 {data['version']!r}（只認得 {VERSION}）。不會覆蓋它。")
-        items = [Dispatch(**d) for d in data["dispatches"]]
+        known = {f.name for f in fields(Dispatch)}  # a field written by a newer sampan is ignored, not an error
+        items = [Dispatch(**{k: v for k, v in d.items() if k in known}) for d in data["dispatches"]]
     except DispatchError:
         raise
-    except (OSError, ValueError, KeyError, TypeError) as e:
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
         raise DispatchError(f"{path} 無法解析（{e}）。不會覆蓋它。") from e
     for d in items:
         if d.state not in STATES:
@@ -91,6 +93,12 @@ def load(state_dir):
 def _write(state_dir, items):
     text = json.dumps({"version": VERSION, "dispatches": [asdict(d) for d in items]}, ensure_ascii=False, indent=2) + "\n"
     atomic_write(_path(state_dir), text, mode=PRIVATE_FILE)
+
+
+def checkpoint(state_dir, items):
+    """Write items now, in the middle of a transaction (the caller holds the lock): a state that must survive a crash
+    of this process before the transaction ends ("being sent" before any key is pressed)."""
+    _write(state_dir, items)
 
 
 @contextmanager

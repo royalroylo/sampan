@@ -846,7 +846,7 @@ def curses_ui(cfg, run, out, *, current_session=None, own_pane=None, exec_fn=os.
         if watcher is not None:
             watcher.stop()
         if dispatch_watcher is not None:
-            dispatch_watcher.stop()
+            dispatch_watcher.stop(notice=out)  # curses is closed: let a delivery in flight finish before exec / exit
     screen = box.get("screen")
     for line in (screen.messages if screen else []):
         out(line)

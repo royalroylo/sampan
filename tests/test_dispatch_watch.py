@@ -102,6 +102,42 @@ class WatcherTest(unittest.TestCase):
         w.poll_once()
         self.assertEqual([d for d, _ in self.advanced], ["a1"])
 
+    def test_stop_waits_for_a_round_in_flight_and_says_so(self):  # final review 2
+        import threading
+        import time
+        inside, release = threading.Event(), threading.Event()
+
+        def slow(did):
+            inside.set()
+            release.wait(5)
+        w = self.watcher(ids=("a1",), advance=slow)
+        w.interval = 60
+        w.start()
+        self.assertTrue(inside.wait(5))
+        notes = []
+        threading.Timer(0.8, release.set).start()
+        t0 = time.monotonic()
+        w.stop(wait_s=5, notice=notes.append)
+        self.assertGreaterEqual(time.monotonic() - t0, 0.7)  # it waited for the delivery to end
+        self.assertFalse(w._thread.is_alive())
+        self.assertEqual(notes, ["等派工送完再離開…"])
+
+    def test_stop_wait_is_bounded(self):
+        import threading
+        import time
+        inside, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+
+        def stuck(did):
+            inside.set()
+            release.wait(10)
+        w = self.watcher(ids=("a1",), advance=stuck)
+        w.start()
+        self.assertTrue(inside.wait(5))
+        t0 = time.monotonic()
+        w.stop(wait_s=1)
+        self.assertLess(time.monotonic() - t0, 3)
+
 
 class ListTest(unittest.TestCase):
     def test_cells_use_state_label_and_reason(self):
@@ -159,12 +195,23 @@ class CancelFlowTest(unittest.TestCase):
         return cancel_flow(self.cfg, self.out.append, lambda p: answer, d,
                            cancel_fn=lambda cfg, did: self.cancelled.append(did) or mk(did, "cancelled"))
 
-    def test_only_queued_can_be_cancelled_others_say_why(self):
-        for state in ("sent", "done", "failed", "cancelled"):
+    def test_finished_cannot_be_cancelled_and_say_why(self):
+        for state in ("done", "failed", "cancelled"):
             self.out.clear()
             self.assertEqual(self.flow(mk("a1", state), "y"), 1)
-            self.assertIn("只能取消還沒送出的", self.out[-1])
+            self.assertIn("只能取消排隊中的", self.out[-1])
         self.assertEqual(self.cancelled, [])
+
+    def test_sent_asks_to_stop_waiting(self):  # final review 4
+        asked = []
+        rc = cancel_flow(self.cfg, self.out.append, lambda p: asked.append(p) or "y", mk("a1", "sent"),
+                         cancel_fn=lambda cfg, did: self.cancelled.append(did)
+                         or mk(did, "cancelled", reason="不再等回覆"))
+        self.assertEqual(rc, 0)
+        self.assertIn("不再等派工 a1 的回覆", asked[0])
+        self.assertIn("收不回", asked[0])
+        self.assertEqual(self.cancelled, ["a1"])
+        self.assertIn("不再等派工 a1 的回覆", self.out[-1])
 
     def test_asks_first_and_cancels_on_yes(self):
         asked = []
@@ -218,12 +265,12 @@ class ScreenTest(unittest.TestCase):
         self.assertEqual(s.dispatches(ask=lambda p: None), 0)
         self.assertIn("沒有派工", s.messages)
 
-    def test_list_shows_rows_and_x_on_sent_explains(self):
-        s = self.screen(["KEY_DOWN", "x", "q"], [mk("a1"), mk("a2", "sent")])
-        s.dispatches(ask=lambda p: self.fail("must not ask for a sent one"))
+    def test_list_shows_rows_and_x_on_done_explains(self):
+        s = self.screen(["KEY_DOWN", "x", "q"], [mk("a1"), mk("a2", "done")])
+        s.dispatches(ask=lambda p: self.fail("must not ask for a finished one"))
         self.assertIn("a1", self.shown())
-        self.assertIn("已送出、等回覆", self.shown())
-        self.assertIn("只能取消還沒送出的", " ".join(s.messages))
+        self.assertIn("已回覆", self.shown())
+        self.assertIn("只能取消排隊中的", " ".join(s.messages))
 
     def test_x_on_queued_asks_then_cancels_and_refreshes(self):
         calls = []

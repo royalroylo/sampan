@@ -86,6 +86,13 @@ class TrustPromptStatusTest(StatusTest):
         self.r.on(["tmux", "-u", "capture-pane"], cp(out="➜  ~\n"))
         rows = {x.name: x for x in status_rows(self.cfg, self.r)}
         self.assertEqual(rows["down"].state, State.STOPPED)
+        self.assertTrue(rows["down"].tmux_alive)  # final review 1: a new session still starting has its tmux
+
+    def test_tmux_alive_only_when_the_tmux_session_exists(self):
+        rows = {x.name: x for x in status_rows(self.cfg, self.r)}
+        self.assertEqual((rows["down"].state, rows["down"].tmux_alive), (State.STOPPED, False))
+        self.assertTrue(rows["running"].tmux_alive)
+        self.assertTrue(rows["extra"].tmux_alive)
 
 
 TID = "01a1568b-81c2-71f1-99f7-b7a590f4ed96"

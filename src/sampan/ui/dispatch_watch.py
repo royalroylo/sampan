@@ -2,16 +2,17 @@
 holds the dispatches lock and can run tmux, ps and `codex queue` for up to ~30 s, so never on the UI thread), plus the pure
 pieces of the screens: the summary line, the list cells and the list's cursor state. Only the curses ui makes a watcher
 (--plain and the CLI commands never do)."""
-import subprocess
 import threading
 import time
 
 from .. import dispatch, send
 from ..clock import fmt_local, parse_iso
+from ..runner import no_stdin
 from .text import MOVES, text_width
 
 INTERVAL_S = 3  # seconds between two rounds
-LIST_HELP = "↑↓ 移動　x 取消（只有排隊中的）　q 返回"
+STOP_WAIT_S = 35  # after the screen closed: how long to let a round in flight finish (`codex queue` takes up to 30 s)
+LIST_HELP = "↑↓ 移動　x 取消排隊中的／不再等回覆　q 返回"
 LIST_TITLE = "sampan · 派工"
 STATE_STYLE = {"queued": "warn", "sent": "info", "done": "ok", "failed": "err", "cancelled": "muted"}
 NAME_MAX, REASON_MAX = 12, 40  # widest from / to and reason columns of the list
@@ -74,13 +75,8 @@ class DispatchPicker:
 
 
 def _no_tty_stdin(run):
-    """run, with stdin=DEVNULL unless the call passes its own: a child that inherits the terminal's stdin swallows the
-    keystrokes meant for curses (the v0.10.0 lesson)."""
-    def wrapped(args, **kw):
-        if kw.get("stdin") is None:
-            kw["stdin"] = subprocess.DEVNULL
-        return run(args, **kw)
-    return wrapped
+    """A child that inherits the terminal's stdin swallows the keystrokes meant for curses (the v0.10.0 lesson)."""
+    return no_stdin(run)
 
 
 class DispatchWatcher:
@@ -133,11 +129,18 @@ class DispatchWatcher:
         self._thread = threading.Thread(target=self._loop, name="sampan-dispatch-watch", daemon=True)
         self._thread.start()
 
-    def stop(self):
-        """Ask the thread to end and wait briefly; a round in flight is a daemon thread, so sampan never waits for it."""
+    def stop(self, wait_s=STOP_WAIT_S, notice=None):
+        """Ask the thread to end. A round in flight may be in the middle of a delivery: wait up to wait_s seconds for
+        it (the screen is closed by then), saying so through notice(line) when it takes longer than half a second.
+        The dispatch record is written as sent before any key, so even a process that exits anyway never sends twice."""
         self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=0.5)
+        if self._thread is None:
+            return
+        self._thread.join(timeout=min(0.5, wait_s))
+        if self._thread.is_alive() and wait_s > 0.5:
+            if notice is not None:
+                notice("等派工送完再離開…")
+            self._thread.join(timeout=wait_s - 0.5)
 
 
 def make_dispatch_watcher(cfg, run):

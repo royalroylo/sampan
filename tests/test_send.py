@@ -52,6 +52,7 @@ def codex_done(turn, last):
 def tmux_runner(screen=EMPTY):
     run = FakeRunner(strict=True)
     run.on(["tmux", "-u", "capture-pane"], cp(0, screen))
+    run.on(["tmux", "-u", "display-message"], cp(0, "0\n"))
     run.on(["tmux", "-u", "load-buffer"], cp())
     run.on(["tmux", "-u", "paste-buffer"], cp())
     run.on(["tmux", "-u", "send-keys"], cp())
@@ -63,7 +64,7 @@ def tmux_writes(run, pane=None):
     out = []
     for c in run.calls:
         a = c["args"]
-        if a[0] == "tmux" and "capture-pane" not in a and (pane is None or pane in a):
+        if a[0] == "tmux" and not {"capture-pane", "display-message"} & set(a) and (pane is None or pane in a):
             out.append(a)
     return out
 
@@ -530,12 +531,17 @@ class PendingCancelTest(Base):
         send.cancel(self.cfg, f.id, now=NOW)
         self.assertEqual(sorted(send.pending(self.cfg)), sorted([q.id, s.id]))
 
-    def test_cancel_only_queued(self):
+    def test_cancel_queued_or_stop_waiting_for_sent(self):  # final review 4
         d = self.submit()
         self.advance(tmux_runner(), d.id)
         lines = []
-        self.assertEqual(send.cmd_cancel(self.cfg, lines.append, d.id), 2)
-        self.assertIn("已送出", lines[-1])
+        self.assertEqual(send.cmd_cancel(self.cfg, lines.append, d.id), 0)
+        self.assertIn(f"不再等派工 {d.id} 的回覆", lines[-1])
+        self.assertEqual((self.stored(d.id).state, self.stored(d.id).reason), ("cancelled", "不再等回覆"))
+        self.assertNotIn(d.id, send.pending(self.cfg))
+        self.assertIn("不再等回覆", (self.cfg.state_dir / "actions.log").read_text())
+        self.assertEqual(send.cmd_cancel(self.cfg, lines.append, d.id), 2)  # finished now
+        self.assertIn("只能取消排隊中的", lines[-1])
         self.assertEqual(send.cmd_cancel(self.cfg, lines.append, "zzzz"), 2)
         q = self.submit()
         self.assertEqual(send.cmd_cancel(self.cfg, lines.append, q.id), 0)
@@ -609,6 +615,405 @@ class CmdDispatchesTest(Base):
         lines = []
         self.assertEqual(send.cmd_dispatches(self.cfg, lines.append, all_=False), 0)
         self.assertIn("沒有", lines[-1])
+
+
+class StartupDispatchTest(Base):
+    """final review 1: a `sampan new --message` dispatch is `sent` before its session is registered or seen."""
+
+    def startup(self, to, agent, profile, caller=CALLER_A, notify=False):
+        return send.submit_new(self.cfg, caller, to, agent, profile, "開工", notify=notify, now=NOW)
+
+    def test_claude_waits_while_stopped_with_its_tmux_then_binds_the_reply(self):
+        d = self.startup("n", "claude", "alice")
+        self.assertTrue(d.startup)
+        # registered before launch, process not seen yet: STOPPED, but its tmux session is there
+        self.rows["n"] = status_row("n", State.STOPPED, sid=SID_B, agent_status="-", tmux_alive=True)
+        d = self.advance(FakeRunner(strict=True), d.id, later(5))
+        self.assertEqual((d.state, d.reason), ("sent", "對方 session 還在啟動"))
+        self.rows["n"] = status_row("n", State.AWAIT_TRUST, sid=SID_B, agent_status="-")
+        self.assertEqual(self.advance(FakeRunner(strict=True), d.id, later(200)).state, "sent")  # at the trust prompt
+        self.rows["n"] = status_row("n", sid=SID_B, pane="%7")  # running and idle, transcript not written yet
+        d = self.advance(FakeRunner(strict=True), d.id, later(203))
+        self.assertEqual((d.state, d.reason), ("sent", ""))  # the first look after starting never judges
+        self.transcript(SID_B, [user(d.text), assistant("好")])
+        d = self.advance(FakeRunner(strict=True), d.id, later(206))
+        self.assertEqual((d.state, d.reply), ("done", "好"))
+
+    def test_claude_stopped_after_the_grace_fails(self):
+        d = self.startup("n", "claude", "alice")
+        self.rows["n"] = status_row("n", State.STOPPED, sid=SID_B, agent_status="-", tmux_alive=True)
+        self.assertEqual(self.advance(FakeRunner(strict=True), d.id, later(60)).state, "sent")
+        d = self.advance(FakeRunner(strict=True), d.id, later(send.STARTUP_GRACE_S + 1))
+        self.assertEqual(d.state, "failed")
+        self.assertIn("停止", d.reason)
+
+    def test_tmux_gone_fails_at_once(self):
+        d = self.startup("n", "claude", "alice")
+        self.rows["n"] = status_row("n", State.STOPPED, sid=SID_B, agent_status="-", tmux_alive=False)
+        self.assertEqual(self.advance(FakeRunner(strict=True), d.id, later(5)).state, "failed")
+
+    def test_codex_waits_while_not_registered_then_binds_the_reply(self):
+        d = self.startup("nc", "codex", "codex")
+        self.rows["nc"] = status_row("nc", State.NO_AGENT, agent="-", profile="-", sid="", agent_status="-")
+        self.assertEqual(self.advance(FakeRunner(strict=True), d.id, later(3)).reason, "對方 session 還在啟動")
+        # Codex runs (maybe at a trust prompt) but has no thread, so no registry row: as long as it runs there
+        self.rows["nc"] = status_row("nc", State.UNREGISTERED, agent="codex", profile="codex", sid="",
+                                     agent_status="-")
+        self.assertEqual(self.advance(FakeRunner(strict=True), d.id, later(900)).state, "sent")
+        self.rows["nc"] = status_row("nc", agent="codex", profile="codex", sid=TID_C, pane="%8")
+        self.rollout(TID_C, [codex_item("t1", "UserMessage", d.text),
+                             codex_item("t1", "AgentMessage", "codex 開工", "final_answer"), codex_done("t1", "codex 開工")])
+        d = self.advance(FakeRunner(strict=True), d.id, later(903))
+        self.assertEqual((d.state, d.reply, d.thread_id), ("done", "codex 開工", TID_C))
+
+    def test_codex_unregistered_with_another_agent_fails(self):
+        d = self.startup("nc", "codex", "codex")
+        self.rows["nc"] = status_row("nc", State.UNREGISTERED, agent="claude", sid="", agent_status="-")
+        self.assertEqual(self.advance(FakeRunner(strict=True), d.id, later(3)).state, "failed")
+
+    def test_an_ordinary_dispatch_gets_no_startup_grace(self):
+        d = self.submit()
+        self.advance(tmux_runner(), d.id)
+        self.set_row("b", state=State.STOPPED, agent_status="-", pane=None, tmux_alive=True)
+        self.assertEqual(self.advance(FakeRunner(strict=True), d.id, later(5)).state, "failed")
+
+    def test_abort_new_owes_no_failure_notice(self):
+        d = self.startup("n", "claude", "alice", notify=True)
+        self.assertTrue(d.notify)
+        send.abort_new(self.cfg, d.id, "tmux session 沒開起來", now=NOW)
+        stored = self.stored(d.id)
+        self.assertEqual((stored.state, stored.notify), ("failed", False))
+        self.assertNotIn(d.id, send.pending(self.cfg))
+
+
+class TwoPhaseDeliveryTest(Base):
+    """final review 2: the record says `sent` before any key is pressed, so a killed process never sends twice."""
+
+    def test_record_is_sent_before_the_paste(self):
+        d = self.submit()
+        seen = []
+
+        def paste(args):
+            seen.append((self.stored(d.id).state, self.stored(d.id).reason))
+            return cp()
+        self.advance(tmux_runner().on(["tmux", "-u", "paste-buffer"], paste), d.id)
+        self.assertEqual(seen, [("sent", "送出中")])
+        self.assertEqual(self.stored(d.id).reason, "")
+
+    def test_killed_mid_delivery_is_never_pasted_again(self):
+        d = self.submit()
+
+        def killed(*_a, **_k):
+            raise KeyboardInterrupt  # the process dies between the paste and the end of the transaction
+        with mock.patch.object(deliver, "to_claude", side_effect=killed):
+            with self.assertRaises(KeyboardInterrupt):
+                self.advance(FakeRunner(strict=True), d.id)
+        stored = self.stored(d.id)
+        self.assertEqual((stored.state, stored.reason), ("sent", "送出中"))
+        run = tmux_runner()
+        self.advance(run, d.id, later(20))
+        d = self.advance(run, d.id, later(23))
+        self.assertEqual(tmux_writes(run), [])  # at most once
+        self.assertEqual(d.state, "failed")
+        self.assertIn("找不到回覆", d.reason)
+
+    def test_killed_mid_codex_queue_is_never_queued_again(self):
+        d = self.submit(to="c")
+
+        def killed(_args):
+            raise KeyboardInterrupt
+        with self.assertRaises(KeyboardInterrupt):
+            self.advance(FakeRunner(strict=True).on(["codex", "queue"], killed), d.id)
+        self.assertEqual(self.stored(d.id).state, "sent")
+        run = FakeRunner(strict=True)
+        self.advance(run, d.id, later(5))
+        self.assertEqual(run.calls, [])
+
+    def test_nothing_sent_goes_back_to_queued(self):
+        d = self.submit()
+        d = self.advance(tmux_runner(DRAFT), d.id)
+        self.assertEqual((d.state, d.sent_at, d.reason), ("queued", None, "對方輸入框有未送出的字"))
+        self.assertEqual(self.stored(d.id).state, "queued")
+
+    def test_notice_is_marked_given_before_it_is_pasted(self):
+        d = self.submit(notify=True)
+        self.advance(tmux_runner(), d.id)
+        self.transcript(SID_B, [user(d.text), assistant("answer")])
+        seen = []
+
+        def paste(args):
+            seen.append(self.stored(d.id).notified)
+            return cp()
+        self.advance(tmux_runner().on(["tmux", "-u", "paste-buffer"], paste), d.id, later(5))
+        self.assertEqual(seen, [True])
+
+    def test_notice_not_sent_is_tried_again(self):
+        d = self.submit(notify=True)
+        self.advance(tmux_runner(), d.id)
+        self.transcript(SID_B, [user(d.text), assistant("answer")])
+        d = self.advance(tmux_runner(DRAFT), d.id, later(5))
+        self.assertFalse(d.notified)
+        self.assertIn(d.id, send.pending(self.cfg))
+
+
+class CodexQueueTimeoutTest(Base):
+    def test_timeout_fails_as_maybe_sent_and_is_never_retried(self):  # final review 3
+        d = self.submit(to="c")
+        d = self.advance(FakeRunner(strict=True).on(["codex", "queue"], cp(124, "", "timeout")), d.id)
+        self.assertEqual(d.state, "failed")
+        self.assertIn("可能已送出", d.reason)
+        run = FakeRunner(strict=True)
+        self.advance(run, d.id, later(5))
+        self.assertEqual(run.calls, [])
+
+    def test_notice_timeout_counts_as_given(self):
+        self.rows["x"] = status_row("x", agent="codex", profile="codex", sid=TID_X, pane="%5")
+        d = self.submit(caller=Caller("x", "codex", "codex", "%5"), notify=True)
+        self.advance(tmux_runner(), d.id)
+        self.transcript(SID_B, [user(d.text), assistant("answer")])
+        d = self.advance(FakeRunner(strict=True).on(["codex", "queue"], cp(124, "", "timeout")), d.id, later(5))
+        self.assertTrue(d.notified)
+        self.assertIn("可能已送出", d.reason)
+        self.assertNotIn(d.id, send.pending(self.cfg))
+
+
+class StuckSentTest(Base):
+    """final review 4: a bound message whose reply window closed, or a turn that ended without text, finishes."""
+
+    def sent(self, to="b"):
+        d = self.submit(to=to)
+        self.advance(tmux_runner() if to == "b" else FakeRunner(strict=True).on(["codex", "queue"], cp()), d.id)
+        return d
+
+    def test_claude_next_message_typed_without_a_reply_fails(self):
+        d = self.sent()
+        self.transcript(SID_B, [user(d.text), user("never mind, do this"), assistant("ok, this")])
+        d = self.advance(FakeRunner(strict=True), d.id, later(5))
+        self.assertEqual(d.state, "failed")
+        self.assertEqual(d.reason, "對方沒回這則就換了下一則")
+        self.assertIsNone(d.reply)  # never the next message's reply
+
+    def test_claude_window_closed_while_busy_waits_for_idle(self):
+        d = self.sent()
+        self.transcript(SID_B, [user(d.text), user("next")])
+        self.set_row("b", agent_status="busy")
+        self.assertEqual(self.advance(FakeRunner(strict=True), d.id, later(5)).state, "sent")
+
+    def test_claude_turn_without_text_fails_after_two_idle_looks(self):
+        d = self.sent()
+        self.transcript(SID_B, [user(d.text)])
+        self.assertEqual(self.advance(FakeRunner(strict=True), d.id, later(5)).reason, "")  # within the grace
+        d = self.advance(FakeRunner(strict=True), d.id, later(20))
+        self.assertEqual((d.state, d.reason), ("sent", "對方閒著，但還沒看到回覆文字"))
+        self.set_row("b", agent_status="busy")
+        d = self.advance(FakeRunner(strict=True), d.id, later(23))
+        self.assertEqual((d.state, d.reason), ("sent", ""))  # a busy look starts over
+        self.set_row("b", agent_status="idle")
+        self.advance(FakeRunner(strict=True), d.id, later(26))
+        d = self.advance(FakeRunner(strict=True), d.id, later(29))
+        self.assertEqual((d.state, d.reason), ("failed", "對方這輪結束了，但沒有回覆文字"))
+
+    def test_codex_turn_complete_without_text_fails(self):
+        d = self.sent("c")
+        self.rollout(TID_C, [codex_item("t1", "UserMessage", d.text), codex_done("t1", None)])
+        d = self.advance(FakeRunner(strict=True), d.id, later(5))
+        self.assertEqual((d.state, d.reason), ("failed", "對方這輪結束了，但沒有回覆文字"))
+
+    def test_codex_interrupted_then_next_message_fails(self):
+        d = self.sent("c")
+        self.rollout(TID_C, [codex_item("t1", "UserMessage", d.text), codex_item("t2", "UserMessage", "other"),
+                             codex_item("t2", "AgentMessage", "for other", "final_answer"), codex_done("t2", "for other")])
+        d = self.advance(FakeRunner(strict=True), d.id, later(5))
+        self.assertEqual((d.state, d.reason, d.reply), ("failed", "對方沒回這則就換了下一則", None))
+
+    def test_codex_interrupted_with_partial_text_is_done_with_it(self):
+        d = self.sent("c")
+        self.rollout(TID_C, [codex_item("t1", "UserMessage", d.text), codex_item("t1", "AgentMessage", "partial"),
+                             codex_item("t2", "UserMessage", "other")])
+        d = self.advance(FakeRunner(strict=True), d.id, later(5))
+        self.assertEqual((d.state, d.reply), ("done", "partial"))
+
+
+class NotSeenBusyTest(Base):
+    def test_codex_busy_look_clears_the_not_seen_mark(self):  # final review 5
+        d = self.submit(to="c")
+        self.advance(FakeRunner(strict=True).on(["codex", "queue"], cp()), d.id)
+        self.assertEqual(self.advance(FakeRunner(strict=True), d.id, later(20)).reason, send.REASON_NOT_SEEN)
+        self.set_row("c", agent_status="working")  # it took the queued message and is working on it
+        self.assertEqual(self.advance(FakeRunner(strict=True), d.id, later(23)).reason, "")
+        self.set_row("c", agent_status="idle")
+        d = self.advance(FakeRunner(strict=True), d.id, later(26))
+        self.assertEqual((d.state, d.reason), ("sent", send.REASON_NOT_SEEN))  # one strike again, not failed
+
+    def test_claude_busy_look_clears_the_not_seen_mark(self):
+        d = self.submit()
+        self.advance(tmux_runner(), d.id)
+        self.advance(FakeRunner(strict=True), d.id, later(20))
+        self.set_row("b", agent_status="busy")
+        self.assertEqual(self.advance(FakeRunner(strict=True), d.id, later(23)).reason, "")
+        self.set_row("b", agent_status="idle")
+        self.assertEqual(self.advance(FakeRunner(strict=True), d.id, later(26)).state, "sent")
+
+
+class FailureNoticeTest(Base):
+    """final review 6: a failed dispatch tells its caller too, through the same once-only path."""
+
+    def failed(self, notify=True):
+        d = self.submit(notify=notify)
+        self.advance(tmux_runner(), d.id)
+        self.set_row("b", state=State.STOPPED, agent_status="-", pane=None)
+        self.set_row("a", agent_status="busy")
+        d = self.advance(FakeRunner(strict=True), d.id, later(5))
+        self.assertEqual(d.state, "failed")
+        self.set_row("a", agent_status="idle")
+        return d
+
+    def test_idle_caller_gets_the_failure_notice_with_enter(self):
+        d = self.failed()
+        self.assertIn(d.id, send.pending(self.cfg))
+        run = tmux_runner()
+        d = self.advance(run, d.id, later(10))
+        self.assertTrue(d.notified)
+        writes = tmux_writes(run)
+        self.assertEqual(writes[2][-2:], ["%1", "Enter"])
+        self.assertEqual(Path(writes[0][-1]).read_text(), f"〔sampan：給 b 的派工 {d.id} 失敗：對方 session 已停止〕")
+        self.assertEqual(d.reason, "對方 session 已停止")
+        self.assertNotIn(d.id, send.pending(self.cfg))
+        run = tmux_runner()
+        self.advance(run, d.id, later(15))
+        self.assertEqual(run.calls, [])  # once only
+
+    def test_pasted_failure_notice_keeps_the_failure_reason(self):
+        d = self.failed()
+        d = self.advance(tmux_runner().on(["tmux", "-u", "send-keys"], cp(1, "", "lost pane")), d.id, later(10))
+        self.assertTrue(d.notified)
+        self.assertTrue(d.reason.startswith("對方 session 已停止；完成通知"))
+
+    def test_no_notice_when_not_asked(self):
+        d = self.failed(notify=False)
+        self.assertNotIn(d.id, send.pending(self.cfg))
+
+    def test_failure_notice_text_is_one_line(self):
+        d = dataclasses.replace(self.submit(), state="failed", reason="a\nb")
+        self.assertEqual(send.notice_text(d), f"〔sampan：給 b 的派工 {d.id} 失敗：a b〕")
+
+
+class CopyModeTest(Base):
+    def test_target_in_copy_mode_stays_queued_and_gets_nothing(self):  # final review 8
+        d = self.submit()
+        run = tmux_runner().on(["tmux", "-u", "display-message"], cp(0, "1\n"))
+        d = self.advance(run, d.id)
+        self.assertEqual((d.state, d.reason), ("queued", "對方畫面在捲動模式（tmux copy mode）"))
+        self.assertEqual(tmux_writes(run), [])
+        self.assertEqual(self.advance(tmux_runner(), d.id).state, "sent")
+
+
+class CmdShowTest(Base):
+    """final review 7: `sampan dispatches show <id> [--wait N]`."""
+
+    def show(self, did, run=None, wait=0):
+        self.lines = []
+        clock = iter(range(0, 10_000, 2))
+        return send.cmd_show(self.cfg, run or FakeRunner(strict=True), self.lines.append, did, wait=wait,
+                             sleep=self.sleeps.append, clock=lambda: next(clock), status_fn=self.status_fn,
+                             now_fn=lambda: later(5))
+
+    def test_done_prints_the_full_reply(self):
+        d = self.submit(caller=send.TERMINAL)
+        self.advance(tmux_runner(), d.id)
+        self.transcript(SID_B, [user(d.text), assistant("第一行\n第二行")])
+        self.assertEqual(self.show(d.id), 0)  # advanced once: done now
+        self.assertEqual(self.lines[0], f"派工 {d.id}：已回覆")
+        self.assertIn("從 終端機 給 b（claude）", self.lines[1])
+        self.assertEqual(self.lines[-2:], ["──── 回覆 ────", "第一行\n第二行"])
+
+    def test_queued_without_wait_is_0_with_the_reason(self):
+        self.set_row("b", agent_status="busy")
+        d = self.submit()
+        self.assertEqual(self.show(d.id), 0)
+        self.assertIn("說明：對方正在忙", self.lines)
+
+    def test_wait_timeout_is_124(self):
+        self.set_row("b", agent_status="busy")
+        d = self.submit()
+        self.assertEqual(self.show(d.id, wait=6), 124)
+        self.assertTrue(all(x == 2 for x in self.sleeps) and self.sleeps)
+
+    def test_failed_is_1_and_unknown_is_2(self):
+        d = self.submit()
+        send.cancel(self.cfg, d.id, now=NOW)
+        self.assertEqual(self.show(d.id), 1)
+        self.assertIn("說明：已取消", self.lines)
+        self.assertEqual(self.show("zzzz"), 2)
+        self.assertTrue(self.lines[-1].startswith("❌"))
+
+
+class CommandCallerTest(Base):
+    """final review 9: who runs `sampan send` / `sampan new --message`."""
+
+    PROCS = ["{:>6} {:>6} S launchd launchd".format(1, 0), "{:>6} {:>6} S zsh -zsh".format(100, 1),
+             "{:>6} {:>6} S claude claude".format(200, 100), "{:>6} {:>6} S zsh /bin/zsh -c sampan".format(250, 200),
+             "{:>6} {:>6} S sampan sampan send b hi".format(300, 250)]
+
+    def runner(self, procs, panes_rc=0):
+        from tests.fakes import pane_line
+        r = FakeRunner(strict=True)
+        r.on(["ps", "-A"], cp(out="\n".join(procs) + "\n"))
+        r.on(["tmux", "-u", "list-panes"], cp(panes_rc, pane_line("a", "%1", 100, "claude", "/w") + "\n",
+                                              "" if panes_rc == 0 else "permission denied"))
+        return r
+
+    def test_an_agent_running_send_through_bash_is_its_session(self):
+        from sampan.registry import Row, write_rows
+        write_rows(self.cfg.registry_path, [Row("a", "claude", "alice", SID_A, "/w")], "t", self.cfg.history_dir)
+        c = send.command_caller(self.cfg, self.runner(self.PROCS), 300)
+        self.assertEqual(c, Caller("a", "alice", "claude", "%1"))
+
+    def test_no_row_is_unregistered_and_no_agent_is_the_terminal(self):
+        self.assertEqual(send.caller_kind(send.command_caller(self.cfg, self.runner(self.PROCS), 300)), "unregistered")
+        person = ["{:>6} {:>6} S zsh -zsh".format(100, 1), "{:>6} {:>6} S sampan sampan send".format(300, 100)]
+        self.assertIs(send.command_caller(self.cfg, self.runner(person), 300), send.TERMINAL)
+
+    def test_unsure_lookup_is_unregistered_never_the_terminal(self):
+        c = send.command_caller(self.cfg, self.runner(self.PROCS, panes_rc=1), 300)
+        self.assertEqual((c.agent, send.caller_kind(c)), ("claude", "unregistered"))
+        c = send.command_caller(self.cfg, FakeRunner(strict=True).on(["ps", "-A"], cp(1)), 300)
+        self.assertEqual((send.caller_label(c), send.caller_kind(c)), ("未登記的 session", "unregistered"))
+
+    def test_cmd_send_labels_the_agent_session_and_refuses_itself(self):
+        lines = []
+        rc = send.cmd_send(self.cfg, tmux_runner(), lines.append, "b", "hi", wait=False, caller=CALLER_A,
+                           sleep=self.sleeps.append, status_fn=self.status_fn, now_fn=lambda: NOW)
+        self.assertEqual(rc, 0)
+        [d] = dispatch.load(self.cfg.state_dir)
+        self.assertEqual((d.from_name, d.from_kind), ("a", "session"))
+        self.assertTrue(d.text.startswith(f"〔sampan 轉送｜來自 a（alice）｜派工 {d.id}〕"))
+        rc = send.cmd_send(self.cfg, FakeRunner(strict=True), lines.append, "a", "hi", wait=True, caller=CALLER_A,
+                           sleep=self.sleeps.append, status_fn=self.status_fn, now_fn=lambda: NOW)
+        self.assertEqual(rc, 2)  # an agent sending to its own session with --wait would wait for itself forever
+        self.assertIn("不能送給自己", lines[-1])
+
+    def test_cmd_send_unregistered_label(self):
+        lines = []
+        send.cmd_send(self.cfg, tmux_runner(), lines.append, "b", "hi", wait=False,
+                      caller=Caller(None, "", "codex", None), sleep=self.sleeps.append, status_fn=self.status_fn,
+                      now_fn=lambda: NOW)
+        [d] = dispatch.load(self.cfg.state_dir)
+        self.assertEqual((d.from_name, d.from_kind), ("未登記的 session（codex）", "unregistered"))
+
+
+class DispatchesTableTest(Base):
+    def test_columns_are_padded_by_display_width(self):  # final review minor
+        self.rows["中文名稱"] = status_row("中文名稱", sid=SID_B, pane="%9", agent_status="busy")
+        self.submit(to="中文名稱")
+        self.set_row("b", agent_status="busy")
+        self.submit(to="b")
+        lines = []
+        send.cmd_dispatches(self.cfg, lines.append, all_=False)
+        from sampan.textwidth import text_width
+        status_col = [text_width(line.split("排隊中")[0]) for line in lines[1:]]
+        self.assertEqual(len(set(status_col)), 1)  # the state column starts at the same cell in every row
+        self.assertEqual(text_width(lines[0].split("狀態")[0]), status_col[0])
 
 
 if __name__ == "__main__":

@@ -44,6 +44,7 @@ def call(rid, name, args):
 def tmux_runner(screen=EMPTY):
     run = FakeRunner(strict=True)
     run.on(["tmux", "-u", "capture-pane"], cp(0, screen))
+    run.on(["tmux", "-u", "display-message"], cp(0, "0\n"))
     run.on(["tmux", "-u", "load-buffer"], cp())
     run.on(["tmux", "-u", "paste-buffer"], cp())
     run.on(["tmux", "-u", "send-keys"], cp())
@@ -51,7 +52,7 @@ def tmux_runner(screen=EMPTY):
 
 
 def tmux_writes(run):
-    return [c["args"] for c in run.calls if c["args"][0] == "tmux" and "capture-pane" not in c["args"]]
+    return [c["args"] for c in run.calls if c["args"][0] == "tmux" and not {"capture-pane", "display-message"} & set(c["args"])]
 
 
 class Client:
@@ -209,7 +210,7 @@ class ApprovalTest(Base):
         p = e["params"]
         self.assertIn("送給 b（alice，Claude）／從 a（alice）", p["message"])
         self.assertIn("原本的\n訊息", p["message"])
-        self.assertIn("完成後會在你的 session 送出一則通知", p["message"])
+        self.assertIn("完成或失敗後會在你的 session 送出一則通知", p["message"])
         schema = p["requestedSchema"]
         self.assertEqual(list(schema["properties"]), ["message"])
         self.assertEqual(schema["properties"]["message"]["type"], "string")
@@ -223,6 +224,18 @@ class ApprovalTest(Base):
         self.assertEqual(d.state, "sent")  # b idle with an empty box: delivered at once
         # the elicitation went out before any tmux write
         self.assertLess(c.out.index(e), len(c.out))
+
+    def test_message_field_is_optional_and_blank_means_unchanged(self):  # final review 10
+        for answer in (accept(), accept(""), accept("  \n"), lambda _m: {"action": "accept"}):
+            with self.subTest(answer=answer):
+                for d in self.dispatches():
+                    send.cancel(self.cfg, d.id, now=NOW)
+                c = self.serve(Client([init(1), call(2, "send", {"session": "b", "message": "原文"})],
+                                      answer=answer, last_id=2), run=tmux_runner())
+                self.assertNotIn("required", c.elicits[0]["params"]["requestedSchema"])
+                self.assertFalse(c.response(2)["result"]["isError"])
+                d = next(x for x in self.dispatches() if x.id == tool_json(c.response(2))["dispatch"])
+                self.assertTrue(d.text.endswith("\n原文"))
 
     def test_accept_without_content_sends_the_original(self):
         c = self.serve(Client([init(1), call(2, "send", {"session": "b", "message": "hi"})],
@@ -312,6 +325,26 @@ class ApprovalTest(Base):
         c = self.serve(Client([init(1), call(2, "cancel_dispatch", {"id": d.id})], answer=decline, last_id=2))
         self.assertTrue(c.response(2)["result"]["isError"])
         self.assertEqual(self.dispatches()[0].state, "queued")
+
+    def test_cancel_dispatch_without_elicitation_is_refused(self):  # final review 12
+        self.rows["b"] = dataclasses.replace(self.rows["b"], agent_status="busy")
+        d = send.submit(self.cfg, FakeRunner(strict=True), CALLER_A, "b", "hi", notify=False, now=NOW,
+                        status_fn=self.status_fn)
+        run = FakeRunner(strict=True)
+        c = self.serve(Client([init(1, elicitation=False), call(2, "cancel_dispatch", {"id": d.id})]), run=run)
+        self.assertTrue(c.response(2)["result"]["isError"])
+        self.assertEqual(tool_text(c.response(2)), mcp_server.NO_ELICITATION)
+        self.assertEqual(self.dispatches()[0].state, "queued")
+        self.assertEqual(run.calls, [])
+
+    def test_cancel_dispatch_of_a_sent_one_stops_waiting(self):  # final review 4
+        d = send.submit(self.cfg, FakeRunner(strict=True), CALLER_A, "b", "hi", notify=True, now=NOW,
+                        status_fn=self.status_fn)
+        send.advance(self.cfg, tmux_runner(), d.id, sleep=lambda _s: None, status_fn=self.status_fn, now=NOW)
+        c = self.serve(Client([init(1), call(2, "cancel_dispatch", {"id": d.id})], answer=accept(), last_id=2))
+        self.assertIn(f"不再等回覆：派工 {d.id}（給 b）", c.elicits[0]["params"]["message"])
+        self.assertEqual(tool_json(c.response(2)), {"dispatch": d.id, "state": "cancelled", "reason": "不再等回覆"})
+        self.assertNotIn(d.id, send.pending(self.cfg))
 
     def test_cancel_unknown_is_refused_without_asking(self):
         c = self.serve(Client([init(1), call(2, "cancel_dispatch", {"id": "ffff"})], answer=accept()))
@@ -404,6 +437,19 @@ class SendToolTest(Base):
         self.assertTrue(c.response(4)["result"]["isError"])  # wait above 60 is refused
         self.assertIn("60", tool_text(c.response(4)))
 
+    def test_dispatch_result_of_a_failed_one_turns_its_notice_off(self):  # final review 6
+        d = send.submit(self.cfg, FakeRunner(strict=True), CALLER_A, "b", "hi", notify=True, now=NOW,
+                        status_fn=self.status_fn)
+        send.advance(self.cfg, tmux_runner(), d.id, sleep=lambda _s: None, status_fn=self.status_fn, now=NOW)
+        self.rows["b"] = dataclasses.replace(self.rows["b"], state=State.STOPPED, agent_status="-", pane=None)
+        self.rows["a"] = dataclasses.replace(self.rows["a"], agent_status="busy")  # no notice yet
+        c = self.serve(Client([init(1), call(2, "dispatch_result", {"id": d.id})]), run=FakeRunner(strict=True))
+        body = tool_json(c.response(2))
+        self.assertEqual(body["state"], "failed")
+        self.assertIn("停止", body["reason"])
+        self.assertFalse(self.dispatches()[0].notify)  # the caller has read it: no failure notice
+        self.assertNotIn(d.id, send.pending(self.cfg))
+
     def test_dispatch_result_wait_polls_until_the_limit(self):
         t = [0.0]
         self.rows["b"] = dataclasses.replace(self.rows["b"], agent_status="busy")
@@ -448,11 +494,30 @@ class NewSessionToolTest(Base):
         self.assertIn("n1（work，Claude）", text)
         self.assertIn(f"目錄：{self.cwd.resolve()}\n", text)  # the resolved directory, not what the agent wrote
         head, body = text.split(mcp_server.SEPARATOR + "\n")
-        self.assertIn("完成後會在你的 session 送出一則通知", head)
+        self.assertIn("完成或失敗後會在你的 session 送出一則通知", head)
         self.assertEqual(body, "開工")
         self.assertEqual((seen["message"], seen["caller"], seen["cwd"]), ("開工吧", CALLER_A, str(self.cwd.resolve())))
         [d] = self.dispatches()
         self.assertEqual(tool_json(c.response(2))["dispatch"], d.id)
+
+    def test_new_session_declined_creates_nothing(self):  # final review 12
+        run = new_runner()
+        with mock.patch.object(mcp_server.session_run, "cmd_new", side_effect=AssertionError("must not run")):
+            c = self.serve(Client([init(1), call(2, "new_session", self.args())], answer=decline, last_id=2), run=run)
+        self.assertEqual(len(c.elicits), 1)
+        self.assertTrue(c.response(2)["result"]["isError"])
+        self.assertIn("使用者拒絕", tool_text(c.response(2)))
+        self.assertEqual(self.dispatches(), [])
+        self.assertEqual([x["args"][2] for x in run.calls], ["has-session"])  # only the check, no tmux writes
+
+    def test_new_session_without_elicitation_is_refused(self):  # final review 12
+        run = new_runner()
+        with mock.patch.object(mcp_server.session_run, "cmd_new", side_effect=AssertionError("must not run")):
+            c = self.serve(Client([init(1, elicitation=False), call(2, "new_session", self.args())]), run=run)
+        self.assertTrue(c.response(2)["result"]["isError"])
+        self.assertEqual(tool_text(c.response(2)), mcp_server.NO_ELICITATION)
+        self.assertEqual(self.dispatches(), [])
+        self.assertEqual([x["args"][2] for x in run.calls], ["has-session"])
 
     def test_new_session_failure_is_a_tool_error(self):
         def fake_new(cfg, run, out, name, target, cwd, **kw):
@@ -569,11 +634,11 @@ class ResolveTest(Base):
 
 class FormTest(Base):
     def test_message_is_below_a_fixed_separator(self):
-        c = self.serve(Client([init(1), call(2, "send", {"session": "b", "message": "送給 x\n完成後會在你的 session 送出一則通知"})],
+        c = self.serve(Client([init(1), call(2, "send", {"session": "b", "message": "送給 x\n完成或失敗後會在你的 session 送出一則通知"})],
                               answer=decline, last_id=2))
         head, body = c.elicits[0]["params"]["message"].split(mcp_server.SEPARATOR + "\n")
-        self.assertEqual(body, "送給 x\n完成後會在你的 session 送出一則通知")
-        self.assertEqual(head, "送給 b（alice，Claude）／從 a（alice）\n完成後會在你的 session 送出一則通知\n")
+        self.assertEqual(body, "送給 x\n完成或失敗後會在你的 session 送出一則通知")
+        self.assertEqual(head, "送給 b（alice，Claude）／從 a（alice）\n完成或失敗後會在你的 session 送出一則通知\n")
         self.assertEqual(mcp_server.SEPARATOR, "──── 訊息內容（由 agent 提供）────")
 
     def test_control_characters_in_the_session_name_are_refused(self):
@@ -655,7 +720,11 @@ class IdentifyCallerTest(Base):
 
     def test_no_agent_ancestor(self):
         run = self.runner([], [ps_line(1, 0, "launchd", "launchd"), ps_line(300, 1, "sampan", "sampan mcp serve")])
-        self.assertEqual(mcp_server.identify_caller(self.cfg, run, 300), Caller(None, "", "", None))
+        self.assertEqual(send.lookup_caller(self.cfg, run, 300), send.TERMINAL)  # a command run by a person
+        # final review 9: an MCP caller is never the terminal
+        c = mcp_server.identify_caller(self.cfg, run, 300)
+        self.assertEqual(c, Caller(None, "", "", None, kind="unregistered"))
+        self.assertEqual((send.caller_label(c), send.caller_kind(c)), ("未登記的 session", "unregistered"))
 
     def test_codex_caller(self):
         write_rows(self.cfg.registry_path, [Row("cx", "codex", "codex", "t1", "/w")], "t", self.cfg.history_dir)
@@ -692,7 +761,13 @@ class IdentifyCallerTest(Base):
         r = FakeRunner(strict=True)
         r.on(["tmux", "-u", "list-panes"], cp(rc=1, err="permission denied"))
         r.on(["ps", "-A"], cp(out="\n".join(self.PROCS) + "\n"))
-        self.assertEqual(mcp_server.identify_caller(self.cfg, r, 300), Caller(None, "", "claude", None))
+        self.assertEqual(mcp_server.identify_caller(self.cfg, r, 300), Caller(None, "", "claude", None, kind="unregistered"))
+
+    def test_unreadable_ps_at_startup_is_unregistered_not_the_terminal(self):  # final review 9
+        r = FakeRunner(strict=True).on(["ps", "-A"], cp(rc=1))
+        c = mcp_server.identify_caller(self.cfg, r, 300)
+        self.assertEqual(send.caller_kind(c), "unregistered")
+        self.assertEqual(send.caller_label(c), "未登記的 session")
 
 
 if __name__ == "__main__":

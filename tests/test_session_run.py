@@ -92,6 +92,25 @@ class NewAndStateTest(Base):
         self.assertEqual((d.from_name, d.from_profile, d.from_agent, d.notify), ("boss", "work", "claude", True))
         self.assertIn("來自 boss（work）", d.text)
 
+    def test_new_with_message_is_not_failed_while_the_session_starts(self):  # final review 1
+        from datetime import datetime, timezone
+
+        from sampan import send
+        for target, agent in (("claude:work", "claude"), ("codex", "codex")):
+            with self.subTest(agent=agent):
+                self.setUp()
+                r = self.runner()
+                r.on(["tmux", "-u", "capture-pane"], cp(out="➜  repo\n"))
+                cmd_new(self.cfg, r, self.msgs.append, "new-x", target, str(self.cwd), sleep=lambda _: None,
+                        timeout=1, uuid4=lambda: B, message="hi")
+                [d] = dispatch.load(self.cfg.state_dir)
+                self.assertEqual((d.state, d.startup), ("sent", True))
+                # the tmux session is there, the agent is not seen yet (Claude: registered → stopped; Codex: no row)
+                self.panes = [pane_line("new-x", "%50", 400, "zsh", str(self.cwd))]
+                self.procs = [ps_line(400, 1, "zsh", "-zsh")]
+                d = send.advance(self.cfg, r, d.id, sleep=lambda _: None, now=datetime.now(timezone.utc))
+                self.assertEqual((d.state, d.reason), ("sent", "對方 session 還在啟動"))
+
     def test_new_with_message_dry_run_creates_nothing(self):
         r = self.runner()
         self.assertEqual(cmd_new(self.cfg, r, self.msgs.append, "new-x", "work", str(self.cwd), dry_run=True,
