@@ -12,6 +12,8 @@ All notable changes to this project are documented here. The format follows
 - `S` on the `sampan` screen restarts without going in: idle running sessions are stopped normally and reattached to the same conversation in the background; a stopped one is reattached when `S` is pressed on its own row (or it is checked). On a folder row `S` (and `s`) acts on every session under it, folded ones too, and leaves stopped ones stopped unless their own row is checked as well. The confirm line names what will restart and what is skipped and why (`將重開：A、B　略過：C（忙）　確定？(y/N)`), and the `s` / `S` confirm lines shorten long lists (「等 n 個」) to fit the screen width, so the question always shows; busy ones, the pane sampan runs in, retired ones and unknown states are skipped and listed with their reason at the end. The info card shows `S 重開` (`S 背景接回` on a stopped row). `--plain` has `S` too, with the same question. The key help line now lists `S 重開` and `g 包資料夾　f 搬進資料夾`; the digits, `w`, `Enter` and `A` are left out of it for room but still work.
 - `sampan restart <name>...` does the same from a terminal without asking, prints the skipped ones with their reason and returns the worst exit code.
 
+## [0.11.1] - 2026-10-27
+
 ### Fixed
 - `sampan send` (and completion notices) no longer keep a dispatch queued as 「對方畫面停在選單或提示」 when an idle Claude shows its session title in the top rule of the input box (「──── <title> ─」, Claude Code 2.1.3xx); the box is recognised and its dim suggestion still counts as empty.
 
@@ -336,7 +338,8 @@ First public release. Versions up to 0.5.3 were released privately under the nam
 ### Security
 - Credentials in git URLs are no longer shown in output.
 
-[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.11.1...HEAD
+[0.11.1]: https://github.com/royalroylo/sampan/releases/tag/v0.11.1
 [0.11.0]: https://github.com/royalroylo/sampan/releases/tag/v0.11.0
 [0.10.0]: https://github.com/royalroylo/sampan/releases/tag/v0.10.0
 [0.9.1]: https://github.com/royalroylo/sampan/releases/tag/v0.9.1
