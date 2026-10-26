@@ -444,8 +444,7 @@ def _dispatch(cfg, args):
         own = os.environ.get("TMUX_PANE")
         plan = restart.plan_restart(status.status_rows(cfg, run), args.names, resume_stopped=True, own_pane=own)
         if not plan.restart and not plan.resume:
-            out("沒有可重開的 session。" + ("略過：" + "、".join(f"{n}（{w}）" for n, w in plan.skip)
-                                         if plan.skip else ""))
+            out("沒有可重開的 session。" + (restart.skip_text(plan.skip) if plan.skip else ""))
             return 1
         on_prompt, _want = _prompt_fn()
         return restart.cmd_restart(cfg, run, out, input, plan, own_pane=own, on_prompt=on_prompt)

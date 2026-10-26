@@ -36,6 +36,13 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(plan.resume, [])
         self.assertEqual(plan.skip, [("stopped", "已停止")])
 
+    def test_plan_only_restarts_idle(self):
+        rows = [status_row("u", agent_status="unknown"), status_row("d", agent_status="-"),
+                status_row("i", agent_status="idle")]
+        plan = plan_restart(rows, ["u", "d", "i"], resume_stopped=True)
+        self.assertEqual(plan.restart, ["i"])
+        self.assertEqual(plan.skip, [("u", "沒有閒著（unknown）"), ("d", "沒有閒著（-）")])
+
     def test_plan_keeps_order_and_dedups(self):
         rows = [status_row("a"), status_row("b"), status_row("c", State.STOPPED)]
         plan = plan_restart(rows, ["b", "c", "a", "b", "x", "x"], resume_stopped=True)

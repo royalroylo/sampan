@@ -40,6 +40,8 @@ def plan_restart(rows, names, *, resume_stopped, own_pane=None):
                 plan.skip.append((name, "sampan 就在這個 pane"))
             elif row.agent_status in BUSY:
                 plan.skip.append((name, "忙"))
+            elif row.agent_status != "idle":  # cmd_stop only stops idle ones: unknown / "-" / menus are not
+                plan.skip.append((name, f"沒有閒著（{row.agent_status}）"))
             else:
                 plan.restart.append(name)
         elif row.state is State.STOPPED:
@@ -54,6 +56,11 @@ def plan_restart(rows, names, *, resume_stopped, own_pane=None):
         else:
             plan.skip.append((name, _other_state(row)))
     return plan
+
+
+def skip_text(pairs):
+    """The one-line "略過：名稱（原因）…" list; a pair without a reason shows the bare name."""
+    return "略過：" + "、".join(f"{n}（{w}）" if w else n for n, w in pairs)
 
 
 def _listed(items, limit):
@@ -90,5 +97,5 @@ def cmd_restart(cfg, run, out, ask, plan, *, own_pane=None, on_prompt=None, stop
         worst = max(worst, restore_fn(cfg, run, out, ask, names=again, confirm=False, on_prompt=on_prompt))
     skipped = list(plan.skip) + [(n, why.get(n, "")) for n in left]
     if skipped:
-        out("略過：" + "、".join(f"{n}（{w}）" if w else n for n, w in skipped))
+        out(skip_text(skipped))
     return worst
