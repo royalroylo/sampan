@@ -4,9 +4,10 @@ import json
 import os
 import shlex
 import tomllib
+from datetime import datetime
 from pathlib import Path
 
-from . import actionlog
+from . import actionlog, codex_approval
 from .config import redact
 from .launch import codex_env
 
@@ -37,23 +38,49 @@ def _remove_argv(agent):
     return ["claude", "mcp", "remove", "--scope", "user", NAME] if agent == "claude" else ["codex", "mcp", "remove", NAME]
 
 
-def _apply(cfg, run, out, build, *, want_installed, dry_run, done, skip):
+def _codex_approval(cfg, out, confirm, dry_run, *, adding=False):
+    """Codex's approval_mode tables for sampan's acting tools (codex_approval); 0, or 1 on an error."""
+    label = "Codex config.toml"
+    if dry_run and adding and confirm:  # codex has not written its sampan entry yet, so apply would find nothing
+        out(f"{label}：（試跑）會設成每次詢問")
+        return 0
+    try:
+        msg = codex_approval.apply(Path(cfg.codex.home) / "config.toml", confirm, now=datetime.now(), dry_run=dry_run)
+    except ValueError as e:
+        out(f"❌ {e}")
+        return 1
+    except OSError as e:
+        out(f"❌ {label}：{e}")
+        return 1
+    out(f"{label}：{'（試跑）' if dry_run else ''}{msg}")
+    return 0
+
+
+def _apply(cfg, run, out, build, *, want_installed, dry_run, done, skip, codex_confirm, codex_first):
+    """codex_confirm / codex_first: for Codex, the approval tables are set to codex_confirm before `codex mcp …`
+    (codex_first) or after it, also when that is skipped."""
     out = actionlog.tee(cfg, "mcp", out)
     rc = 0
     for name, agent, env in _targets(cfg):
-        if _installed(run, agent, env) != want_installed:
+        need = _installed(run, agent, env) == want_installed
+        if agent == "codex" and codex_first:
+            rc |= _codex_approval(cfg, out, codex_confirm, dry_run)
+        ok = True
+        if not need:
             out(f"{name}：{skip}")
-            continue
-        argv = build(agent)
-        if dry_run:
-            out(f"{name}：（試跑）會執行 {shlex.join(argv)}")
-            continue
-        r = run(argv, env=env)
-        if r.returncode == 0:
-            out(f"✅ {name}：{done}")
+        elif dry_run:
+            out(f"{name}：（試跑）會執行 {shlex.join(build(agent))}")
         else:
-            rc = 1
-            out(f"❌ {name}：{shlex.join(argv)} 失敗：{redact((r.stderr or r.stdout).strip())[:300]}")
+            argv = build(agent)
+            r = run(argv, env=env)
+            ok = r.returncode == 0
+            if ok:
+                out(f"✅ {name}：{done}")
+            else:
+                rc = 1
+                out(f"❌ {name}：{shlex.join(argv)} 失敗：{redact((r.stderr or r.stdout).strip())[:300]}")
+        if agent == "codex" and not codex_first and ok:
+            rc |= _codex_approval(cfg, out, codex_confirm, dry_run, adding=need)
     return rc
 
 
@@ -63,12 +90,12 @@ def install(cfg, run, out, *, sampan_path, dry_run=False):
         return 2
     return _apply(cfg, run, out, lambda a: _add_argv(a, sampan_path), want_installed=False,
                   dry_run=dry_run, done="已裝 sampan MCP（重開該 profile 的 session 才會出現工具）",
-                  skip="已裝，略過")
+                  skip="已裝，略過", codex_confirm=cfg.mcp_confirm, codex_first=False)
 
 
 def uninstall(cfg, run, out, *, dry_run=False):
     return _apply(cfg, run, out, _remove_argv, want_installed=True, dry_run=dry_run,
-                  done="已移除 sampan MCP", skip="沒裝，略過")
+                  done="已移除 sampan MCP", skip="沒裝，略過", codex_confirm=False, codex_first=True)
 
 
 def _claude_has(profile):

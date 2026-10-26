@@ -14,6 +14,7 @@ import threading
 import time
 from dataclasses import replace
 from datetime import datetime, timezone
+from pathlib import Path
 
 from . import dispatch, send, session_run
 from .registry import RegistryError, load_rows
@@ -28,8 +29,10 @@ INTERACTION_META = "anthropic/requiresUserInteraction"
 ACTING_TOOLS = ("send", "new_session", "cancel_dispatch")
 # clientInfo.name of the clients known to ask the user for a tool marked INTERACTION_META (checked 2026-10-27:
 # Claude Code 2.1.287 sends "claude-code", Codex 0.164.0 sends "codex-mcp-client")
-ASKING_CLIENTS = {"claude-code", "codex-mcp-client"}
+ASKING_CLIENTS = {"claude-code", "codex-mcp-client"}  # Codex: only with approval_mode = "prompt" (codex_approval)
 NOT_ASKING = "這個 client 不會先問使用者；要用請在 config 設 [mcp] confirm = false"
+CODEX = "codex-mcp-client"
+CODEX_NOT_PROMPT = "Codex 的 sampan 工具沒設成每次詢問：跑 sampan mcp install"
 
 PARSE_ERROR, INVALID_REQUEST, METHOD_NOT_FOUND, INVALID_PARAMS = -32700, -32600, -32601, -32602
 
@@ -243,6 +246,10 @@ class Server:
             return None
         if self.client_name not in ASKING_CLIENTS:
             return NOT_ASKING
+        if self.client_name == CODEX:  # Codex asks only when its config.toml says so; read now, the user may change it
+            from . import codex_approval  # imports this module (ACTING_TOOLS)
+            if not codex_approval.tool_prompts(Path(self.cfg.codex.home) / "config.toml", tool):
+                return CODEX_NOT_PROMPT
         return None
 
     def _call(self, rid, name, args):

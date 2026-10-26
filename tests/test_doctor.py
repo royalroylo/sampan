@@ -4,11 +4,12 @@ import plistlib
 import shutil
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-from sampan import launchd
+from sampan import codex_approval, launchd
 from sampan.doctor import current_sampan, run_checks
 from sampan.hook import install_hook
 from tests.fakes import FakeRunner, cp, pane_line, ps_line
@@ -236,7 +237,6 @@ class DoctorTest(unittest.TestCase):
         self.assertIn(("info", "old 已停用"), [(c.level, c.title) for c in checks])
 
     def test_codex_disabled_skips_codex_check(self):
-        from dataclasses import replace
         self.cfg = replace(self.cfg, codex=replace(self.cfg.codex, enabled=False))
         self.assertFalse(any("Codex" in c.title for c in self.checks()))
 
@@ -264,7 +264,6 @@ class DoctorTest(unittest.TestCase):
         self.assertEqual(len(self.r.called(["codex", "app-server", "daemon", "version"])), 1)
 
     def test_doctor_daemon_skipped_without_codex_profile(self):
-        from dataclasses import replace
         self.cfg = replace(self.cfg, codex=replace(self.cfg.codex, enabled=False))
         called = []
         checks = self.checks(daemon_fn=lambda *a, **k: called.append(a))
@@ -349,3 +348,31 @@ class McpDoctorTest(DoctorTest):
         hits = [c for c in self.checks() if "sampan MCP" in c.title]
         self.assertEqual([c.title for c in hits], ["sampan MCP：裝在 alice、work、codex"])
         self.assertEqual(hits[0].detail, "")
+
+    def codex_toml(self, text):
+        self.cfg.codex.home.mkdir(parents=True, exist_ok=True)
+        (self.cfg.codex.home / "config.toml").write_text(text)
+
+    def approval_titles(self):
+        return [c.title for c in self.checks() if "Codex 的 sampan 工具" in c.title]
+
+    def test_doctor_flags_codex_tool_not_prompt(self):
+        installed = '[mcp_servers.sampan]\ncommand = "sampan"\n'
+        self.codex_toml(installed + '\n[mcp_servers.sampan.tools.send]\napproval_mode = "approve"\n')  # "always allow"
+        self.assertEqual(self.approval_titles(),
+                         ["Codex 的 sampan 工具沒設成每次詢問（[mcp] confirm = true）：跑 sampan mcp install 補上"])
+        self.codex_toml(codex_approval.with_prompt(installed))
+        self.cfg = replace(self.cfg, mcp_confirm=False)
+        self.assertEqual(self.approval_titles(),
+                         ["Codex 的 sampan 工具還設著每次詢問（[mcp] confirm = false）：跑 sampan mcp install 拿掉"])
+
+    def test_doctor_quiet_when_codex_prompt_set(self):
+        installed = '[mcp_servers.sampan]\ncommand = "sampan"\n'
+        self.codex_toml(codex_approval.with_prompt(installed))
+        self.assertEqual(self.approval_titles(), [])
+        self.codex_toml(installed)
+        self.cfg = replace(self.cfg, mcp_confirm=False)
+        self.assertEqual(self.approval_titles(), [])
+        self.codex_toml("a = 1\n")  # sampan MCP not in Codex: nothing to say
+        self.cfg = replace(self.cfg, mcp_confirm=True)
+        self.assertEqual(self.approval_titles(), [])

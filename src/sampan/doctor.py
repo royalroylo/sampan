@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
 
-from . import actionlog, codex_daemon, launchd, mcp_install
+from . import actionlog, codex_approval, codex_daemon, launchd, mcp_install
 from . import deps as deps_mod
 from . import update as update_mod
 from .claude_state import stale_session_files
@@ -275,12 +275,32 @@ def _codex_daemon(cfg, run, snapshot_fn=None):
     return [Check("info", f"Codex 常駐服務：執行中（{snap.home}）")]
 
 
+def _codex_approval(cfg):
+    """Codex's approval_mode tables for sampan's acting tools disagree with [mcp] confirm (e.g. the user chose
+    "always allow" in Codex, which writes "approve"). Broken or absent config.toml: quiet here."""
+    try:
+        text = (Path(cfg.codex.home) / "config.toml").read_text()
+    except (OSError, UnicodeDecodeError):
+        return []
+    if not codex_approval.needs_fix(text, cfg.mcp_confirm):
+        return []
+    if cfg.mcp_confirm:
+        return [Check("warn", "Codex 的 sampan 工具沒設成每次詢問（[mcp] confirm = true）：跑 sampan mcp install 補上")]
+    return [Check("warn", "Codex 的 sampan 工具還設著每次詢問（[mcp] confirm = false）：跑 sampan mcp install 拿掉")]
+
+
 def _mcp(cfg):
     """Where the sampan MCP is installed; quiet when it is nowhere."""
     st = mcp_install.status(cfg)
     here = [n for n, v in st.items() if v]
     if not here:
         return []
+    if cfg.codex.enabled and st.get(cfg.codex.profile or "codex"):
+        return _mcp_where(st, here) + _codex_approval(cfg)
+    return _mcp_where(st, here)
+
+
+def _mcp_where(st, here):
     missing = [n for n, v in st.items() if not v]
     if not missing:
         return [Check("info", f"sampan MCP：裝在 {'、'.join(here)}")]

@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
-from sampan import dispatch, mcp_server, send
+from sampan import codex_approval, dispatch, mcp_server, send
 from sampan.registry import Row, write_rows
 from sampan.send import Caller
 from sampan.status import State
@@ -243,12 +243,51 @@ class FailClosedTest(Base):
                 self.assertEqual(self.dispatches(), [])
                 self.assertEqual(tmux_writes(run), [])
 
+    def codex_toml(self, text):
+        self.cfg.codex.home.mkdir(parents=True, exist_ok=True)
+        (self.cfg.codex.home / "config.toml").write_text(text)
+
     def test_asking_clients_are_allowed(self):
+        self.codex_toml(codex_approval.with_prompt('[mcp_servers.sampan]\ncommand = "sampan"\n'))
         for client in ("claude-code", "codex-mcp-client"):
             with self.subTest(client=client):
                 c = self.serve(Client([init(1, client=client), call(2, "send", {"session": "b", "message": "hi"})]),
                                run=tmux_runner())
                 self.assertFalse(c.response(2)["result"]["isError"])
+
+    def test_codex_without_prompt_tables_is_refused(self):
+        installed = '[mcp_servers.sampan]\ncommand = "sampan"\n'
+        approve_send = codex_approval.with_prompt(installed).replace(
+            '[mcp_servers.sampan.tools.send]\napproval_mode = "prompt"', '[mcp_servers.sampan.tools.send]\napproval_mode = "approve"')
+        for name, text in (("missing", None), ("not set", installed), ("always allow", approve_send), ("broken", "[x")):
+            with self.subTest(name):
+                path = self.cfg.codex.home / "config.toml"
+                path.unlink(missing_ok=True)
+                if text is not None:
+                    self.codex_toml(text)
+                run = tmux_runner()
+                calls = {**self.ACTING, "new_session": self.new_args()}
+                with mock.patch.object(mcp_server.session_run, "cmd_new", side_effect=AssertionError("no")):
+                    c = self.serve(Client([init(1, client="codex-mcp-client")] + [
+                        call(i + 2, n, a) for i, (n, a) in enumerate(calls.items())]), run=run)
+                for i, tool in enumerate(calls):
+                    refused = text is not approve_send or tool == "send"
+                    resp = c.response(i + 2)
+                    if refused:
+                        self.assertTrue(resp["result"]["isError"], tool)
+                        self.assertEqual(tool_text(resp), mcp_server.CODEX_NOT_PROMPT)
+                    else:
+                        self.assertNotEqual(tool_text(resp), mcp_server.CODEX_NOT_PROMPT)
+                self.assertEqual(self.dispatches(), [])  # send never went out
+                if text is not approve_send:
+                    self.assertEqual(tmux_writes(run), [])
+
+    def test_codex_read_only_tools_and_confirm_off_need_no_tables(self):
+        c = self.serve(Client([init(1, client="codex-mcp-client"), call(2, "list_sessions", {})]))
+        self.assertFalse(c.response(2)["result"]["isError"])
+        c = self.serve(Client([init(1, client="codex-mcp-client"), call(2, "send", {"session": "b", "message": "hi"})]),
+                       run=tmux_runner(), confirm=False)
+        self.assertFalse(c.response(2)["result"]["isError"])
 
     def test_confirm_off_needs_no_asking_client(self):
         c = self.serve(Client([init(1, client="other"), call(2, "send", {"session": "b", "message": "hi"})]),
