@@ -388,7 +388,7 @@ class ActingToolTest(Base):
         [d] = self.dispatches()
         self.assertFalse(d.notify)
         self.assertEqual(d.from_name, "未登記的 session（claude）")
-        self.assertEqual(d.text.splitlines()[0], f"〔sampan 轉送｜來自 未登記的 session（claude）｜派工 {d.id}〕")
+        self.assertEqual(d.text.splitlines()[0], f"〔sampan 轉送｜來自 未登記的 session（claude）｜派工 {d.id}｜直接回覆文字即可，sampan 會帶回〕")
 
     def test_read_only_tools_never_ask(self):
         d = send.submit(self.cfg, FakeRunner(strict=True), CALLER_A, "b", "hi", notify=False, now=NOW,

@@ -23,4 +23,4 @@ restore panes outside sampan and conflict with "you confirm, original conversati
 
 ## Letting agents send messages (sampan MCP)
 
-`sampan mcp install` adds the sampan MCP to every enabled Claude profile and to Codex (`--dry-run` shows the commands first; `sampan mcp uninstall` removes it). Restart the profile's sessions afterwards. By default every `send`, `new_session` and `cancel_dispatch` shows an approval form; a Codex started with `--dangerously-bypass-approvals-and-sandbox` auto-approves the form, see [reference.md](reference.md#installing-and-what-the-approval-form-relies-on).
+`sampan mcp install` adds the sampan MCP to every enabled Claude profile and to Codex (`--dry-run` shows the commands first; `sampan mcp uninstall` removes it). Restart the profile's sessions afterwards. By default (`[mcp] confirm = true`) every `send`, `new_session` and `cancel_dispatch` is approved through the agent's own permission prompt; for that, `sampan mcp install` edits Codex's `config.toml` (backed up first as `config.toml.bak-sampan-<time>`, only sampan's own tables change). Details in [reference.md](reference.md#installing-and-how-approval-works).

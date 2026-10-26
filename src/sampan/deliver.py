@@ -30,7 +30,7 @@ class Pasted(Unsure):
 def source_line(from_name, from_profile, did):
     """from_name None = the terminal; a name without a profile (a label such as 「未登記的 session（claude）」) as is."""
     who = "終端機" if from_name is None else f"{from_name}（{from_profile}）" if from_profile else from_name
-    return f"〔sampan 轉送｜來自 {who}｜派工 {did}〕"
+    return f"〔sampan 轉送｜來自 {who}｜派工 {did}｜直接回覆文字即可，sampan 會帶回〕"
 
 
 def compose(from_name, from_profile, did, message):

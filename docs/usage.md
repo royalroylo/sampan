@@ -239,7 +239,7 @@ session 可以放進資料夾（多層用 `/`，例如 `客戶/甲`）。資料�
 
 ## 傳訊息給 session
 
-`sampan send <名稱> <訊息>` 把一則訊息交給一個執行中的 session（訊息寫 `-` 就從 stdin 讀，多行、引號、`$` 都照原樣）。sampan 先建一筆「派工」，對方開頭會先看到一行來源：`〔sampan 轉送｜來自 終端機｜派工 7f3a〕`。agent 用它的 shell 工具跑 `sampan send` 時，來源寫那個 session（或「未登記的 session」），不會冒充「終端機」；送給自己照樣拒絕。
+`sampan send <名稱> <訊息>` 把一則訊息交給一個執行中的 session（訊息寫 `-` 就從 stdin 讀，多行、引號、`$` 都照原樣）。sampan 先建一筆「派工」，對方開頭會先看到一行來源：`〔sampan 轉送｜來自 終端機｜派工 7f3a｜直接回覆文字即可，sampan 會帶回〕`（提醒對方用文字回覆，sampan 會把回覆帶回來）。agent 用它的 shell 工具跑 `sampan send` 時，來源寫那個 session（或「未登記的 session」），不會冒充「終端機」；送給自己照樣拒絕。
 
 - 只送給 sampan 登記表裡、狀態是執行中的 session；找不到、沒在執行、送給自己都會拒絕（結束碼 2），不猜。
 - **Claude**：對方閒著（`sampan status` 的活動是 idle）**而且輸入框是空的**，才用 tmux 貼上整則訊息再按 Enter。對方在忙、在等你回答、畫面停在選單或提示、輸入框裡有人打了一半的字（「對方輸入框有未送出的字」）、畫面在 tmux 捲動模式（「對方畫面在捲動模式」）→ 不送、繼續排隊，不會清掉別人的草稿。
@@ -257,7 +257,11 @@ session 可以放進資料夾（多層用 `/`，例如 `客戶/甲`）。資料�
 
 `sampan mcp serve` 是一個 stdio MCP server：agent（Claude Code、Codex）透過它的工具 `list_sessions`、`send`、`new_session`、`dispatch_result`、`cancel_dispatch` 傳訊息給其他 session、開新 session、看回覆，規則跟 `sampan send` 一樣。用 `sampan mcp install` 把它登記到每個啟用的 Claude profile 與 Codex（`sampan mcp uninstall` 移除，兩者都有 `--dry-run`），裝好後重開該 profile 的 session 才看得到工具。
 
-- 預設 `[mcp] confirm = true`：會動作的工具（`send`、`new_session`、`cancel_dispatch`）每次都跳核准表單，寫明送給誰、從哪個 session、完整訊息，可以同意、拒絕或改訊息再送（訊息欄留空就送原訊息）；拒絕就不建派工。呼叫端不支援核准表單時直接拒絕（「這個 client 不支援核准表單；要用請在 config 設 [mcp] confirm = false」）。看狀態的工具永遠不問。
+- 預設 `[mcp] confirm = true`：會動作的工具（`send`、`new_session`、`cancel_dispatch`）每次都由 agent 自己的權限詢問問你。sampan 在這三個工具上標記「需要使用者互動」，Claude Code 每次呼叫都會跳自己的權限提示（終端機與 Remote Control 都會問，auto／bypass 模式也會問，沒有「不再詢問」）；Codex 靠 `approval_mode = "prompt"`，`sampan mcp install` 會替你寫進 Codex 的 `config.toml`（先備份）。提示裡看得到工具與完整參數；不同意就回「不要」，要改訊息就請 agent 改了再送。看狀態的工具永遠不問。
+- 失敗就關：`confirm = true` 時，這三個工具只給確定會先問人的 client（`claude-code`、`codex-mcp-client`）用，其他 client 會被拒絕（「這個 client 不會先問使用者；要用請在 config 設 [mcp] confirm = false」）；Codex 的 sampan 工具沒設成每次詢問時也拒絕（「Codex 的 sampan 工具沒設成每次詢問（<路徑>）：跑 sampan mcp install」）。
+- `confirm = true` 時，agent 從 Bash 跑 `sampan send`、`sampan new … --message`、`sampan dispatches cancel` 會被拒絕（結束碼 2，「agent 請改用 sampan MCP 的工具（會先問使用者）；要讓 agent 直接用指令，在 config 設 [mcp] confirm = false」）；人在終端機跑照舊。
+- 改 `[mcp] confirm` 之後：Claude 在 MCP server 重啟時才讀到（開新 session，或 `/mcp` 重新連線）；Codex 要再跑一次 `sampan mcp install`。
+- 做不到的事：這擋不住自己對 tmux pane 打字的 agent（`tmux send-keys`）。Claude Code 的 sandbox 可以擋，但 sampan 不替你設定。
 - `send` 不等的話馬上回派工編號；對方做完時 sampan 往呼叫者的 session 送一行通知（`〔sampan：<對方> 已回覆派工 <編號>，用 sampan 工具 dispatch_result 看內容〕`，會按 Enter），失敗時也送一行（`〔sampan：給 <對方> 的派工 <編號> 失敗：<原因>〕`），同意派工就算同意這則通知。`wait=true` 最多等 60 秒，等到就連回覆一起回。
 - 呼叫者不是 sampan 管的 session（例如不在 tmux 裡）→ 工具照樣能用，只是收不到完成通知，自己用 `dispatch_result` 查。
 - 工具的參數與回傳見 [reference](reference.md#sampan-mcp-serve-的工具)。

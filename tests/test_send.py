@@ -118,7 +118,7 @@ class SubmitTest(Base):
         d = self.submit(message="line1\nline2", notify=True)
         self.assertIsInstance(d, dispatch.Dispatch)
         self.assertEqual(d.state, "queued")
-        self.assertEqual(d.text, f"〔sampan 轉送｜來自 a（alice）｜派工 {d.id}〕\nline1\nline2")
+        self.assertEqual(d.text, f"〔sampan 轉送｜來自 a（alice）｜派工 {d.id}｜直接回覆文字即可，sampan 會帶回〕\nline1\nline2")
         self.assertEqual((d.from_name, d.from_profile, d.from_agent), ("a", "alice", "claude"))
         self.assertEqual((d.to_name, d.to_agent, d.to_profile), ("b", "claude", "alice"))
         self.assertTrue(d.notify)
@@ -131,13 +131,13 @@ class SubmitTest(Base):
 
     def test_terminal_caller_is_never_notified(self):
         d = self.submit(caller=send.TERMINAL, notify=True)
-        self.assertEqual(d.text.splitlines()[0], f"〔sampan 轉送｜來自 終端機｜派工 {d.id}〕")
+        self.assertEqual(d.text.splitlines()[0], f"〔sampan 轉送｜來自 終端機｜派工 {d.id}｜直接回覆文字即可，sampan 會帶回〕")
         self.assertEqual(d.from_name, "終端機")
         self.assertFalse(d.notify)
 
     def test_unregistered_agent_caller_is_not_the_terminal(self):
         d = self.submit(caller=Caller(None, "", "codex", None), notify=True)
-        self.assertEqual(d.text.splitlines()[0], f"〔sampan 轉送｜來自 未登記的 session（codex）｜派工 {d.id}〕")
+        self.assertEqual(d.text.splitlines()[0], f"〔sampan 轉送｜來自 未登記的 session（codex）｜派工 {d.id}｜直接回覆文字即可，sampan 會帶回〕")
         self.assertEqual(d.from_name, "未登記的 session（codex）")
         self.assertFalse(d.notify)
         self.assertIn("未登記的 session（codex） → b", (self.cfg.state_dir / "actions.log").read_text())
@@ -572,6 +572,16 @@ class CmdSendTest(Base):
         self.assertEqual(self.cmd(run, wait=True), 0)
         self.assertEqual(self.lines[-1], "multi\nline reply")
 
+    def test_wait_binds_reply_with_new_source_line(self):
+        def capture(args):
+            d = dispatch.load(self.cfg.state_dir)[0]
+            self.assertIn("直接回覆文字即可，sampan 會帶回", d.text.splitlines()[0])
+            self.transcript(SID_B, [user("別則訊息"), assistant("not mine"), user(d.text), assistant("mine")])
+            return cp()
+        run = tmux_runner().on(["tmux", "-u", "send-keys"], capture)
+        self.assertEqual(self.cmd(run, wait=True), 0)
+        self.assertEqual(self.lines[-1], "mine")
+
     def test_wait_timeout_is_124_and_the_dispatch_stays(self):
         self.set_row("b", agent_status="busy")
         self.assertEqual(self.cmd(FakeRunner(strict=True), wait=True, timeout=10), 124)
@@ -987,7 +997,7 @@ class CommandCallerTest(Base):
         self.assertEqual(rc, 0)
         [d] = dispatch.load(self.cfg.state_dir)
         self.assertEqual((d.from_name, d.from_kind), ("a", "session"))
-        self.assertTrue(d.text.startswith(f"〔sampan 轉送｜來自 a（alice）｜派工 {d.id}〕"))
+        self.assertTrue(d.text.startswith(f"〔sampan 轉送｜來自 a（alice）｜派工 {d.id}｜直接回覆文字即可，sampan 會帶回〕"))
         rc = send.cmd_send(self.cfg, FakeRunner(strict=True), lines.append, "a", "hi", wait=True, caller=CALLER_A,
                            sleep=self.sleeps.append, status_fn=self.status_fn, now_fn=lambda: NOW)
         self.assertEqual(rc, 2)  # an agent sending to its own session with --wait would wait for itself forever

@@ -35,14 +35,14 @@ def writes(run):
 
 class SourceLineTest(unittest.TestCase):
     def test_formats(self):
-        self.assertEqual(source_line(None, "", "ab12"), "〔sampan 轉送｜來自 終端機｜派工 ab12〕")
-        self.assertEqual(source_line("api", "work", "ab12"), "〔sampan 轉送｜來自 api（work）｜派工 ab12〕")
-        self.assertEqual(source_line("x", "codex", "ab12"), "〔sampan 轉送｜來自 x（codex）｜派工 ab12〕")
-        self.assertEqual(compose(None, "", "ab12", "hi"), "〔sampan 轉送｜來自 終端機｜派工 ab12〕\nhi")
+        self.assertEqual(source_line(None, "", "ab12"), "〔sampan 轉送｜來自 終端機｜派工 ab12｜直接回覆文字即可，sampan 會帶回〕")
+        self.assertEqual(source_line("api", "work", "ab12"), "〔sampan 轉送｜來自 api（work）｜派工 ab12｜直接回覆文字即可，sampan 會帶回〕")
+        self.assertEqual(source_line("x", "codex", "ab12"), "〔sampan 轉送｜來自 x（codex）｜派工 ab12｜直接回覆文字即可，sampan 會帶回〕")
+        self.assertEqual(compose(None, "", "ab12", "hi"), "〔sampan 轉送｜來自 終端機｜派工 ab12｜直接回覆文字即可，sampan 會帶回〕\nhi")
 
     def test_a_label_without_profile_has_no_empty_brackets(self):
         self.assertEqual(source_line("未登記的 session（claude）", "", "ab12"),
-                         "〔sampan 轉送｜來自 未登記的 session（claude）｜派工 ab12〕")
+                         "〔sampan 轉送｜來自 未登記的 session（claude）｜派工 ab12｜直接回覆文字即可，sampan 會帶回〕")
 
 
 class ToClaudeTest(unittest.TestCase):
