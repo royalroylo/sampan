@@ -280,7 +280,7 @@ def _codex_approval(cfg):
     """Codex's approval_mode tables for sampan's acting tools disagree with [mcp] confirm (e.g. the user chose
     "always allow" in Codex, which writes "approve"), or a config.toml Codex cannot read. Absent: quiet."""
     try:
-        text = (Path(cfg.codex.home) / "config.toml").read_text()
+        text = (Path(cfg.codex.home) / "config.toml").read_text(encoding="utf-8")
     except FileNotFoundError:
         return []
     except (OSError, UnicodeDecodeError) as e:

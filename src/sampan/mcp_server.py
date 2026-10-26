@@ -33,7 +33,7 @@ ACTING_TOOLS = ("send", "new_session", "cancel_dispatch")
 ASKING_CLIENTS = {"claude-code", "codex-mcp-client"}  # Codex: only with approval_mode = "prompt" (codex_approval)
 NOT_ASKING = "這個 client 不會先問使用者；要用請在 config 設 [mcp] confirm = false"
 CODEX = "codex-mcp-client"
-CODEX_NOT_PROMPT = "Codex 的 sampan 工具沒設成每次詢問：跑 sampan mcp install"
+CODEX_NOT_PROMPT = "Codex 的 sampan 工具沒設成每次詢問（{path}）：跑 sampan mcp install"
 
 PARSE_ERROR, INVALID_REQUEST, METHOD_NOT_FOUND, INVALID_PARAMS = -32700, -32600, -32601, -32602
 
@@ -254,8 +254,15 @@ class Server:
             return NOT_ASKING
         if self.client_name == CODEX:  # Codex asks only when its config.toml says so; read now, the user may change it.
             from . import codex_approval  # imports this module (ACTING_TOOLS)
-            if not codex_approval.tool_prompts(_running_codex_home() / "config.toml", tool):
-                return CODEX_NOT_PROMPT
+            # the home of the Codex that started us, and sampan's configured one (what mcp install edits): both must ask
+            seen = set()
+            for path in (_running_codex_home() / "config.toml", Path(self.cfg.codex.home) / "config.toml"):
+                key = path.resolve()
+                if key in seen:
+                    continue
+                seen.add(key)
+                if not codex_approval.tool_prompts(path, tool):
+                    return CODEX_NOT_PROMPT.format(path=path)
         return None
 
     def _call(self, rid, name, args):

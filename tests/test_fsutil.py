@@ -33,6 +33,16 @@ class ReverseLinesTests(unittest.TestCase):
 
 
 class AtomicWriteTests(unittest.TestCase):
+    def test_encoding_is_used_when_given(self):
+        path = Path(tempfile.mkdtemp()) / "f"
+        with mock.patch("os.fdopen", wraps=os.fdopen) as fd:
+            atomic_write(path, "中\r\n", encoding="utf-8")
+        self.assertEqual(fd.call_args.kwargs.get("encoding"), "utf-8")
+        self.assertEqual(path.read_bytes(), "中\r\n".encode())
+        with mock.patch("os.fdopen", wraps=os.fdopen) as fd:
+            atomic_write(path, "x")
+        self.assertIsNone(fd.call_args.kwargs.get("encoding"))  # other callers: unchanged (locale default)
+
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
 

@@ -109,7 +109,7 @@ def _claude_has(profile):
 
 def _codex_has(cfg):
     try:
-        data = tomllib.loads((Path(cfg.codex.home) / "config.toml").read_text())
+        data = tomllib.loads((Path(cfg.codex.home) / "config.toml").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return False
     servers = data.get("mcp_servers")

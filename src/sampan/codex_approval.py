@@ -93,7 +93,7 @@ def needs_fix(text: str, confirm: bool) -> bool:
 def tool_prompts(path, tool) -> bool:
     """Whether Codex (config at path) asks the user before sampan's `tool`. Missing, unreadable or broken → False."""
     try:
-        entry = _sampan(tomllib.loads(Path(path).read_text()))
+        entry = _sampan(tomllib.loads(Path(path).read_text(encoding="utf-8")))
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
         return False
     return entry is not None and _mode(entry, tool) == PROMPT
@@ -143,8 +143,6 @@ def apply(path: Path, confirm: bool, *, now, dry_run=False) -> str:
     if confirm and _sampan(data) is None:
         return "不用改"
     new = with_prompt(text) if confirm else strip_sections(text)
-    if new == text:
-        return "不用改"
     try:
         tomllib.loads(new)
         ok = not needs_fix(new, confirm)
@@ -152,9 +150,11 @@ def apply(path: Path, confirm: bool, *, now, dry_run=False) -> str:
         ok = False
     if not ok:  # sampan's entry is written in a form strip/with_prompt do not see (inline or quoted tables)
         raise ValueError(NOT_TABLES)
+    if new == text:
+        return "不用改"
     if dry_run:
         return "會更新"
     mode = stat.S_IMODE(path.stat().st_mode)
     backup = _backup(path, raw, mode, now)
-    fsutil.atomic_write(path, new)  # keeps the file's mode; text mode writes \r\n unchanged on POSIX
+    fsutil.atomic_write(path, new, encoding="utf-8")  # keeps the mode; \r\n is written unchanged on POSIX
     return f"已更新（備份：{backup.name}）"

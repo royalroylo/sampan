@@ -1,6 +1,8 @@
 """codex_approval: the approval_mode = "prompt" tables sampan keeps in Codex's config.toml, edited as text."""
 import os
 import stat
+import subprocess
+import sys
 import tempfile
 import tomllib
 import unittest
@@ -178,6 +180,37 @@ class ApplyTest(unittest.TestCase):
                 self.assertNotIn("不是合法的 TOML", str(e.exception))
                 self.assertEqual(self.path.read_text(), text)
                 self.assertEqual(self.backups(), [])
+
+    def test_utf8_under_an_ascii_locale(self):
+        text = ("# 我的設定\r\n" + ORIGINAL.replace("\n", "\r\n")).replace("keep this comment", "保留這行")
+        raw = text.encode()
+        self.path.write_bytes(raw)
+        src = Path(ca.__file__).resolve().parents[1]
+        code = ("import locale, sys; from datetime import datetime; from sampan import codex_approval as ca; "
+                "print(locale.getpreferredencoding(False)); "
+                f"print(ca.apply({str(self.path)!r}, True, now=datetime(2026, 10, 27, 1, 30)).startswith('已更新')); "
+                f"print(all(ca.tool_prompts({str(self.path)!r}, t) for t in ca.ACTING_TOOLS))")
+        env = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C", "PYTHONUTF8": "0", "PYTHONCOERCECLOCALE": "0",
+               "PYTHONPATH": str(src), "HOME": str(self.dir)}
+        r = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        enc, applied, prompts = r.stdout.split()
+        if "ascii" not in enc.lower():
+            self.skipTest(f"C locale is {enc} here")
+        self.assertEqual((applied, prompts), ("True", "True"))
+        self.assertEqual((self.dir / BACKUP).read_bytes(), raw)
+        new = self.path.read_bytes()
+        self.assertEqual(ca.strip_sections(new.decode("utf-8")).encode("utf-8"), ca.strip_sections(text).encode("utf-8"))
+        self.assertTrue(new.startswith("# 我的設定\r\n".encode()))
+
+    def test_unrecognised_tables_reported_when_removing_too(self):
+        text = INSTALLED + '\n[mcp_servers."sampan".tools."send"]\napproval_mode = "prompt"\n'
+        self.path.write_text(text)
+        with self.assertRaises(ValueError) as e:
+            ca.apply(self.path, False, now=NOW)
+        self.assertEqual(str(e.exception), ca.NOT_TABLES)
+        self.assertEqual(self.path.read_text(), text)
+        self.assertEqual(self.backups(), [])
 
     def test_backup_in_the_same_second_keeps_the_first(self):
         self.path.write_text(INSTALLED)
