@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-10-27
+
 ### Fixed
 - A stopped (or retired) Codex session on the `sampan` screen showed the Codex daemon's `idle` for a thread it had loaded before exiting; it now shows `-`, like `sampan status`.
 
@@ -363,7 +365,8 @@ First public release. Versions up to 0.5.3 were released privately under the nam
 ### Security
 - Credentials in git URLs are no longer shown in output.
 
-[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.13.1...HEAD
+[0.13.1]: https://github.com/royalroylo/sampan/releases/tag/v0.13.1
 [0.13.0]: https://github.com/royalroylo/sampan/releases/tag/v0.13.0
 [0.12.0]: https://github.com/royalroylo/sampan/releases/tag/v0.12.0
 [0.11.1]: https://github.com/royalroylo/sampan/releases/tag/v0.11.1
