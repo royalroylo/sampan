@@ -27,10 +27,12 @@ list. Press `q` to quit.
 | To do this | Press | What happens |
 |---|---|---|
 | Work in a session | Enter on its row | Goes into its tmux (switches if you are already in tmux). A stopped one is resumed first |
-| Jump to a row | `1`-`9` (the number is the row's place in the full list) | Moves the cursor there; for 10 and up, type two digits within 1 second, e.g. `1`, `2` is row 12 |
-| Search by name | `/`, then text | Case-insensitive; rows whose name contains the text stay. Enter opens the row under the cursor, Esc cancels, Backspace on an empty query leaves search. While searching, digits are text and do not jump |
+| Jump to a row | `1`-`9` (the number counts the session rows shown; folder rows and sessions hidden in a folded folder have no number) | Moves the cursor there; for 10 and up, type two digits within 1 second, e.g. `1`, `2` is row 12 |
+| Search by name | `/`, then text | Case-insensitive; rows whose name contains the text stay. Enter opens the row under the cursor, Esc cancels, Backspace on an empty query leaves search. While searching, digits are text and do not jump. Search ignores folding, and a hit inside a folder shows the folder path dim before its name (`客戶/甲 · name`); when search ends and the session under the cursor sits in a folded folder, the folder opens so it stays visible |
 | Start new work | `n` | Asks for a name and agent / profile, then a directory (the chooser starts at `[ui] start_dir`, default `~/Projects` if it exists, else `~`); once created you are taken straight in |
 | Put one away (free memory, clear the screen) | `s` (space checks several) | Asks to confirm at the bottom of the screen; the agent exits normally and tmux closes too. The conversation is kept; resume with Enter or `R` |
+| Restart (stop, then resume the same conversation, without going in) | `S` (space checks several; on a folder row, everything under it) | The bottom of the screen lists what will restart and what is skipped (`將重開：A、B　略過：C（忙）　確定？(y/N)`); y starts it. Idle ones exit normally and are resumed in the background; busy ones, the pane sampan itself runs in and retired ones are skipped and listed with their reason at the end. A stopped one is resumed in the background only when `S` is pressed on its own row (or it is checked); `S` on a folder row leaves stopped ones stopped. Logged in `actions.log` (`[重開]`) |
+| Organise into folders | `g` wraps into a new folder, `f` moves into a folder; on a folder row Enter folds / unfolds, `e` renames, `X` deletes | Only `folders.json` changes, no session is touched; see "Folders" below |
 | Resume several at once | `R` | Checklist (pre-checked: active in the last 7 days); after resuming, takes you into the first one |
 | Bring Claude agents running outside tmux (in any terminal program) into tmux | `A` | Pick which, name each; you type `/exit` in the original terminal, sampan waits, then resumes the same conversation in tmux and takes you in |
 | Rename | `e` | tmux and registry together; the agent keeps running |
@@ -41,7 +43,7 @@ list. Press `q` to quit.
 | Continue on another account (e.g. its quota ran out) | `P` (Claude only) | Lists the profiles; after you confirm, claude exits and the same conversation resumes under the new profile in the same directory, trusting that directory automatically the first time (same rule as `m`). A stopped session is reattached under the new profile directly. Plugins the new profile does not list are named first, but do not block the switch. If claude does not exit (e.g. it sits at a quota menu), sampan presses nothing else and asks you to press Esc and type `/exit` yourself, then press `P` again |
 | Change working directory | `m` | Directory chooser (starting at its current directory; if that directory is gone, at `[ui] start_dir`, as for `n`); after you confirm, the agent exits and resumes the same conversation in the new directory |
 | Mark as done | `r` | Retired; not offered for resuming |
-| Save the registry now | `w` | Normally saved every 5 minutes |
+| Save the registry now | `w` | Normally saved every 5 minutes (left out of the key help line at the bottom for lack of room, but it works; so do `Enter`, `R` and `A`) |
 | Update sampan | `U` (a line "new version v… (current …), press U to update" appears above the key help when a newer one exists) | Confirms at the bottom of the screen, runs `uv tool upgrade sampan` (if the version does not change, `uv tool install --reinstall git+https://github.com/royalroylo/sampan@v<latest>`), shows the output in the message area; on success sampan reopens itself at the list, on failure it stays in the list. When no newer version is known, `U` first checks again right then (skipping the cache); if it is still up to date (or the check fails) it only says so and asks nothing; to reinstall use `sampan update --force` |
 
 **Directory chooser** (`n`, `m`): folders under the current directory on the left, recently used directories on the right
@@ -103,7 +105,7 @@ Press `a` on this tab to add a source (it asks for `owner/repo` or a git URL); i
 
 **Why a URL must not carry a token**: sampan writes the source into the config file and passes it as is to `claude` (it shows up in command lines and logs). A URL with a user name or token is refused ("網址裡不要放帳號或 token，認證交給 git 的 credential helper"). For a private repository, set up git's credential helper and give a clean URL.
 
-**Action log**: the message area keeps only the last action's result. The messages printed by every action that really ran are in `actions.log` in the state directory (by default `~/.local/state/sampan/actions.log`, moved by `SAMPAN_STATE_DIR`; readable only by you), each line starting with the time and the action, such as `[plugin 存檔 …]`, `[重開]`, `[來源 …]`, `[forget …]` or `[switch …]`. Saves, `u` / `U`, `r`, adding, removing and updating sources, every step of an `R` restart (including the "still on the old version" list), `X` / `sampan forget` and `P` / `sampan switch` are logged, including what you answered to startup prompts (trust and so on) during a restart or switch; `sampan doctor` shows where the file is and when its last line was written; previews, the "確定？" question and cancelled actions are not. User names and tokens in URLs, GitHub tokens and `…TOKEN=` style assignments are replaced by `***` first. Past 1 MB the old file is renamed `actions.log.1`.
+**Action log**: the message area keeps only the last action's result. The messages printed by every action that really ran are in `actions.log` in the state directory (by default `~/.local/state/sampan/actions.log`, moved by `SAMPAN_STATE_DIR`; readable only by you), each line starting with the time and the action, such as `[plugin 存檔 …]`, `[重開]`, `[來源 …]`, `[forget …]`, `[switch …]` or `[資料夾]`. Saves, `u` / `U`, `r`, adding, removing and updating sources, every step of an `R` restart (including the "still on the old version" list), `X` / `sampan forget` and `P` / `sampan switch` are logged, including what you answered to startup prompts (trust and so on) during a restart or switch; `sampan doctor` shows where the file is and when its last line was written; previews, the "確定？" question and cancelled actions are not. User names and tokens in URLs, GitHub tokens and `…TOKEN=` style assignments are replaced by `***` first. Past 1 MB the old file is renamed `actions.log.1`.
 
 For scripts and schedules do not use this screen; keep using `sampan plugins sync` (see "Commands").
 
@@ -229,6 +231,27 @@ After a plugin changes version, restart that profile's Claude sessions completel
 ## Folders
 
 Sessions can be put in folders (levels separated by `/`, such as `客戶/甲`). Folders only organise the display: creating, renaming, deleting or moving a folder never stops, forgets or changes any session, and never touches the registry; the data lives in `folders.json` in the state folder (format in the reference).
+
+**On the `sampan` screen**: each level lists its subfolders first, then its sessions, both by name; sessions in no folder come last, and the 「Codex 其他對話」 block stays at the bottom. A folder row looks like `▾ 客戶 (12)` (the number counts the sessions at every level below it); `▸` when folded, plus `　2 忙` when some inside are busy; sessions are indented by level. With the cursor on a folder row, the info card shows its path, the session count, how many are in each state and the keys; there is no preview.
+
+| Key | On a session row | On a folder row |
+|---|---|---|
+| Enter | As before: go in (a stopped one is resumed first) | Fold / unfold (remembered in `folders.json`) |
+| Right / Left | Left jumps to its folder row | Unfold / fold; Left on a folded one jumps to the parent folder row |
+| Space | Check | Check the folder |
+| `g` | Wrap the checked sessions and folders (or the row under the cursor) into a new folder: asks for a name, created at their deepest common parent | Same |
+| `f` | Move the checked ones (or the row under the cursor) into a folder picked from a list that starts with 「（最外層）」 (top level) and 「新資料夾…」 (new folder) | Same (the whole folder moves; the list leaves out the folder itself and its subfolders) |
+| `e` | As before: rename the session | Rename the folder |
+| `X` | As before: remove from the registry | Delete the folder: asks y once; its subfolders and sessions move up one level and are not stopped |
+| `s`, `S` | As before: stop, restart | Stop, restart every session under it (folded ones too; the confirm line names them all) |
+| `n` | The new session goes into the folder of the row under the cursor | The new session goes into this folder |
+
+- A name cannot be empty or contain `/`; when the level already has one of that name, sampan asks 「同一層已經有「X」，合併進去？(y/N)」 (merge into it?).
+- Checks are cleared after `g`, `f`, `e` and `X`; each is logged in `actions.log` (`[資料夾]`).
+- When `folders.json` is broken (unreadable, not JSON, an unknown version) the list still shows every session, flat, and the bottom of the screen says once 「資料夾設定讀不到：…，先照原樣列出」; the folder keys then only answer 「資料夾設定壞了，修好或刪掉 folders.json 再試」 and the broken file is never overwritten.
+- `sampan ui --plain` lists the sessions in the tree's order with the folder path before each name, without folding; `S` asks y there too. Organise folders with `sampan folder …` below.
+
+**Commands**:
 
 - `sampan folder list`: prints the tree, a folder as `▾ name/` (`▸` when folded) with its sessions indented below; a session in no folder is at the top level.
 - `sampan folder add 客戶/甲`: creates the folder and any missing parents.
