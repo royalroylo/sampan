@@ -9,6 +9,25 @@ MOVES = {"KEY_UP": -1, "k": -1, "KEY_DOWN": 1, "j": 1}
 QUOTE_LINES = 3
 
 
+def wrap_items(text, width, sep="\u3000"):
+    """Wrap a sep-joined list (the info card's key line) between items, never inside one; an item wider than width
+    is cut by _wrap. No line limit."""
+    lines, cur = [], ""
+    for item in text.split(sep):
+        cand = f"{cur}{sep}{item}" if cur else item
+        if text_width(cand) <= width:
+            cur = cand
+            continue
+        if cur:
+            lines.append(cur)
+        parts = _wrap(item, width, max_lines=10 ** 6) if text_width(item) > width else [item]
+        lines += parts[:-1]
+        cur = parts[-1] if parts else ""
+    if cur:
+        lines.append(cur)
+    return lines
+
+
 def _wrap(text, width, max_lines=QUOTE_LINES):
     if width <= 0:
         return []

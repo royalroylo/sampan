@@ -1047,3 +1047,19 @@ class FolderScreenTest(unittest.TestCase):
         self.assertIn("S 重開　R 接回　g 包資料夾　f 搬進資料夾", self.shown()[-1])
         self.assertIn("S 重開", row_keys(row("x"), {"panes": 1}))
         self.assertIn("S 背景接回", row_keys(row("x", state=State.STOPPED), {"panes": 0}))
+
+
+class KeysWrapTest(unittest.TestCase):
+    def test_keys_line_wraps_between_keys_not_inside_one(self):
+        from sampan.ui.cards import Keys
+        from sampan.ui.render import _card_rows
+        line = Keys("Enter 收合／展開　g 包成資料夾　f 搬　e 改名　X 刪除資料夾　s 停全部　S 重開全部　n 在這裡開新的")
+        rows = [r[0][0].rstrip() for r in _card_rows([line], 40)]
+        self.assertEqual(rows, ["Enter 收合／展開　g 包成資料夾　f 搬", "e 改名　X 刪除資料夾　s 停全部",
+                                "S 重開全部　n 在這裡開新的"])
+
+    def test_a_key_longer_than_the_width_still_wraps(self):
+        from sampan.ui.cards import Keys
+        from sampan.ui.render import _card_rows
+        rows = [r[0][0].rstrip() for r in _card_rows([Keys("x" * 25)], 10)]
+        self.assertEqual(rows, ["x" * 10, "x" * 10, "x" * 5])

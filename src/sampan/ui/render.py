@@ -5,7 +5,7 @@ from .cards import Keys, StateLine, Wrap, agent_style, message_style, state_styl
 from .codex_others import ListNote, OwnCols
 from .dirpick import tilde
 from .state import list_state
-from .text import _wrap, pad, text_width
+from .text import _wrap, pad, text_width, wrap_items
 
 WIDE = 100  # at this width and above the info card goes on the right, below it goes under the list
 LIST_COLS = (6, 10, 7)  # render's default column widths (other than the name); the session list uses list_cols (one more column, profile)
@@ -108,7 +108,7 @@ def _card_rows(card, width):
     out = []
     for line in card:
         if isinstance(line, Keys):
-            out += [[(pad(x, width), "key")] for x in _wrap(line, width)]
+            out += [[(pad(x, width), "key")] for x in wrap_items(line, width)]
         elif isinstance(line, tuple):  # a line that is already styled
             out.append(_fit(list(line), width))
         elif isinstance(line, Wrap):
