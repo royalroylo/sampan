@@ -4,6 +4,8 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+from .detach_key import KEY_RE
+
 
 class ConfigError(Exception):
     pass
@@ -244,7 +246,7 @@ def load_config(path, *, home=None, state_dir=None):
     if not isinstance(codex_auto_start, bool):
         raise ConfigError(f"[ui] codex_auto_start 要是 true 或 false，目前是 {codex_auto_start!r}")
     detach_key = ui.get("detach_key", "C-q")
-    if not isinstance(detach_key, str) or any(c.isspace() for c in detach_key):
+    if not isinstance(detach_key, str) or (detach_key and not KEY_RE.match(detach_key)):
         raise ConfigError(f"[ui] detach_key 要是 tmux 的按鍵名稱（例如 \"C-q\"，空字串＝不綁），目前是 {detach_key!r}")
     mcp = table(data.get("mcp", {}), "[mcp]")
     mcp_confirm = mcp.get("confirm", True)

@@ -599,7 +599,7 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
             warned.add(warning)
             out(f"⚠ {warning}")
 
-    first = True
+    first, marked = True, set()
     hint = updater.hint() if updater is not None and picker_fn is None else None
     if hint:
         out(hint)  # --plain: mention once at the start (cache only)
@@ -612,9 +612,11 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
             return 2
         if getattr(rows, "warning", None) and not picker_fn:
             out(f"⚠ {rows.warning}")  # the curses version puts it in the hint line at the bottom of the screen
-        if first:
+        fresh = [r.name for r in rows if r.tmux_alive and r.state not in UNMANAGED and r.name not in marked]
+        if fresh or first:  # sessions opened since (n, R, A, another terminal) get the mark too
             first = False
-            _detach([r.name for r in rows if r.tmux_alive and r.state not in UNMANAGED])
+            _detach(fresh)
+            marked.update(fresh)
         if picker_fn:
             action, names = picker_fn(rows, current_session)
         else:
@@ -650,8 +652,8 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
             # in curses exec_fn only records it, and the real exec happens after curses is closed (endwin)
             exec_fn("sampan", ["sampan", *argv])
             return 0
-        if isinstance(go, str):
-            _detach([go])
+        if isinstance(go, str) and not any(r.name == go and r.state in UNMANAGED for r in rows):
+            _detach([go])  # never a tmux session sampan does not manage: there the key stays the program's
         if go and current_session and loop:
             # inside tmux: after switching over, sampan stays in its original pane, and switching back shows the list again
             if _attach(run, out, go, current_session, exec_fn) == 0:

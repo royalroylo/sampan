@@ -197,7 +197,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(make_env(self.tmp, base % '').detach_key, "C-q")
         self.assertEqual(make_env(self.tmp, base % '[ui]\ndetach_key = ""\n').detach_key, "")
         self.assertEqual(make_env(self.tmp, base % '[ui]\ndetach_key = "M-q"\n').detach_key, "M-q")
-        for bad in ('3', '"C q"'):
+        for bad in ('3', '"C q"', '";"', '"{"'):
             with self.subTest(bad=bad), self.assertRaises(ConfigError) as cm:
                 make_env(self.tmp, base % f'[ui]\ndetach_key = {bad}\n')
             self.assertIn("[ui] detach_key", str(cm.exception))

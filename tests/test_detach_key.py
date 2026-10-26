@@ -18,6 +18,8 @@ class EnsureTest(unittest.TestCase):
 
     def runner(self, existing=""):
         r = FakeRunner(strict=True)
+        r.on([*TMUX, "list-sessions"], cp(out="a\n"))
+        r.on([*TMUX, "list-keys"], cp(rc=1))
         r.on(LIST, cp(rc=0 if existing else 1, out=existing))
         r.on([*TMUX, "bind-key"], cp())
         r.on([*TMUX, "unbind-key"], cp())
@@ -36,8 +38,8 @@ class EnsureTest(unittest.TestCase):
         self.assertIn("switch-client -l", bind[-2])
         self.assertIn("detach-client", bind[-2])
         marks = [c["args"] for c in r.called([*TMUX, "set-option"])]
-        self.assertEqual(marks, [[*TMUX, "set-option", "-t", "=a", "@sampan", "1"],
-                                 [*TMUX, "set-option", "-t", "=b", "@sampan", "1"]])
+        self.assertEqual(marks, [[*TMUX, "set-option", "-t", "=a:", "@sampan", "1"],
+                                 [*TMUX, "set-option", "-t", "=b:", "@sampan", "1"]])
 
     def test_rebinding_our_own_binding_is_fine(self):
         r = self.runner(OURS)
@@ -74,10 +76,23 @@ class EnsureTest(unittest.TestCase):
         r.on([*TMUX, "bind-key"], cp(rc=1, err="unknown key: C-q"))
         self.assertIn("unknown key", dk.ensure(self.cfg, r, []))
 
+    def test_no_tmux_server_does_nothing(self):
+        r = FakeRunner(strict=True).on([*TMUX, "list-sessions"], cp(rc=1, err="no server running"))
+        self.assertIsNone(dk.ensure(self.cfg, r, []))
+        self.assertEqual(len(r.calls), 1)
+
+    def test_a_changed_custom_key_frees_the_one_sampan_bound(self):
+        dk.ensure(dataclasses.replace(self.cfg, detach_key="M-q"), self.runner(), [])
+        self.assertEqual((self.cfg.state_dir / dk.LAST).read_text(), "M-q\n")
+        r = self.runner()
+        r.on([*TMUX, "list-keys", "-T", "root", "M-q"], cp(out=OURS.replace("C-q", "M-q")))
+        dk.ensure(dataclasses.replace(self.cfg, detach_key=""), r, [])
+        self.assertEqual([c["args"] for c in r.called([*TMUX, "unbind-key"])], [[*TMUX, "unbind-key", "-n", "M-q"]])
+
     def test_conflict_reads_only(self):
         r = self.runner("bind-key -T root C-q send-keys -X cancel\n")
         self.assertIn("C-q", dk.conflict(self.cfg, r))
-        self.assertEqual([c["args"][2] for c in r.calls], ["list-keys"])
+        self.assertEqual([c["args"][2] for c in r.calls], ["list-keys"])  # doctor never binds
         self.assertIsNone(dk.conflict(self.cfg, self.runner(OURS)))
         self.assertIsNone(dk.conflict(dataclasses.replace(self.cfg, detach_key=""), self.runner("x\n")))
 

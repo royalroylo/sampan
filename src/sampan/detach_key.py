@@ -4,10 +4,15 @@ tmux key bindings are global to the server, so the binding is conditional: in a 
 session option @sampan it detaches (attached from outside tmux) or switches back to the previous session (sampan
 switched over from its own pane); anywhere else the key is passed on to the program. ~/.tmux.conf is never touched,
 and a binding of the same key that sampan did not write is never overwritten."""
+import re
+
+from .fsutil import atomic_write
 from .tmux import TMUX
 
 DEFAULT = "C-q"
 MARK = "@sampan"
+KEY_RE = re.compile(r"^(?:[CMS]-)*[A-Za-z0-9]+$")  # C-q, M-q, F12, C-M-x …: safe inside the binding's command strings
+LAST = "detach-key"  # state file: the key sampan bound last, so a changed key frees the old one
 
 
 def binding(key):
@@ -39,12 +44,27 @@ def conflict(cfg, run):
     return _taken(key) if current and not _ours(current) else None
 
 
+def _last_path(cfg):
+    return cfg.state_dir / LAST
+
+
+def _read_last(cfg):
+    try:
+        return _last_path(cfg).read_text().strip() or DEFAULT
+    except OSError:
+        return DEFAULT
+
+
 def ensure(cfg, run, names=()):
     """Bind cfg.detach_key and mark the sessions in names; with no key, remove a binding sampan wrote. Returns a
-    warning for the user, or None. Never raises on a tmux failure (the attach goes on either way)."""
+    warning for the user, or None. Never raises on a tmux failure (the attach goes on either way); with no tmux
+    server running there is nothing to bind or mark yet, so it does nothing."""
+    if run([*TMUX, "list-sessions", "-F", "#{session_name}"]).returncode != 0:
+        return None
     key = cfg.detach_key
-    if key != DEFAULT and _ours(_current(run, DEFAULT)):
-        run([*TMUX, "unbind-key", "-n", DEFAULT])  # the key was changed or turned off: free the old default
+    for old in dict.fromkeys((_read_last(cfg), DEFAULT)):
+        if old != key and _ours(_current(run, old)):
+            run([*TMUX, "unbind-key", "-n", old])  # the key was changed or turned off: free the one sampan bound
     if not key:
         return None
     current = _current(run, key)
@@ -53,6 +73,10 @@ def ensure(cfg, run, names=()):
     r = run([*TMUX, *binding(key)])
     if r.returncode != 0:
         return f"沒辦法綁 {key}：{(r.stderr or '').strip() or '未知原因'}"
+    try:
+        atomic_write(_last_path(cfg), key + "\n", mode=0o600)
+    except OSError:
+        pass
     for name in names:
-        run([*TMUX, "set-option", "-t", f"={name}", MARK, "1"])
+        run([*TMUX, "set-option", "-t", f"={name}:", MARK, "1"])  # set-option takes a pane target: "=name:"
     return None

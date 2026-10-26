@@ -1436,6 +1436,17 @@ class DetachKeyUiTest(unittest.TestCase):
         self.assertEqual(self.marked[0], alive)
         self.assertEqual(self.marked[1], ["b"])
 
+    def test_an_unmanaged_tmux_session_is_never_marked(self):
+        global ROWS
+        saved = ROWS
+        try:
+            ROWS = saved + [row("main", state=State.NO_AGENT, agent="-", agent_status="-")]
+            self.run_ui([("attach", ["main"]), ("quit", [])])
+        finally:
+            ROWS = saved
+        self.assertNotIn(["main"], self.marked)
+        self.assertNotIn("main", sum(self.marked, []))
+
     def test_a_warning_is_shown_once(self):
         self.run_ui([("attach", ["a"]), ("attach", ["b"]), ("quit", [])], warning="tmux 已經把 C-q 綁成別的功能")
         self.assertEqual(sum("C-q" in m for m in self.msgs), 1)
