@@ -136,6 +136,18 @@ def submit_new(cfg, caller, to, to_agent, to_profile, message, *, notify, now):
     return r
 
 
+def abort_new(cfg, did, reason, *, now):
+    """`sampan new --message` could not start the session: mark its dispatch failed so it is not left `sent`."""
+    try:
+        with dispatch.transaction(cfg.state_dir) as items:
+            d = next((x for x in items if x.id == did), None)
+            if d is not None and d.state == "sent":
+                _finish(d, "failed", now, reason)
+    except (dispatch.DispatchError, OSError):
+        return
+    actionlog.append(cfg, "send", [f"派工 {did}：{reason}"])
+
+
 def _drop_outboxes(cfg, ids):
     for did in ids:
         for name in (did, _notice_id(did)):

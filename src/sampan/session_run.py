@@ -17,7 +17,7 @@ from .procs import descendant_claude, is_descendant, list_procs
 from .prompts import ATTACH, SKIP, Relay
 from .registry import STATES, RegistryError, Row, id_problem, load_rows, lock, set_state, write_rows
 from .screens import CLAUDE_TRUST_OPTION, CODEX_TRUST_YES, bottom_trust_path, codex_activity
-from .send import TERMINAL, submit_new
+from .send import TERMINAL, abort_new, submit_new
 from .tmux import SHELLS, Tmux, TmuxUnreadable
 
 WORKTREE_MARK = "/.claude/worktrees/"
@@ -79,18 +79,6 @@ def _relay_stop(out, name, res):
     return False
 
 
-def _with_message(cfg, out, agent, profile, session_id, message, caller, name, cmd):
-    """The launch command to send: with a message, record its dispatch and add the startup prompt. None = failed."""
-    if message is None:
-        return cmd
-    d = submit_new(cfg, caller or TERMINAL, name, agent, profile or cfg.codex.profile, message,
-                   notify=caller is not None, now=datetime.now(timezone.utc))
-    if isinstance(d, str):
-        out(f"❌ {d}")
-        return None
-    return launch_line(cfg, agent, profile, session_id=session_id, prompt_file=outbox_path(cfg.state_dir, d.id))
-
-
 def cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.sleep, timeout=15, uuid4=uuid.uuid4,
             on_prompt=None, wait=True, message=None, caller=None):
     """target: claude:<profile>, <profile> (taken as claude) or codex.
@@ -141,23 +129,33 @@ def cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.sleep
     if dry_run:
         out(f"[dry-run] 建立 tmux session {name}（{cwd}）→ {cmd}")
         return 0
+    did = None
+    if message is not None:  # record first: if that fails nothing has been created yet
+        d = submit_new(cfg, caller or TERMINAL, name, agent, profile or cfg.codex.profile, message,
+                       notify=caller is not None, now=datetime.now(timezone.utc))
+        if isinstance(d, str):
+            out(f"❌ {d}")
+            return 2
+        did = d.id
+        cmd = launch_line(cfg, agent, profile, session_id=session_id, prompt_file=outbox_path(cfg.state_dir, did))
+
+    def abort(reason):
+        if did is not None:
+            abort_new(cfg, did, reason, now=datetime.now(timezone.utc))
+
     pane = tmux.new_session(name, cwd)
     if pane is None:
+        abort("tmux session 沒開起來，開場訊息沒送")
         out(f"❌ tmux new-session 失敗：{name}")
         return 1
     if agent == "claude":
         row = Row(name, "claude", profile, session_id, cwd, "active", now_iso(), tmux.server_id() or "", None)
         if not _register(cfg, out, row):
-            return 2
-        cmd = _with_message(cfg, out, agent, profile, session_id, message, caller, name, cmd)
-        if cmd is None:
+            abort("session 沒登記成功，開場訊息沒送")
             return 2
         send_line(tmux, pane, agent, cmd, sleep)
         out(f"▶ {name}（{profile}，{session_id[:8]}）已登記")
     else:
-        cmd = _with_message(cfg, out, agent, profile, session_id, message, caller, name, cmd)
-        if cmd is None:
-            return 2
         send_line(tmux, pane, agent, cmd, sleep)
         out(f"▶ {name}（codex）已開啟，等 Codex 建立對話…")
     if not wait:

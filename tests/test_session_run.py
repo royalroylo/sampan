@@ -3,6 +3,7 @@ import shlex
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from sampan import actionlog, deliver, dispatch
 from sampan.registry import Row, load_rows, write_rows
@@ -97,6 +98,24 @@ class NewAndStateTest(Base):
                                  message="hi"), 0)
         self.assertEqual(dispatch.load(self.cfg.state_dir), [])
         self.assertIn("$(cat", self.msgs[0])
+
+    def test_new_with_message_recording_failure_creates_nothing(self):
+        r = self.runner()
+        with mock.patch("sampan.session_run.submit_new", return_value="寫不進去"):
+            rc = cmd_new(self.cfg, r, self.msgs.append, "new-x", "work", str(self.cwd), message="hi", uuid4=lambda: B)
+        self.assertEqual(rc, 2)
+        self.assertEqual(r.called(["tmux", "-u", "new-session"]), [])
+        self.assertEqual(self.keys_sent(r), [])
+        self.assertEqual(load_rows(self.cfg.registry_path), [])
+
+    def test_new_session_failure_after_recording_fails_the_dispatch(self):
+        r = self.runner()
+        r.on(["tmux", "-u", "new-session"], cp(rc=1))
+        rc = cmd_new(self.cfg, r, self.msgs.append, "new-x", "work", str(self.cwd), message="hi", uuid4=lambda: B)
+        self.assertEqual(rc, 1)
+        [d] = dispatch.load(self.cfg.state_dir)
+        self.assertEqual(d.state, "failed")
+        self.assertIn("沒開起來", d.reason)
 
     def test_new_with_blank_message_is_refused(self):
         r = self.runner()
