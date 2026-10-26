@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-26
+
 ### Added
 - `sampan send <name> <message|-> [--wait] [--timeout s]` hands a message to a running registered session as a dispatch, starting with a source line (「〔sampan 轉送｜來自 終端機｜派工 <id>〕」). Claude gets it pasted from a tmux buffer and Enter, only while it is idle and its prompt box is empty (a draft keeps it queued, never cleared); Codex gets it through `codex queue`. A pane in tmux copy mode keeps it queued too. `--wait` prints the reply to this message (exit 0), the reason of a failure (exit 1), or 「還在做」 after the timeout, 600 s by default (exit 124, the dispatch stays); Ctrl-C leaves it as well (exit 130); without `--wait` a queued one is exit 0 too. A `/clear`, another conversation or a stopped target fails the dispatch with 「找不到回覆」 or the reason; another message typed before any answer fails it with 「對方沒回這則就換了下一則」, a turn that ended without reply text with 「對方這輪結束了，但沒有回覆文字」; text from elsewhere is never returned. Delivery is at most once: the record is written as `sent` (「送出中」) before any key or `codex queue`, so a sampan killed mid-delivery never sends it again, and a `codex queue` timeout fails as 「可能已送出，請確認」 instead of being retried. Run by an agent through its shell tool, `sampan send` is labelled as that session (or 「未登記的 session」), not 「終端機」, and sending to itself is refused.
 - `sampan new <name> <target> <dir> --message <message|->` sends the first message as the agent's startup prompt (`claude "$(cat <outbox file>)"`, `codex "$(cat …)"`), after any trust prompt, and records a dispatch that starts as `sent`; it is not failed while the new session is still starting (a Codex without a conversation yet, a Claude not seen yet, a trust prompt): its reason says 「對方 session 還在啟動」. Without `--message` nothing changes.
@@ -324,7 +326,8 @@ First public release. Versions up to 0.5.3 were released privately under the nam
 ### Security
 - Credentials in git URLs are no longer shown in output.
 
-[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/royalroylo/sampan/releases/tag/v0.11.0
 [0.10.0]: https://github.com/royalroylo/sampan/releases/tag/v0.10.0
 [0.9.1]: https://github.com/royalroylo/sampan/releases/tag/v0.9.1
 [0.9.0]: https://github.com/royalroylo/sampan/releases/tag/v0.9.0

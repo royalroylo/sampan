@@ -1,7 +1,7 @@
 #!/bin/sh
 # sampan installer for macOS and Linux.
 #   curl -fsSL https://raw.githubusercontent.com/royalroylo/sampan/main/install.sh | sh
-#   curl -fsSL .../install.sh | sh -s -- --yes --version v0.10.0
+#   curl -fsSL .../install.sh | sh -s -- --yes --version v0.11.0
 # Read it first if you like: download it, open it, then run `sh install.sh`.
 # Options: --yes (assume yes to every question, and run `sampan init --yes` so init takes its defaults)  --no-init (do not run `sampan init`)  --version vX.Y.Z  --help
 # Testing overrides (env): SAMPAN_INSTALL_SPEC (exact spec for `uv tool install`, e.g. a local path),
@@ -10,7 +10,7 @@
 set -eu
 
 REPO_URL="https://github.com/royalroylo/sampan"
-FALLBACK_VERSION="v0.10.0"
+FALLBACK_VERSION="v0.11.0"
 
 say() { printf '%s\n' "$*"; }
 warn() { printf '%s\n' "$*" >&2; }
@@ -26,7 +26,7 @@ Installs sampan (package sampan) with uv, after offering to install what is miss
 
   --yes             assume yes to every question; `sampan init` also takes its defaults (`sampan init --yes`)
   --no-init         do not run `sampan init`
-  --version vX.Y.Z  install this tag (default: the latest v* tag, or v0.10.0 if it cannot be found)
+  --version vX.Y.Z  install this tag (default: the latest v* tag, or v0.11.0 if it cannot be found)
 USAGE
 }
 
@@ -192,7 +192,7 @@ main() {
             --yes | -y) ASSUME_YES=1 ;;
             --no-init) DO_INIT=0 ;;
             --version)
-                [ $# -ge 2 ] || die "--version needs a value, e.g. --version v0.10.0"
+                [ $# -ge 2 ] || die "--version needs a value, e.g. --version v0.11.0"
                 VERSION="$2"
                 shift
                 ;;
@@ -213,7 +213,7 @@ main() {
     ensure_system_tools
     ensure_uv
 
-    case "$VERSION" in "" | v*) ;; *) VERSION="v$VERSION" ;; esac  # --version 0.10.0 means v0.10.0
+    case "$VERSION" in "" | v*) ;; *) VERSION="v$VERSION" ;; esac  # --version 0.11.0 means v0.11.0
     if [ -z "$VERSION" ]; then
         VERSION=$(latest_version)
         if [ -z "$VERSION" ]; then
