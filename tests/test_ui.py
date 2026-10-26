@@ -1411,3 +1411,31 @@ class FolderUiTest(unittest.TestCase):
         self.ui_keys(("group", ["session:a"]), ["客戶"])
         log = (self.cfg.state_dir / "actions.log").read_text()
         self.assertIn("[資料夾] ✔ 已建立資料夾 客戶（1 項）", log)
+
+
+class DetachKeyUiTest(unittest.TestCase):
+    def setUp(self):
+        self.cfg = make_env(Path(tempfile.mkdtemp()))
+        self.msgs, self.marked = [], []
+        self.r = FakeRunner()
+        self.r.on(["tmux", "-u", "has-session"], cp())
+
+    def run_ui(self, actions, warning=None):
+        actions = iter(actions)
+
+        def detach(cfg, run, names):
+            self.marked.append(list(names))
+            return warning
+        return cmd_ui(self.cfg, self.r, self.msgs.append, lambda _p: "", loop=True, rows_fn=lambda c, r: ROWS,
+                      picker_fn=lambda rows, cur: next(actions), exec_fn=lambda *a: None,
+                      attach_fn=lambda args: 0, detach_fn=detach)
+
+    def test_marks_running_sessions_at_start_and_the_target_before_attaching(self):
+        self.run_ui([("attach", ["b"]), ("quit", [])])
+        alive = [r.name for r in ROWS if r.tmux_alive]
+        self.assertEqual(self.marked[0], alive)
+        self.assertEqual(self.marked[1], ["b"])
+
+    def test_a_warning_is_shown_once(self):
+        self.run_ui([("attach", ["a"]), ("attach", ["b"]), ("quit", [])], warning="tmux 已經把 C-q 綁成別的功能")
+        self.assertEqual(sum("C-q" in m for m in self.msgs), 1)

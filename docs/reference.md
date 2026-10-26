@@ -11,6 +11,7 @@
 | `version` | 整數，必須是 `1` |
 | `[restore] recent_days` | 非負整數，預設 7；`restore` 預設只勾選最近幾天有動過的 |
 | `[ui] start_dir` | 字串路徑，`n`（開新工作）的選目錄畫面從這裡開始；沒寫時用 `~/Projects`（存在的話），否則 `~` |
+| `[ui] detach_key` | 字串，預設 `"C-q"`。在 sampan 管的 session 裡按這個鍵就跳回 sampan：從 tmux 外接上的會 detach，sampan 在 tmux 裡切過去的會切回原本的 session；其他 tmux session 裡這個鍵照常傳給程式。sampan 打開畫面與接上 session 前把綁定寫進正在跑的 tmux（不改 `~/.tmux.conf`），並在它管的 session 設 `@sampan` 標記；你自己已經把這個鍵綁成別的，sampan 不覆蓋，`sampan doctor` 會提示。`""` 不綁（並拿掉 sampan 之前綁的） |
 | `[ui] codex_auto_start` | 布林，預設 `true`。打開 `sampan` 畫面時若 Codex 常駐服務沒在執行，就在背景跑一次 `codex remote-control start`；`false` 不啟動 |
 | `[mcp] confirm` | 布林，預設 `true`。`sampan mcp serve` 的 `send`、`new_session`、`cancel_dispatch` 每次都由 agent 自己的權限詢問問你（Claude Code 的權限提示、Codex 的 `approval_mode = "prompt"`）；不確定會先問人的 client 一律拒絕，不跳過。agent 從 Bash 跑 `sampan send`、`sampan new … --message`、`sampan dispatches cancel` 也被拒絕。`false` 都不問、直接做（照樣記 `actions.log`、可取消）。唯讀的 `list_sessions`、`dispatch_result` 永遠不問 |
 | `[codex] enabled` | 布林，預設 `true`。沒有任何 `agent = "codex"` 的 profile 時，`[codex]` 在記憶體裡當成一個隱含的 Codex profile，第一次 `sampan profile rename／disable／enable／forget／add --codex` 才轉成 `[profiles.<名稱>]`；只要有任何 `agent = "codex"` 的 profile，整個 `[codex]` 都不再作用；設成 `false` 表示不用 Codex（沒有 Codex profile），forget 最後一個 Codex profile 時會寫入 |

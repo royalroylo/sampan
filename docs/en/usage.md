@@ -189,7 +189,7 @@ takes you into that session; Esc ("leave it") ends with a list of the sessions l
 `sampan new` and `sampan restore` run directly in a terminal ask the same questions by number (non-interactive scripts and
 schedules never look at or press anything).
 
-**Getting back to the list while in tmux**: detach (default `Ctrl-b d`) and you are back at the sampan list; `q` quits sampan.
+**Getting back to the list while in tmux**: press `Ctrl-q` (`[ui] detach_key`, only in sessions sampan manages) or detach (default `Ctrl-b d`) and you are back at the sampan list; `q` quits sampan.
 You can also keep a dedicated sampan session or pane in tmux: what you pick there is switched to, sampan stays where it is,
 and when you switch back you still see the list.
 

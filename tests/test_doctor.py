@@ -383,3 +383,15 @@ class McpDoctorTest(DoctorTest):
         self.codex_toml("a = 1\n")  # sampan MCP not in Codex: nothing to say
         self.cfg = replace(self.cfg, mcp_confirm=True)
         self.assertEqual(self.approval_titles(), [])
+
+
+class DetachKeyDoctorTest(unittest.TestCase):
+    def test_warns_when_a_users_binding_holds_the_key(self):
+        from sampan.doctor import _detach_key
+        cfg = make_env(Path(tempfile.mkdtemp()))
+        r = FakeRunner(strict=True).on(["tmux", "-u", "list-keys"], cp(out="bind-key -T root C-q send-keys -X cancel\n"))
+        [c] = _detach_key(cfg, r)
+        self.assertEqual(c.level, "warn")
+        self.assertIn("C-q", c.title)
+        r = FakeRunner(strict=True).on(["tmux", "-u", "list-keys"], cp(rc=1))
+        self.assertEqual(_detach_key(cfg, r), [])

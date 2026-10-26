@@ -168,7 +168,7 @@ Claude Code 只在狀態列指令的輸入裡提供 5h／週額度，所以要�
 
 **agent 一啟動就問問題**（Claude 的「信任這個資料夾？」、Codex 的更新、信任目錄、hooks 審查）：`n` 開新的、在已停止的那一列按 Enter 接回一個時，sampan 送出啟動指令就直接帶你進 tmux，問題在那裡自己回答。`R` 一次接回好幾個、`m` 搬目錄時，sampan 會把問題和選項顯示在訊息區，游標預設在「進去自己操作」。挑一個選項（↑↓ 加 Enter，或直接按編號），sampan 只把你選的那個送過去，接著問下一個；選「進去自己操作」就進到那個 session 自己處理；Esc「先不管」，最後的結果會列出停在提示的 session。sampan 不會替你選。`sampan new`、`sampan restore` 在終端機裡直接執行也會用編號問一樣的問題（非互動的腳本、排程則完全不看、不按）。
 
-**在 tmux 裡要回到清單**：detach（預設 `Ctrl-b d`）就會回到 sampan 的清單；按 `q` 才離開 sampan。也可以在 tmux 裡開一個專門放 sampan 的 session 或 pane：在那裡選了之後會切過去，sampan 留在原處，切回來看到的還是清單。
+**在 tmux 裡要回到清單**：按 `Ctrl-q`（`[ui] detach_key`，只在 sampan 管的 session 裡有效）或 detach（預設 `Ctrl-b d`）就會回到 sampan 的清單；按 `q` 才離開 sampan。也可以在 tmux 裡開一個專門放 sampan 的 session 或 pane：在那裡選了之後會切過去，sampan 留在原處，切回來看到的還是清單。
 
 **不想用全螢幕畫面**（例如在腳本或很窄的終端機）：`sampan ui --plain` 用輸入編號，打 `/文字` 可搜尋（只有一個符合就直接進去，多個會列出編號讓你挑）；每個動作也都有獨立指令，見下面「指令一覽」。
 

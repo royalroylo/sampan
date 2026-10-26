@@ -5,6 +5,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `Ctrl-q` jumps out of a session sampan manages and back to the `sampan` screen (detaches a client attached from outside tmux; switches back when sampan switched over from inside tmux); in other tmux sessions the key reaches the program. sampan binds it in the running tmux server (never `~/.tmux.conf`) when its screen opens and before attaching, and marks its sessions with the `@sampan` session option. `[ui] detach_key` changes the key, `""` turns it off; a binding of the key that sampan did not write is never overwritten, and `sampan doctor` warns about it.
+
 ## [0.12.0] - 2026-10-27
 
 ### Added

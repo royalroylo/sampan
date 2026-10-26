@@ -359,6 +359,7 @@ def _dispatch(cfg, args):
 
     cmd = args.cmd
     if cmd == "ui":
+        from .detach_key import ensure as detach_fn
         from .ui import cmd_ui, curses_ui
         from .update import Checker
         interactive = not args.plain and sys.stdin.isatty() and sys.stdout.isatty()
@@ -371,12 +372,13 @@ def _dispatch(cfg, args):
             from .ui.daemon_watch import make_watcher
             from .ui.dispatch_watch import make_dispatch_watcher
             return curses_ui(cfg, run, out, **where, updater=checker, argv=argv, watcher=make_watcher(cfg, run),
-                             dispatch_watcher=make_dispatch_watcher(cfg, run))
+                             dispatch_watcher=make_dispatch_watcher(cfg, run), detach_fn=detach_fn)
         import subprocess
 
         from .prompts import plain_prompt
         return cmd_ui(cfg, run, out, **where, picker_fn=None, restore_picker_fn=None, adopt_picker_fn=None, loop=True,
-                      attach_fn=subprocess.call, updater=checker, argv=argv, prompt_fn=plain_prompt(out, input))
+                      attach_fn=subprocess.call, updater=checker, argv=argv, prompt_fn=plain_prompt(out, input),
+                      detach_fn=detach_fn)
     if cmd == "claude":
         from .launch import cmd_claude, disabled_problem
         rest = list(args.rest)

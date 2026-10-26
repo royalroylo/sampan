@@ -23,6 +23,8 @@ HELP = ("編號 = 接上／切過去（已停止的先接回）；s 停掉　S �
         "（資料夾請用 sampan folder …）")
 FOLDER_HINT = "--plain 不整理資料夾，請用 sampan folder list／add／rename／rm／move"
 
+UNMANAGED = (State.UNREGISTERED, State.NO_AGENT, State.MULTI)  # tmux sessions sampan does not manage
+
 
 def _ask(ask, prompt):
     try:
@@ -393,7 +395,8 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
            restore_fn=restore_mod.cmd_restore, restore_picker_fn=None,
            adopt_fn=adopt_mod.cmd_adopt, adopt_picker_fn=None, save_fn=save_mod.cmd_save, loop=False,
            attach_fn=None, choose_dir_fn=None, updater=None, update_fn=update_mod.do_update, argv=(), prompt_fn=None, plugins_fn=None,
-           profiles_fn=None, set_cfg_fn=None, dispatches_fn=None, choose_folder_fn=None, restart_fn=None):
+           profiles_fn=None, set_cfg_fn=None, dispatches_fn=None, choose_folder_fn=None, restart_fn=None,
+           detach_fn=None):
     """dispatches_fn(ask=…) is the dispatch list for D (curses: CursesScreen.dispatches); when None, the dispatches are printed.
     picker_fn(rows, current) returns (action, list of names); when None, use the plain-text menu where a number is typed.
     restore_picker_fn / adopt_picker_fn are the checklist interfaces for R / A; when None, restore / adopt ask in text themselves.
@@ -406,6 +409,9 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
     CursesScreen.prompt_choice, with --plain prompts.plain_prompt); when "go in and handle it myself" is chosen, that session is attached when the action ends.
     None = do not look at prompts (as before).
     plugins_fn(ask=…, own_pane=…, on_prompt=…) is the plugin screen for p (curses: CursesScreen.plugins); when None, the --plain plugin menu.
+    detach_fn(cfg, run, names) binds the key that jumps out of a session and marks names as sampan sessions
+    (detach_key.ensure; None = do nothing): once for the running sessions when the list is first shown, then for the
+    session about to be attached; a warning it returns is shown once.
     profiles_fn(ask=…) is the profile screen for o (curses: CursesScreen.profiles); when None, the --plain profile menu.
     After it (even when it raises) the config is re-read, so the list and n / P see renamed, disabled or added profiles.
     The config is also re-read before each action when config.toml changed on disk (another terminal ran sampan profile
@@ -580,6 +586,20 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
             raise ValueError(f"未知的 ui action：{action!r}") from None
         return handler(names, rows, kw)
 
+    warned = set()
+
+    def _detach(names):
+        if detach_fn is None:
+            return
+        try:
+            warning = detach_fn(cfg, run, names)
+        except Exception as e:  # noqa: BLE001  never in the way of attaching
+            warning = f"沒辦法設跳離鍵：{e}"
+        if warning and warning not in warned:
+            warned.add(warning)
+            out(f"⚠ {warning}")
+
+    first = True
     hint = updater.hint() if updater is not None and picker_fn is None else None
     if hint:
         out(hint)  # --plain: mention once at the start (cache only)
@@ -592,6 +612,9 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
             return 2
         if getattr(rows, "warning", None) and not picker_fn:
             out(f"⚠ {rows.warning}")  # the curses version puts it in the hint line at the bottom of the screen
+        if first:
+            first = False
+            _detach([r.name for r in rows if r.tmux_alive and r.state not in UNMANAGED])
         if picker_fn:
             action, names = picker_fn(rows, current_session)
         else:
@@ -627,6 +650,8 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
             # in curses exec_fn only records it, and the real exec happens after curses is closed (endwin)
             exec_fn("sampan", ["sampan", *argv])
             return 0
+        if isinstance(go, str):
+            _detach([go])
         if go and current_session and loop:
             # inside tmux: after switching over, sampan stays in its original pane, and switching back shows the list again
             if _attach(run, out, go, current_session, exec_fn) == 0:

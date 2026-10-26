@@ -98,6 +98,7 @@ class Config:
     all_profiles: dict  # every profile in config-file order, disabled and Codex ones included
     implicit_codex: bool  # the Codex profile was filled in from [codex] / defaults, not written in the file
     codex_auto_start: bool = True  # [ui] codex_auto_start: start the Codex daemon when the UI opens
+    detach_key: str = "C-q"  # [ui] detach_key: the tmux key that jumps out of a sampan session ("" = none)
     mcp_confirm: bool = True  # [mcp] confirm: the MCP tools that act are marked, so the agent's own permission prompt asks the user
 
     @property
@@ -242,6 +243,9 @@ def load_config(path, *, home=None, state_dir=None):
     codex_auto_start = ui.get("codex_auto_start", True)
     if not isinstance(codex_auto_start, bool):
         raise ConfigError(f"[ui] codex_auto_start 要是 true 或 false，目前是 {codex_auto_start!r}")
+    detach_key = ui.get("detach_key", "C-q")
+    if not isinstance(detach_key, str) or any(c.isspace() for c in detach_key):
+        raise ConfigError(f"[ui] detach_key 要是 tmux 的按鍵名稱（例如 \"C-q\"，空字串＝不綁），目前是 {detach_key!r}")
     mcp = table(data.get("mcp", {}), "[mcp]")
     mcp_confirm = mcp.get("confirm", True)
     if not isinstance(mcp_confirm, bool):
@@ -259,5 +263,6 @@ def load_config(path, *, home=None, state_dir=None):
         all_profiles=all_profiles,
         implicit_codex=implicit_codex,
         codex_auto_start=codex_auto_start,
+        detach_key=detach_key,
         mcp_confirm=mcp_confirm,
     )
