@@ -138,7 +138,7 @@ def socket_path(codex_home, run, timeout=2.0):
     return Path(path) if isinstance(path, str) and path and Path(path).exists() else None
 
 
-def _first_line(text):
+def first_line(text):
     return next((ln.strip() for ln in (text or "").splitlines() if ln.strip()), "")
 
 
@@ -161,14 +161,14 @@ def start_daemon(codex_home, run, *, timeout=START_TIMEOUT_S):
     else:
         if r.returncode == 0:
             return None
-        err = _first_line(r.stderr)
+        err = first_line(r.stderr)
         # runner.run's own FileNotFoundError text starts "[Errno 2]"; any other 127 text (e.g. an npm codex whose
         # `env: node: No such file or directory`) is a real reason
         if r.returncode == 127 and (not err or err.startswith("[Errno 2]")):
             return CODEX_NOT_FOUND
         if r.returncode == 124:
             return f"逾時 {timeout} 秒"
-        reason = _first_line(r.stderr) or _first_line(r.stdout) or f"結束碼 {r.returncode}"
+        reason = first_line(r.stderr) or first_line(r.stdout) or f"結束碼 {r.returncode}"
     return reason if len(reason) <= _REASON_MAX else reason[:_REASON_MAX] + "…"
 
 

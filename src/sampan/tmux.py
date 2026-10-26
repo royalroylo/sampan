@@ -81,9 +81,18 @@ class Tmux:
     def send_keys(self, target, *keys):
         return self._tmux("send-keys", "-t", target, *keys)
 
-    def capture(self, target, lines=30):
-        r = self._tmux("capture-pane", "-p", "-t", target, "-S", f"-{lines}")
+    def capture(self, target, lines=30, escapes=False):
+        """Pane text; escapes=True keeps the colour/intensity codes (-e), which is how a dim placeholder is told from typed text."""
+        flags = ("-e",) if escapes else ()
+        r = self._tmux("capture-pane", "-p", *flags, "-t", target, "-S", f"-{lines}")
         return r.stdout if r.returncode == 0 else ""
+
+    def load_buffer(self, name, path):
+        return self._tmux("load-buffer", "-b", name, str(path))
+
+    def paste_buffer(self, name, target):
+        """Bracketed paste (-p: the agent takes it as one input, newlines included) and delete the buffer afterwards (-d)."""
+        return self._tmux("paste-buffer", "-p", "-d", "-b", name, "-t", target)
 
 
 def unreadable_message(reason):

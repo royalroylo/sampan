@@ -329,3 +329,39 @@ def at_trust_prompt(screen, agent):
         return _claude_at_trust(screen)
     p = parse_prompt(screen, "codex")
     return p is not None and (p.trust_path is not None or CODEX_TRUST_PROMPT in p.question)
+
+
+# ---------- Claude: is the input box safe to paste into ----------
+
+RULE_RE = re.compile(r"^─{10,}$")  # the horizontal rules above and below the input box
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+PROMPT_PREFIX = "❯\xa0"  # Claude draws the prompt as ❯ + NBSP
+BOX_BOTTOM_LINES = 5  # non-blank lines allowed under the box (status line, hints); more means it scrolled away
+
+
+def claude_input_state(screen):
+    """"empty" only for an input box whose prompt is empty or shows a dim placeholder; "draft" when the user typed
+    something; "blocked" for everything else (menus, trust and permission prompts, no recognisable box).
+    A whitelist: a screen this does not recognise is never "empty"."""
+    lines = screen.rstrip("\n").split("\n")
+    plain = [ANSI_RE.sub("", ln).rstrip(" ") for ln in lines]
+    rules = [i for i, ln in enumerate(plain) if RULE_RE.match(ln)]
+    if len(rules) < 2:
+        return "blocked"
+    top, bottom = rules[-2], rules[-1]
+    if sum(1 for ln in plain[bottom + 1:] if ln.strip()) > BOX_BOTTOM_LINES:
+        return "blocked"
+    prompt = next((i for i in range(bottom - 1, top, -1) if plain[i].startswith("❯")), None)
+    if prompt is None or not plain[prompt].startswith(PROMPT_PREFIX):
+        return "blocked"
+    text = plain[prompt][len(PROMPT_PREFIX):].strip()
+    if re.match(r"\d+\.\s", text) or text.startswith("/"):
+        return "blocked"  # a numbered option of a dialog, or a slash-command menu
+    if not text:
+        return "empty"
+    after = lines[prompt].split(PROMPT_PREFIX, 1)[1] if PROMPT_PREFIX in lines[prompt] else ""
+    if not after.startswith("\x1b[2m"):
+        return "draft"  # normal-intensity text: the user typed it
+    # a dim run that ends (reset or normal intensity) and is followed by more text is a placeholder plus a draft
+    tail = re.split(r"\x1b\[(?:0|22)m", after[len("\x1b[2m"):], maxsplit=1)
+    return "empty" if len(tail) == 1 or not ANSI_RE.sub("", tail[1]).strip() else "draft"

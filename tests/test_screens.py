@@ -2,7 +2,7 @@
 import unittest
 from pathlib import Path
 
-from sampan.screens import at_trust_prompt, bottom_trust_path, codex_activity, trust_path
+from sampan.screens import at_trust_prompt, bottom_trust_path, claude_input_state, codex_activity, trust_path
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -82,3 +82,34 @@ class BottomTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ClaudeInputStateTest(unittest.TestCase):
+    def test_real_screens(self):
+        for name, want in (("claude_empty_placeholder.ansi", "empty"), ("claude_empty_after_reply.ansi", "empty"),
+                           ("claude_draft.ansi", "draft"), ("claude_pasted.ansi", "draft"),
+                           ("claude_slash_menu.ansi", "blocked"), ("claude_trust.ansi", "blocked")):
+            with self.subTest(name):
+                self.assertEqual(claude_input_state(fixture(name)), want)
+
+    def test_placeholder_text_in_normal_intensity_is_a_draft(self):
+        screen = fixture("claude_empty_placeholder.ansi").replace("\x1b[2m", "")
+        self.assertIn("Try", screen)
+        self.assertEqual(claude_input_state(screen), "draft")
+
+    def test_unknown_screens_are_never_empty(self):
+        rule = "─" * 40
+        for screen in ("", "\n\n", "$ ls\nfoo", "no box here ❯\xa0", f"{rule}\n❯\xa0\n",  # one rule only
+                       f"{rule}\n❯\xa01. Yes\n  2. No\n{rule}\nEsc to cancel",  # permission dialog
+                       f"{rule}\n❯ \n{rule}\n  footer"):  # plain space, not NBSP
+            with self.subTest(screen=screen):
+                self.assertEqual(claude_input_state(screen), "blocked")
+
+    def test_prompt_box_scrolled_away_from_the_bottom_is_blocked(self):
+        rule = "─" * 40
+        screen = f"{rule}\n❯\xa0\n{rule}\n" + "\n".join(f"output {i}" for i in range(8))
+        self.assertEqual(claude_input_state(screen), "blocked")
+
+    def test_minimal_empty(self):
+        rule = "─" * 40
+        self.assertEqual(claude_input_state(f"{rule}\n❯\xa0\n{rule}\n  footer"), "empty")

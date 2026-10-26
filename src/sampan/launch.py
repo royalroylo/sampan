@@ -39,7 +39,7 @@ def shell_command(argv, *, env_set, env_unset=(), cwd=None):
     return f"cd {shlex.quote(cwd)} && {line}" if cwd else line
 
 
-def _codex_env(cfg):
+def codex_env(cfg):
     """CODEX_HOME to set whenever the configured home is not ~/.codex. Only ~/.codex is compared: the shell in a
     tmux pane may not have the caller's CODEX_HOME."""
     if cfg.codex.home == cfg.home / ".codex":
@@ -54,7 +54,7 @@ def launch_line(cfg, agent, profile_name, *, resume=None, session_id=None, cwd=N
     if agent == "codex":
         # when resuming from another directory Codex asks whether to use the recorded directory or the current one; an explicit -C avoids the question
         extra = ("-C", cwd) if cwd else ()
-        return shell_command(codex_argv(resume=resume, extra=extra), env_set=_codex_env(cfg), cwd=cwd)
+        return shell_command(codex_argv(resume=resume, extra=extra), env_set=codex_env(cfg), cwd=cwd)
     profile = cfg.profiles[profile_name]
     argv = claude_argv(profile, resume=resume, session_id=session_id)
     if profile.default:
@@ -115,6 +115,6 @@ def cmd_codex(cfg, extra, *, out=print, execvpe=os.execvpe):
         return 2
     argv = codex_argv(extra=extra)
     env = dict(os.environ)
-    env.update(_codex_env(cfg))
+    env.update(codex_env(cfg))
     execvpe(argv[0], argv, env)
     return 0

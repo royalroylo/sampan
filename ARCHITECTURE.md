@@ -20,7 +20,7 @@ What does not happen: nothing in detection, the registry or the leaf modules imp
    - `registry.py` reads and writes `registry.json`; `dispatch.py` stores dispatch records (`dispatches.json`, its own lock, `outbox/`); `config.py` reads `config.toml`; `fsutil.py` does atomic writes;
      `clock.py` stores times in UTC and formats them in local time.
 3. **Actions** (change things, always on explicit command)
-   - `save.py`, `restore.py`, `session_run.py` (new / stop / move / rename), `adopt.py`, `launch.py`, `prompts.py`
+   - `save.py`, `restore.py`, `session_run.py` (new / stop / move / rename), `adopt.py`, `launch.py`, `prompts.py`, `deliver.py` (paste a dispatch into an empty Claude prompt, or `codex queue`)
      (answering startup prompts through a `Relay`), `plugins.py` (read-only status and `sync` for scripts), `plugin_view.py` / `marketplace_view.py` (what the plugin screen shows: rows, cards, save previews; pure), `plugin_apply.py` (runs the `claude plugin` commands of a save, backs up and edits the config, restarts the sessions of chosen profiles), `config_edit.py` (byte-preserving edits of `config.toml`), `actionlog.py` (appends action messages to `actions.log`), `profile_ops.py` (profile list / rename / disable / enable / forget / add and the `[codex]` conversion; edits `config.toml` and the registry), `statusline_setup.py` (wraps / unwraps the `statusLine` command in a profile's `settings.json`), `hook.py`, `launchd.py`, `init.py`, `update.py`.
 4. **Interfaces**
    - `cli.py` (argparse and dispatch, exit codes), `ui/` (curses screen), `doctor.py` (diagnostics).
