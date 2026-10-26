@@ -333,7 +333,7 @@ def at_trust_prompt(screen, agent):
 
 # ---------- Claude: is the input box safe to paste into ----------
 
-RULE_RE = re.compile(r"^─{10,}$")  # the horizontal rules above and below the input box
+RULE_RE = re.compile(r"^─{10,}(?: .+ ─+)?$")  # the rules above and below the input box; the top one may carry the session title ("──── <title> ─")
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 PROMPT_PREFIX = "❯\xa0"  # Claude draws the prompt as ❯ + NBSP
 BOX_BOTTOM_LINES = 5  # non-blank lines allowed under the box (status line, hints); more means it scrolled away

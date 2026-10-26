@@ -127,3 +127,26 @@ class ClaudeInputStateTest(unittest.TestCase):
         self.assertIn('\x1b[0m', screen)
         i = screen.index('to..."\x1b[0m') + len('to..."\x1b[0m')
         self.assertEqual(claude_input_state(screen[:i] + "typed" + screen[i:]), "draft")
+
+
+class ClaudeTitledBoxTest(unittest.TestCase):
+    """Claude 2.1.3xx writes the session title into the top rule of the input box (「──── <title> ─」)."""
+
+    def screen(self, title):
+        top = f"\x1b[38;5;244m{'─' * 60}\x1b[39m \x1b[38;5;244m{title}\x1b[39m \x1b[38;5;244m─"
+        return "\n".join(["⏺ done", "", top, "\x1b[39m❯\xa0\x1b[2m先查一下\x1b[0m",
+                          "\x1b[38;5;244m" + "─" * 81, "  Opus · ~/proj · context 0%",
+                          "  ⏵⏵ auto mode on (shift+tab to cycle)",
+                          " " * 32 + "Update available! Run: brew upgrade claude-code"])
+
+    def test_titled_top_rule_with_placeholder_is_empty(self):
+        for title in ("工作標題", "new task? /clear to save 266.7k tokens"):
+            with self.subTest(title=title):
+                self.assertEqual(claude_input_state(self.screen(title)), "empty")
+
+    def test_titled_top_rule_with_typed_text_is_a_draft(self):
+        self.assertEqual(claude_input_state(self.screen("工作標題").replace("\x1b[2m", "")), "draft")
+
+    def test_text_line_ending_in_a_rule_char_is_not_a_rule(self):
+        rule = "─" * 40
+        self.assertEqual(claude_input_state(f"see ─\n❯\xa0\n{rule}\n  footer"), "blocked")
