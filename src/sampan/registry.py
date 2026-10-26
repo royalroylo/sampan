@@ -144,11 +144,30 @@ def load_rows(path, *, codex_profile=""):
     return rows
 
 
+# Row fields that change on every save without the session itself changing; ignored when deciding on a history snapshot.
+VOLATILE_FIELDS = ("seen_at", "pid", "server")
+
+
+def _stable_sessions(sessions):
+    return [{k: v for k, v in s.items() if k not in VOLATILE_FIELDS} for s in sessions]
+
+
+def _only_volatile_changes(path, new_sessions):
+    """True when the registry at path holds the same sessions as new_sessions apart from VOLATILE_FIELDS.
+    An unreadable old file is never "same": it should be kept as a snapshot."""
+    try:
+        old = json.loads(Path(path).read_text())["sessions"]
+        return _stable_sessions(old) == _stable_sessions(new_sessions)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return False
+
+
 def write_rows(path, rows, now, history_dir, keep=20):
     path = Path(path)
     history_dir = Path(history_dir)
     private_dir(path.parent)
-    if path.exists():
+    sessions = [asdict(r) for r in rows]
+    if path.exists() and not _only_volatile_changes(path, sessions):
         private_dir(history_dir)
         snap = history_dir / f"registry-{now_stamp()}.json"
         # Created 0600 and copied by hand, not shutil.copy2: copy2 also copies the mode with chmod, which fails where chmod is refused.
@@ -167,7 +186,7 @@ def write_rows(path, rows, now, history_dir, keep=20):
             old.unlink()
         for kept in snaps[-keep:]:
             private_file(kept)  # snapshots an older version left readable by others
-    body = {"version": VERSION, "saved_at": now, "sessions": [asdict(r) for r in rows]}
+    body = {"version": VERSION, "saved_at": now, "sessions": sessions}
     atomic_write(path, json.dumps(body, ensure_ascii=False, indent=2) + "\n", mode=PRIVATE_FILE)
 
 

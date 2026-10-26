@@ -4,7 +4,7 @@
 
 ## 支援的平台
 
-- **macOS**：完整支援（含每個整點的自動存檔排程）。
+- **macOS**：完整支援（含每 5 分鐘的自動存檔排程）。
 - **Linux**：實驗性。指令與畫面都能用，但沒有自動存檔排程——`sampan init` 會跳過 launchd 並告訴你，需要時自己跑 `sampan save`（或用 cron／systemd timer）；`sampan doctor` 不檢查 Homebrew 與 launchd。
   已在 Ubuntu 24.04（Docker）用假的 claude／codex 跑過 init、new、save、stop、restore 與 ui（[`scripts/linux-smoke/`](../scripts/linux-smoke/)），單元測試在 3.11–3.13 全綠；尚未用真的 Claude Code／Codex 在 Linux 上驗證。已知限制：需要 `ps`（procps），Codex 對話的辨識靠 `lsof`（沒有時退回 Codex 自己的資料庫，辨識率較低）；沒有 launchd，所以也沒有自動存檔。
 - **Windows**：不支援。

@@ -42,7 +42,7 @@ callable (`runner.py`). That is what makes the suite fast and safe: tests pass a
 - The registry never deletes a row by itself; only `sampan forget` or `X` in the ui (which asks first) removes one.
   A session whose tmux is gone becomes "stopped", not removed. If tmux itself cannot be read, the state is "unknown",
   never "stopped".
-- Every write is atomic, and the previous registry is copied to `history/` first. Everything written under the
+- Every write is atomic, and the previous registry is copied to `history/` first when a session really changed (not just `seen_at`, `pid`, `server`). Everything written under the
   state dir is private (files `600`, directories `700`, whatever the umask; best-effort where chmod is refused), and the
   launchd job runs with `Umask` `077` so its logs there are private too.
 - No telemetry; the only network use is the version-tag check and what the user asks for: `U` / `sampan update`, and in the plugin screen `r`, `u`, `U` and a confirmed save (opening the screen reads only local files).
@@ -60,7 +60,7 @@ callable (`runner.py`). That is what makes the suite fast and safe: tests pass a
 | `usage/<profile>.json` | latest Claude 5h / weekly quota written by `sampan statusline` (Codex is read from its own rollout files, never copied here) |
 | `hooks/<pid>.json` | written by the optional SessionStart hook |
 | `update-check.json` | cached newest version tag (6 hours) |
-| `~/Library/LaunchAgents/io.github.royalroylo.sampan-save.plist` | macOS hourly save |
+| `~/Library/LaunchAgents/io.github.royalroylo.sampan-save.plist` | macOS save every 5 minutes |
 
 The file formats are documented in [docs/en/reference.md](docs/en/reference.md) (zh-TW: [docs/reference.md](docs/reference.md)).
 

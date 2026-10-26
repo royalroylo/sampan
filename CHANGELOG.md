@@ -5,6 +5,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- The launchd auto-save now runs every 5 minutes (minute 0, 5, ... 55) instead of every hour. An hourly plist counts as an old schedule: `sampan doctor` warns and `sampan init` offers to reinstall it.
+- A `history/` snapshot of the registry is kept only when a session really changed; a save that differs only in `seen_at`, `pid` or `server` no longer adds one (the registry itself is still written every time), so the newest 20 snapshots span much more than 20 saves.
+
 ## [0.10.0] - 2026-10-25
 
 ### Added

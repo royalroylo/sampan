@@ -4,7 +4,7 @@ English · [繁體中文](../platforms.md) · [Back to README](../../README.en.m
 
 ## Supported platforms
 
-- **macOS**: fully supported, including the hourly auto-save schedule.
+- **macOS**: fully supported, including the 5-minute auto-save schedule.
 - **Linux**: experimental. Commands and the screen work, but there is no auto-save schedule: `sampan init` skips launchd and
   says so, so run `sampan save` yourself (or from cron or a systemd timer). `sampan doctor` does not check Homebrew or launchd.
   Checked on Ubuntu 24.04 (Docker) with fake claude/codex scripts: init, new, save, stop, restore and the ui ([`scripts/linux-smoke/`](../../scripts/linux-smoke/)),

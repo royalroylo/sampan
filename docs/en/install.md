@@ -76,7 +76,7 @@ Install Claude Code the same way as above (`curl -fsSL https://claude.ai/install
 **Auto-save**: on Linux `sampan init` skips the auto-save schedule and says so. Set one up yourself if you want it, for example cron (`crontab -e`):
 
 ```
-0 * * * * $HOME/.local/bin/sampan save --quiet
+*/5 * * * * $HOME/.local/bin/sampan save --quiet
 ```
 
 or a systemd user timer (**an example, untested**; save as `~/.config/systemd/user/sampan-save.service` and `sampan-save.timer`, then `systemctl --user enable --now sampan-save.timer`):
@@ -89,7 +89,7 @@ ExecStart=%h/.local/bin/sampan save --quiet
 
 # sampan-save.timer
 [Timer]
-OnCalendar=hourly
+OnCalendar=*:0/5
 Persistent=true
 [Install]
 WantedBy=timers.target
@@ -111,8 +111,8 @@ profile names and writes `~/.config/sampan/config.toml` (showing it first). Runn
 never touches a config file it cannot read. `init` also:
 
 - optionally installs a SessionStart hook in each profile's `settings.json`. It is opt-in: init neither asks nor installs unless you run `sampan init --hook`. A hook that is installed but broken (it points to a sampan that no longer exists) is still offered for repair without `--hook`;
-- on macOS, offers an hourly auto-save schedule (default yes; `sampan init --no-launchd` skips it):
-  `~/Library/LaunchAgents/io.github.royalroylo.sampan-save.plist` runs `sampan save --quiet` on the hour (a run missed
+- on macOS, offers a 5-minute auto-save schedule (default yes; `sampan init --no-launchd` skips it):
+  `~/Library/LaunchAgents/io.github.royalroylo.sampan-save.plist` runs `sampan save --quiet` every 5 minutes (a run missed
   during sleep is made up on wake). If `SAMPAN_CONFIG` / `SAMPAN_STATE_DIR` were set when you ran `init`, the schedule uses
   the same values. **The schedule only saves; it never restores, starts or moves anything.**
 

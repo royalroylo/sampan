@@ -1,4 +1,4 @@
-"""launchd schedule: sampan save --quiet every hour on the hour. The schedule only saves; it must never call restore/new/move."""
+"""launchd schedule: sampan save --quiet every 5 minutes. The schedule only saves; it must never call restore/new/move."""
 import os
 import plistlib
 from pathlib import Path
@@ -6,9 +6,9 @@ from pathlib import Path
 from .fsutil import atomic_write, private_dir
 
 LABEL = "io.github.royalroylo.sampan-save"
-# Every hour on the hour. StartInterval is not used: its timer pauses during sleep, so a laptop with the lid closed might not save for hours;
+# Every 5 minutes (minute 0, 5, ... 55). StartInterval is not used: its timer pauses during sleep, so a laptop with the lid closed might not save for hours;
 # a run that StartCalendarInterval missed is made up once on wake.
-SCHEDULE = {"Minute": 0}
+SCHEDULE = [{"Minute": m} for m in range(0, 60, 5)]
 
 
 def plist_path(home, label=LABEL):
@@ -29,7 +29,7 @@ ENV_KEYS = ("SAMPAN_CONFIG", "SAMPAN_STATE_DIR")
 
 
 def plist_text(sampan_path, state_dir, path_env, env=None):
-    """env: SAMPAN_CONFIG/SAMPAN_STATE_DIR in effect when the schedule is installed, so the hourly save uses the same
+    """env: SAMPAN_CONFIG/SAMPAN_STATE_DIR in effect when the schedule is installed, so the scheduled save uses the same
     config and registry."""
     state_dir = Path(state_dir)
     variables = {"PATH": path_env, "LANG": "en_US.UTF-8", "LC_CTYPE": "en_US.UTF-8"}
@@ -53,7 +53,7 @@ def _domain(uid):
 def check(home, sampan_path, run=None, *, uid=None, env=None):
     """("ok"|"missing"|"unreadable"|"wrong"|"env"|"schedule"|"not_loaded", ProgramArguments or None).
 
-    "schedule": the plist is from an older sampan (StartInterval instead of the hourly StartCalendarInterval).
+    "schedule": the plist is from an older sampan (StartInterval instead of the 5-minute StartCalendarInterval).
 
     With env (the SAMPAN_CONFIG/SAMPAN_STATE_DIR that should be in the plist), a plist carrying other values is "env".
     With run, a correct plist is also checked with `launchctl print` (read-only): a plist that never got

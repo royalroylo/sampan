@@ -205,7 +205,7 @@ class InitFirstRunTests(Base):
         written = next(i for i, line in enumerate(self.lines) if "已寫入" in line)
         self.assertLess(summary, written)  # the summary before writing already lists the schedule
         self.assertTrue(any("排程" in p and "[Y/n]" in p for p in prompts))
-        self.assertTrue(any("每個整點 sampan save --quiet" in p for p in prompts))
+        self.assertTrue(any("每 5 分鐘 sampan save --quiet" in p for p in prompts))
         self.assertFalse(any("每小時" in x for x in self.lines + prompts))
         self.assertFalse(launchd.plist_path(self.home).exists())
         self.assertEqual(loads(r), [])

@@ -20,8 +20,8 @@ class PlistTests(unittest.TestCase):
         self.assertEqual(data["Label"], launchd.LABEL)
         self.assertEqual(data["ProgramArguments"], [SAMPAN, "save", "--quiet"])
         self.assertIs(data["RunAtLoad"], False)
-        # Fires on the hour: a run missed during sleep is made up on wake (StartInterval's timer pauses during sleep)
-        self.assertEqual(data["StartCalendarInterval"], {"Minute": 0})
+        # Fires every 5 minutes on the clock: a run missed during sleep is made up on wake (StartInterval's timer pauses during sleep)
+        self.assertEqual(data["StartCalendarInterval"], [{"Minute": m} for m in range(0, 60, 5)])
         self.assertNotIn("StartInterval", data)
         self.assertEqual(data["EnvironmentVariables"]["LANG"], "en_US.UTF-8")
         self.assertEqual(data["EnvironmentVariables"]["LC_CTYPE"], "en_US.UTF-8")
@@ -81,6 +81,19 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(launchd.check(self.home, SAMPAN), ("unreadable", None))
         path.write_bytes(plistlib.dumps({"ProgramArguments": ["/old/sampan", "save", "--quiet"]}))
         self.assertEqual(launchd.check(self.home, SAMPAN), ("wrong", ["/old/sampan", "save", "--quiet"]))
+
+    def test_plist_runs_every_five_minutes(self):
+        data = plistlib.loads(launchd.plist_text(SAMPAN, Path("/Users/u/st"), "/usr/bin").encode())
+        self.assertEqual(data["StartCalendarInterval"], [{"Minute": m} for m in range(0, 60, 5)])
+        self.assertNotIn("StartInterval", data)
+
+    def test_hourly_plist_is_reported_as_old_schedule(self):
+        launchd.write_plist(SAMPAN, self.state, self.home)
+        path = launchd.plist_path(self.home)
+        data = plistlib.loads(path.read_bytes())
+        data["StartCalendarInterval"] = {"Minute": 0}
+        path.write_bytes(plistlib.dumps(data))
+        self.assertEqual(launchd.check(self.home, SAMPAN), ("schedule", [SAMPAN, "save", "--quiet"]))
 
     def test_check_reports_old_interval_schedule(self):
         launchd.write_plist(SAMPAN, self.state, self.home)

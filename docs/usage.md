@@ -34,7 +34,7 @@
 | 從登記表移除一個不用的 session | `X`（只有已停止或 retired 的列） | 在畫面底部問確定（之後不會再列出，也不會被 `R` 接回）；移除後印出手動接回的指令。對話紀錄不會刪，舊的登記表留在 `history/` |
 | 看各帳號的額度、改名、停用、新增、裝狀態列 | `o` | 開帳號畫面，見下面「帳號管理」。清單上方會有每個帳號一行（`名稱 N 個執行中・5h …・週 …（時間）`） |
 | 管理 plugin 與 marketplace 來源 | `p` | 進到 plugin 管理畫面，見下面「plugin 管理畫面」 |
-| 立刻存一次登記表 | `w` | 平常每個整點會自動存 |
+| 立刻存一次登記表 | `w` | 平常每 5 分鐘會自動存 |
 | 更新 sampan | `U`（有新版時按鍵說明上面會出現「有新版 v…（目前 …），按 U 更新」） | 在畫面底部問確定，跑 `uv tool upgrade sampan`（版本沒變再 `uv tool install --reinstall git+https://github.com/royalroylo/sampan@v<最新版>`），輸出顯示在訊息區；成功後自動重新開啟 sampan 回到清單，失敗就留在清單。不知道有新版時，`U` 會先當下重新查一次（不看快取）；仍是最新版（或查不到）只會告知，不會問；要重新安裝請用 `sampan update --force` |
 
 **選目錄畫面**（`n`、`m`）：左邊是目前目錄底下的資料夾，右邊是「最近用過」的目錄（登記表裡用的 session 多的在前），游標那個目錄裡已經有 session 時會列出來；終端機不到 100 欄時只顯示左邊。
@@ -53,7 +53,7 @@
 
 選到家目錄 `~` 本身時會再問一次（建議用專案目錄）。`sampan ui --plain` 仍是直接打路徑。
 
-**新版提示**：`sampan` 開啟時在背景查 GitHub 上最新的版本 tag（結果快取 6 小時，畫面開著時過期會再查；沒網路就不提示），有新版才顯示提示、按 `U` 更新。`--plain` 只看快取、在開頭印一行；每小時的自動存檔不檢查。
+**新版提示**：`sampan` 開啟時在背景查 GitHub 上最新的版本 tag（結果快取 6 小時，畫面開著時過期會再查；沒網路就不提示），有新版才顯示提示、按 `U` 更新。`--plain` 只看快取、在開頭印一行；每 5 分鐘的自動存檔不檢查。
 
 ## plugin 管理畫面
 
@@ -180,7 +180,7 @@ Claude Code 只在狀態列指令的輸入裡提供 5h／週額度，所以要�
 | 互動畫面 | `sampan`（等於 `sampan ui`）：見上面「怎麼用」。tmux 裡選了會切過去、sampan 留在原 pane；tmux 外會在前景 attach，detach 後回到清單。`sampan ui --plain` 改用輸入編號，規則相同 |
 | 開新的工作視窗 | `sampan new <名稱> <claude:profile｜profile｜codex> <目錄>`（名稱不要用 `.` 或 `:`） |
 | 以某個帳號開 claude／開 codex | `sampan claude [profile] [claude 參數…]`（不帶 profile 會列選單；第一個字不是 profile 也不是 `-` 開頭會報錯，不會當成提示詞送出）、`sampan codex` |
-| 存下目前每個 session 的對話 id | `sampan save`（排程每個整點也會跑） |
+| 存下目前每個 session 的對話 id | `sampan save`（排程每 5 分鐘也會跑） |
 | 讓 agent 正常結束（先收起來，要用時再 restore） | `sampan stop [名稱…] [--profile <p>] [--force] [--keep-tmux]`：結束後若那個 tmux session 只剩這一個 pane，就一起關掉；有其他視窗或 pane 則保留 |
 | 重開機後接回 | `sampan restore [名稱…] [--all] [--dry-run]` |
 | 接手在 tmux 外（例如終端機程式的分頁）跑的 claude／codex | `sampan adopt [--dry-run]`（或 ui 按 A）：列出 tmux 外的 claude／codex（目錄、最後活動、最後一句話），勾選後逐一問 session 名稱；你自己在原視窗 `/exit`（Codex：`/quit`），sampan 等它結束後才在新的 tmux session 接回同一段對話並登記。sampan 不對原視窗按任何鍵；判斷不出對話 id 或 profile 的不能選 |

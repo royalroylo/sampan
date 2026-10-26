@@ -51,6 +51,6 @@ Overrides: `SAMPAN_CONFIG` (config file, default `~/.config/sampan/config.toml`)
 | `pid` | the agent process last seen, an integer or `null` |
 
 Version 1 files are still read (a missing `agent` counts as `claude`, a missing `pid` as `null`) and become version 2 on the
-next write. The previous file is copied to `history/registry-<time>.json` before each rewrite (newest 20 kept).
+next write. Before a rewrite the previous file is copied to `history/registry-<time>.json` (newest 20 kept) only when a session really changed (`seen_at`, `pid` and `server` do not count).
 Times (`saved_at`, `seen_at`, the history file names) are written in UTC (`+00:00`) and converted to local time only for
 display; history files left by older versions may be named in local time.

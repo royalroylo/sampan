@@ -40,7 +40,7 @@ list. Press `q` to quit.
 | Continue on another account (e.g. its quota ran out) | `P` (Claude only) | Lists the profiles; after you confirm, claude exits and the same conversation resumes under the new profile in the same directory, trusting that directory automatically the first time (same rule as `m`). A stopped session is reattached under the new profile directly. Plugins the new profile does not list are named first, but do not block the switch. If claude does not exit (e.g. it sits at a quota menu), sampan presses nothing else and asks you to press Esc and type `/exit` yourself, then press `P` again |
 | Change working directory | `m` | Directory chooser (starting at its current directory; if that directory is gone, at `[ui] start_dir`, as for `n`); after you confirm, the agent exits and resumes the same conversation in the new directory |
 | Mark as done | `r` | Retired; not offered for resuming |
-| Save the registry now | `w` | Normally saved on the hour |
+| Save the registry now | `w` | Normally saved every 5 minutes |
 | Update sampan | `U` (a line "new version v… (current …), press U to update" appears above the key help when a newer one exists) | Confirms at the bottom of the screen, runs `uv tool upgrade sampan` (if the version does not change, `uv tool install --reinstall git+https://github.com/royalroylo/sampan@v<latest>`), shows the output in the message area; on success sampan reopens itself at the list, on failure it stays in the list. When no newer version is known, `U` first checks again right then (skipping the cache); if it is still up to date (or the check fails) it only says so and asks nothing; to reinstall use `sampan update --force` |
 
 **Directory chooser** (`n`, `m`): folders under the current directory on the left, recently used directories on the right
@@ -64,7 +64,7 @@ numbered, typed menu for scripts and narrow terminals, where you type the path d
 
 **Update hint**: when it opens, sampan checks the repository's newest version tag in the background (cached 6 hours,
 checked again when it has expired while the screen is open; offline just means no hint) and shows a hint with `U` to
-update only when a newer version exists. `--plain` only reads the cache and prints one line at the start; the hourly save never checks.
+update only when a newer version exists. `--plain` only reads the cache and prints one line at the start; the 5-minute save never checks.
 
 ## The plugin management screen
 
@@ -204,7 +204,7 @@ Every action also has a command, for scripts or when you prefer typing commands 
 | Interactive screen | `sampan` (same as `sampan ui`): see "Using it" above. In tmux, what you pick is switched to and sampan stays in its pane; outside tmux it attaches in the foreground and returns to the list after detach. `sampan ui --plain` is the numbered menu, same rules |
 | New session | `sampan new <name> <claude:profile｜profile｜codex> <dir>` (no `.` or `:` in the name) |
 | Open claude / codex with an account | `sampan claude [profile] [claude args…]` (without a profile it lists a menu; a first word that is neither a profile nor starts with `-` is an error, not sent as a prompt), `sampan codex` |
-| Record each session's conversation id | `sampan save` (the schedule also runs it on the hour) |
+| Record each session's conversation id | `sampan save` (the schedule also runs it every 5 minutes) |
 | End agents normally (put away; `restore` brings them back) | `sampan stop [name…] [--profile <p>] [--force] [--keep-tmux]`: afterwards, if that tmux session has only this one pane left, it is closed too; with other windows or panes it is kept |
 | Resume after a reboot | `sampan restore [name…] [--all] [--dry-run]` |
 | Adopt claude / codex running outside tmux (e.g. a terminal program's tab) | `sampan adopt [--dry-run]` (or `A` in the ui): lists claude / codex outside tmux (directory, last activity, last message), you check some and name each; you type `/exit` (Codex: `/quit`) in the original window, and only after it ends does sampan resume the same conversation in a new tmux session and register it. sampan presses no key in the original window; ones whose conversation id or profile cannot be determined cannot be picked |

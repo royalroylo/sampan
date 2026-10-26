@@ -205,7 +205,7 @@ def _launchd(cfg, run, sampan_path):
                       f"plist 是 {program}，目前是 {launchd.expected_program(sampan_path)}；執行 sampan init 重新安裝")]
     if state == "schedule":
         return [Check("warn", "自動存檔排程是舊版的計時方式（睡眠時會暫停，可能好幾小時沒存檔）",
-                      "執行 sampan init 重新安裝（改成每個整點，睡眠中錯過的會在醒來時補跑）")]
+                      "執行 sampan init 重新安裝（改成每 5 分鐘，睡眠中錯過的會在醒來時補跑）")]
     if state == "not_loaded":
         return [Check("warn", "自動存檔排程的 plist 正確，但 launchd 沒有載入（不會自動存檔）",
                       f"執行 sampan init 重新載入，或 launchctl bootstrap gui/$(id -u) {path}")]

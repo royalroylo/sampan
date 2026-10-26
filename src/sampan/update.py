@@ -9,7 +9,7 @@ Update: first uv tool upgrade sampan and confirm the version changed with a fres
 uv tool install --reinstall git+REPO@v<latest> (pinned to the latest tag found; unpinned if none was found). All child processes go through
 injectable run/stream, so tests never touch the network or a real installation.
 U in the ui and sampan update re-check now (force, skipping the cache); with force, do_update reinstalls without trying upgrade first.
-The hourly sampan save does not check.
+The scheduled sampan save does not check.
 """
 import json
 import os

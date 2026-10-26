@@ -216,6 +216,18 @@ class StorageTest(unittest.TestCase):
         self.assertEqual(json.loads(files[-1].read_text())["sessions"][0]["tmux"], "s3")
         self.assertFalse(any(".tmp" in p.name for p in self.path.parent.iterdir()))
 
+    def test_history_snapshot_skipped_when_only_seen_at_changes(self):
+        write_rows(self.path, [Row("s", "claude", "alice", A, "/c", seen_at="t1", pid=1, server="a")], NOW, self.hist)
+        self.assertFalse(self.hist.exists() and list(self.hist.iterdir()))  # no old file: no snapshot
+        write_rows(self.path, [Row("s", "claude", "alice", A, "/c", seen_at="t2", pid=2, server="b")], NOW, self.hist)
+        self.assertFalse(self.hist.exists() and list(self.hist.iterdir()))
+        self.assertEqual(json.loads(self.path.read_text())["sessions"][0]["seen_at"], "t2")
+
+    def test_history_snapshot_kept_when_session_id_changes(self):
+        write_rows(self.path, [Row("s", "claude", "alice", A, "/c", seen_at="t1")], NOW, self.hist)
+        write_rows(self.path, [Row("s", "claude", "alice", "other-id", "/c", seen_at="t2")], NOW, self.hist)
+        self.assertEqual(len(list(self.hist.iterdir())), 1)
+
     def test_history_pruning_ignores_name_order_across_timezone_change(self):
         """Old snapshots are named in local time (+8h), new ones in UTC: names then sort lower despite being newer."""
         import os

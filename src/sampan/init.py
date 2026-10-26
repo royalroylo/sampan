@@ -321,16 +321,16 @@ def sampan_env(env):
 def _offer_launchd(run, out, ask, *, home, state_dir, sampan_path, first, uid, env):
     state, program = launchd.check(home, sampan_path, run, uid=uid, env=env)
     if state == "ok":
-        out("✔ 自動存檔排程已安裝並已載入（每個整點 sampan save --quiet）")
+        out("✔ 自動存檔排程已安裝並已載入（每 5 分鐘 sampan save --quiet）")
         return
     if first and state == "missing":
-        prompt = f"安裝自動存檔排程（每個整點 sampan save --quiet，{launchd.plist_path(home)}）？[Y/n] "
+        prompt = f"安裝自動存檔排程（每 5 分鐘 sampan save --quiet，{launchd.plist_path(home)}）？[Y/n] "
     else:
         shown = "、".join(f"{k}={v}" for k, v in env.items()) or "沒有 SAMPAN_CONFIG／SAMPAN_STATE_DIR"
         why = {"missing": "沒有安裝", "unreadable": "的 plist 讀不到",
                "wrong": f"呼叫的是 {program}，不是目前的 sampan",
                "env": f"的 SAMPAN_CONFIG／SAMPAN_STATE_DIR 與目前不同（目前：{shown}）",
-               "schedule": "是舊版的計時方式（睡眠時會暫停；新版改成每個整點，醒來時補跑）",
+               "schedule": "是舊版的計時方式（睡眠時會暫停；新版改成每 5 分鐘，醒來時補跑）",
                "not_loaded": "的 plist 正確，但 launchd 沒有載入"}[state]
         prompt = f"自動存檔排程{why}，要重新安裝並載入嗎？[Y/n] "
     if not _yes(ask, prompt, True):
@@ -342,7 +342,7 @@ def _offer_launchd(run, out, ask, *, home, state_dir, sampan_path, first, uid, e
         out(f"⚠ 寫不進 {launchd.plist_path(home)}：{e}；自動存檔排程沒有安裝")
         return
     if launchd.load(run, home, uid=uid):
-        out(f"✔ 已安裝自動存檔排程（每個整點 sampan save --quiet，{launchd.plist_path(home)}）")
+        out(f"✔ 已安裝自動存檔排程（每 5 分鐘 sampan save --quiet，{launchd.plist_path(home)}）")
     else:
         out("⚠ 自動存檔排程沒有載入成功（launchctl bootstrap 失敗）；可稍後再跑 sampan init 重新載入，"
             "或用 sampan doctor 檢查")
@@ -391,7 +391,7 @@ def cmd_init(cfg_path, state_dir, run, out, ask, *, home, sampan_path, env=None,
         out(text)
         if not no_launchd and platform == "darwin":
             out(f"▶ 接著會問要不要安裝自動存檔排程 {launchd.plist_path(home)}"
-                "（每個整點 sampan save --quiet；sampan init --no-launchd 可略過）")
+                "（每 5 分鐘 sampan save --quiet；sampan init --no-launchd 可略過）")
         if not _yes(ask, f"寫入 {cfg_path}？[Y/n] ", True):
             out("未寫入，結束")
             return 1

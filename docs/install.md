@@ -73,7 +73,7 @@ Claude Code 的安裝同上（`curl -fsSL https://claude.ai/install.sh | bash`�
 **自動存檔**：Linux 上 `sampan init` 會跳過自動存檔排程並告訴你。需要的話自己排，例如 cron（`crontab -e`）：
 
 ```
-0 * * * * $HOME/.local/bin/sampan save --quiet
+*/5 * * * * $HOME/.local/bin/sampan save --quiet
 ```
 
 或 systemd user timer（**範例，未測試**；存成 `~/.config/systemd/user/sampan-save.service` 與 `sampan-save.timer`，再 `systemctl --user enable --now sampan-save.timer`）：
@@ -86,7 +86,7 @@ ExecStart=%h/.local/bin/sampan save --quiet
 
 # sampan-save.timer
 [Timer]
-OnCalendar=hourly
+OnCalendar=*:0/5
 Persistent=true
 [Install]
 WantedBy=timers.target
@@ -101,6 +101,6 @@ WantedBy=timers.target
 `sampan init` 會問幾個會寫入檔案的問題，所以 stdin 不是終端機時會拒絕執行（結束碼 2，什麼都不寫）；腳本裡要全部用預設值，加 `--yes`（每個問題照樣印出，後面附 `→ 預設（--yes）`）。**agent 不要替使用者執行 init**，請使用者自己在終端機跑。init 會偵測 `~/.claude`、`~/.claude-profiles/*/`（名稱含 `.retired.` 的目錄視為已退役，略過）、執行中 claude 的 `CLAUDE_CONFIG_DIR`，詢問 profile 名稱後寫出 `~/.config/sampan/config.toml`（寫入前會先顯示內容）。再次執行只會提議新增的項目，不會改動讀不懂的設定檔。init 也會：
 
 - 選用：在各 profile 的 `settings.json` 安裝 SessionStart hook。**預設不問也不裝**，要的話執行 `sampan init --hook`；已裝但壞掉（指向不存在的 sampan）的 hook，不加 `--hook` 也會問你要不要修復。
-- 安裝自動存檔排程（僅 macOS；先問，預設是；`sampan init --no-launchd` 略過）：`~/Library/LaunchAgents/io.github.royalroylo.sampan-save.plist`，每個整點跑 `sampan save --quiet`（電腦睡眠時錯過的那次，醒來時會補跑）。執行 init 時設了 `SAMPAN_CONFIG`／`SAMPAN_STATE_DIR` 的話，排程也用同樣的值。**排程只存檔，不會 restore、new 或 move。**
+- 安裝自動存檔排程（僅 macOS；先問，預設是；`sampan init --no-launchd` 略過）：`~/Library/LaunchAgents/io.github.royalroylo.sampan-save.plist`，每 5 分鐘跑 `sampan save --quiet`（電腦睡眠時錯過的那次，醒來時會補跑）。執行 init 時設了 `SAMPAN_CONFIG`／`SAMPAN_STATE_DIR` 的話，排程也用同樣的值。**排程只存檔，不會 restore、new 或 move。**
 
 範例設定見 [config.example.toml](../config.example.toml)；格式說明見 [reference.md](reference.md)。

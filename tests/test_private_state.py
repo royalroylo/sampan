@@ -76,7 +76,7 @@ class StateFilesTests(Umask022):
         write_rows(path, rows, "t", hist)
         os.chmod(path, 0o644)  # an older sampan left it world-readable
         os.chmod(self.state, 0o755)
-        write_rows(path, rows, "t2", hist)
+        write_rows(path, [Row("one", "claude", "alice", SID, "/d")], "t2", hist)  # a real change keeps a snapshot
         self.assertEqual(mode(path), 0o600)
         self.assertEqual(mode(self.state), 0o700)
         self.assertEqual(mode(hist), 0o700)
@@ -130,7 +130,7 @@ class ChmodRefusedTests(Umask022):
         with mock.patch("os.chmod", refuse), mock.patch("os.fchmod", refuse):
             with lock(cfg.state_dir):
                 write_rows(cfg.registry_path, [Row("one", "claude", "alice", SID, "/c")], "t", cfg.history_dir)
-                write_rows(cfg.registry_path, [Row("one", "claude", "alice", SID, "/c")], "t2", cfg.history_dir)
+                write_rows(cfg.registry_path, [Row("one", "claude", "alice", SID, "/d")], "t2", cfg.history_dir)
             append_log(cfg, "one")
             update.write_cache(cfg.state_dir, "0.6.3", datetime(2026, 10, 23, tzinfo=timezone.utc))
         self.assertTrue(refuse.called)
@@ -158,10 +158,10 @@ class ReviewFixTests(Umask022):
         hist = state / "history"
         rows = [Row("one", "claude", "alice", SID, "/c")]
         write_rows(state / "registry.json", rows, "t", hist)
-        write_rows(state / "registry.json", rows, "t2", hist)
+        write_rows(state / "registry.json", [Row("one", "claude", "alice", SID, "/d")], "t2", hist)
         old_snap = next(hist.glob("registry-*.json"))
         os.chmod(old_snap, 0o644)
-        write_rows(state / "registry.json", rows, "t3", hist)
+        write_rows(state / "registry.json", rows, "t3", hist)  # back to /c: changed again
         self.assertEqual(mode(old_snap), 0o600)
         old_rec = state / "hooks" / "55.json"
         old_rec.parent.mkdir(parents=True)
