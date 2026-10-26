@@ -20,7 +20,7 @@ no account. The complete list of what it changes or touches:
   asks about it only with `sampan init --hook` (default no); a broken hook from an earlier install is offered for repair.
   It makes a `settings.json.bak-sampan-*` backup before changing the file.
 - macOS only: `~/Library/LaunchAgents/io.github.royalroylo.sampan-save.plist`, loaded with `launchctl`. It runs
-  `sampan save --quiet` every hour. It only saves; it never restores, starts or moves anything. `sampan init` asks first;
+  `sampan save --quiet` every 5 minutes. It only saves; it never restores, starts or moves anything. `sampan init` asks first;
   `--no-launchd` skips it. On other systems no schedule is installed.
 - sampan never edits `~/.claude.json` or `~/.codex/config.toml`.
 
