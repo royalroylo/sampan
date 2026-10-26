@@ -31,10 +31,11 @@ def req(rid, method, params=None):
     return json.dumps(m, ensure_ascii=False) + "\n"
 
 
-def init(rid=0, version="2025-06-18", elicitation=True):
+def init(rid=0, version="2025-06-18", elicitation=True, client="claude-code"):
     caps = {"elicitation": {}} if elicitation else {}
     return req(rid, "initialize", {"protocolVersion": version, "capabilities": caps,
-                                   "clientInfo": {"name": "test", "version": "1"}})
+                                   "clientInfo": {"name": client, "version": "1"}} if client else
+                                  {"protocolVersion": version, "capabilities": caps})
 
 
 def call(rid, name, args):
@@ -218,6 +219,47 @@ class ToolsListTest(Base):
                         self.assertNotIn("_meta", t)
                 self.assertEqual(set(tools), mcp_server.TOOL_NAMES)
                 self.assertIn('"_meta": {"anthropic/requiresUserInteraction": true}' if confirm else "", json.dumps(c.response(2)))
+
+
+class FailClosedTest(Base):
+    ACTING = {"send": {"session": "b", "message": "hi"}, "cancel_dispatch": {"id": "ffff"}}
+
+    def new_args(self):
+        d = Path(self._tmp.name) / "w"
+        d.mkdir(exist_ok=True)
+        return {"name": "n1", "target": "claude:work", "cwd": str(d), "message": "x"}
+
+    def test_unknown_client_is_refused_for_every_acting_tool(self):
+        for client in ("other", None):
+            with self.subTest(client=client):
+                run = tmux_runner()
+                calls = {**self.ACTING, "new_session": self.new_args()}
+                with mock.patch.object(mcp_server.session_run, "cmd_new", side_effect=AssertionError("no")):
+                    c = self.serve(Client([init(1, client=client)] + [call(i + 2, n, a) for i, (n, a) in
+                                                                      enumerate(calls.items())]), run=run)
+                for i in range(len(calls)):
+                    self.assertTrue(c.response(i + 2)["result"]["isError"])
+                    self.assertEqual(tool_text(c.response(i + 2)), mcp_server.NOT_ASKING)
+                self.assertEqual(self.dispatches(), [])
+                self.assertEqual(tmux_writes(run), [])
+
+    def test_asking_clients_are_allowed(self):
+        for client in ("claude-code", "codex-mcp-client"):
+            with self.subTest(client=client):
+                c = self.serve(Client([init(1, client=client), call(2, "send", {"session": "b", "message": "hi"})]),
+                               run=tmux_runner())
+                self.assertFalse(c.response(2)["result"]["isError"])
+
+    def test_confirm_off_needs_no_asking_client(self):
+        c = self.serve(Client([init(1, client="other"), call(2, "send", {"session": "b", "message": "hi"})]),
+                       run=tmux_runner(), confirm=False)
+        self.assertFalse(c.response(2)["result"]["isError"])
+
+    def test_read_only_tools_are_allowed_for_an_unknown_client(self):
+        c = self.serve(Client([init(1, client="other"), call(2, "list_sessions", {}),
+                               call(3, "dispatch_result", {"id": "ffff"})]))
+        self.assertFalse(c.response(2)["result"]["isError"])
+        self.assertNotIn(mcp_server.NOT_ASKING, tool_text(c.response(3)))
 
 
 class ActingToolTest(Base):

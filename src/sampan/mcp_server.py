@@ -26,6 +26,10 @@ WATCH_S = 3
 WAIT_MAX_S = 60  # a tool call may not block longer than this (MCP clients time tool calls out themselves)
 INTERACTION_META = "anthropic/requiresUserInteraction"
 ACTING_TOOLS = ("send", "new_session", "cancel_dispatch")
+# clientInfo.name of the clients known to ask the user for a tool marked INTERACTION_META (checked 2026-10-27:
+# Claude Code 2.1.287 sends "claude-code", Codex 0.164.0 sends "codex-mcp-client")
+ASKING_CLIENTS = {"claude-code", "codex-mcp-client"}
+NOT_ASKING = "這個 client 不會先問使用者；要用請在 config 設 [mcp] confirm = false"
 
 PARSE_ERROR, INVALID_REQUEST, METHOD_NOT_FOUND, INVALID_PARAMS = -32700, -32600, -32601, -32602
 
@@ -128,6 +132,7 @@ class Server:
         self.resolve = resolve  # () -> Caller, asked again before every tool that acts or reads a dispatch
         self.sleep, self.clock, self.now_fn = sleep, clock, now_fn
         self.status_fn, self.snapshot_fn = status_fn or status_rows, snapshot_fn
+        self.client_name = None  # clientInfo.name from initialize
         self.mine = set()  # dispatch ids created by this server (an unregistered caller's have no from_name to match)
         self._write_lock = threading.Lock()
         self._threads = []
@@ -218,6 +223,9 @@ class Server:
     def _initialize(self, rid, params):
         params = params if isinstance(params, dict) else {}
         asked = params.get("protocolVersion")
+        info = params.get("clientInfo")
+        name = info.get("name") if isinstance(info, dict) else None
+        self.client_name = name if isinstance(name, str) else None
         self._result(rid, {
             "protocolVersion": asked if asked in PROTOCOL_VERSIONS else PROTOCOL_VERSIONS[0],
             "capabilities": {"tools": {}},
@@ -228,8 +236,20 @@ class Server:
 
     # --- tools -----------------------------------------------------------------------------------------------
 
+    def _client_asks(self, tool):
+        """None when the user will be asked before `tool` acts (or confirm is off); else the refusal text. Fail closed:
+        the mark on the tool only works if the client honours it, so an unknown client is refused."""
+        if not self.cfg.mcp_confirm or tool not in ACTING_TOOLS:
+            return None
+        if self.client_name not in ASKING_CLIENTS:
+            return NOT_ASKING
+        return None
+
     def _call(self, rid, name, args):
         try:
+            refusal = self._client_asks(name)
+            if refusal:
+                raise ToolError(refusal)
             if not isinstance(args, dict):
                 raise ToolError("arguments 要是物件")
             result = _ok(getattr(self, f"tool_{name}")(args))
