@@ -12,6 +12,7 @@
 | `[restore] recent_days` | 非負整數，預設 7；`restore` 預設只勾選最近幾天有動過的 |
 | `[ui] start_dir` | 字串路徑，`n`（開新工作）的選目錄畫面從這裡開始；沒寫時用 `~/Projects`（存在的話），否則 `~` |
 | `[ui] codex_auto_start` | 布林，預設 `true`。打開 `sampan` 畫面時若 Codex 常駐服務沒在執行，就在背景跑一次 `codex remote-control start`；`false` 不啟動 |
+| `[mcp] confirm` | 布林，預設 `true`。`sampan mcp serve` 的 `send`、`new_session`、`cancel_dispatch` 每次都用 MCP 核准表單（elicitation）問你，可以同意、拒絕或改訊息再送；呼叫端沒宣告支援 elicitation 就拒絕，不跳過。`false` 都不問、直接做（照樣記 `actions.log`、可取消）。唯讀的 `list_sessions`、`dispatch_result` 永遠不問 |
 | `[codex] enabled` | 布林，預設 `true`。沒有任何 `agent = "codex"` 的 profile 時，`[codex]` 在記憶體裡當成一個隱含的 Codex profile，第一次 `sampan profile rename／disable／enable／forget／add --codex` 才轉成 `[profiles.<名稱>]`；只要有任何 `agent = "codex"` 的 profile，整個 `[codex]` 都不再作用；設成 `false` 表示不用 Codex（沒有 Codex profile），forget 最後一個 Codex profile 時會寫入 |
 | `[codex] home` | Codex 資料夾；沒寫時用環境變數 `CODEX_HOME`，再沒有就是 `~/.codex`（只用在隱含的 Codex profile） |
 | `[marketplaces] <名稱> = "owner/repo"` | plugin 來源：GitHub `owner/repo`，或 git 網址（`https://…`、`ssh://…`、`git@host:path`，例如自架的 Gitea）。本機目錄不支援 |
@@ -73,3 +74,17 @@
 狀態怎麼走：`queued`（排隊）→ `sent`（已送出，`sent_at`）→ `done`（`reply` 是這則訊息的回覆）或 `failed`（`reason` 寫原因）；`cancelled` 只能從 `queued` 來（`sampan dispatches cancel`）。`done_at` 是結束的時間。推進只在鎖裡做（先讀最新的再判斷再寫），所以同一筆不會被送兩次；貼上後按 Enter 失敗（文字已在對方輸入框）直接算 `failed`，不會再貼一次（完成通知同理：算已通知，`reason` 寫明）。`sampan send` 的結束碼：0 送出（`--wait`：已回覆）、1 失敗、2 拒絕或讀不到檔、124 `--wait` 逾時（派工照樣留著）。完成通知（`notify`）用 `outbox/<id>-notice.txt` 送到呼叫者的 session。
 
 讀不懂的檔不會覆蓋。已完成（`done`、`failed`、`cancelled`）超過 7 天的會被清掉，總數只留最新 200 筆。`outbox/<id>.txt` 放要送出的原文（檔 600）。
+
+## `sampan mcp serve` 的工具
+
+stdio MCP server（每行一則 JSON-RPC 2.0；協定版本 `2025-06-18`，client 要 `2025-03-26` 時用它）。由 Claude Code／Codex 啟動，呼叫者是誰從 server 的上層行程找：最近的 claude／codex 行程所在的 tmux pane，再對到登記表裡同名、同 agent 的那列；對不到就是「未登記的 session」，工具照樣能用，只是收不到完成通知。工具回傳的文字是 JSON；拒絕（找不到對方、使用者拒絕、client 不支援核准表單）是 `isError: true` 的結果。
+
+| 工具 | 參數 | 回傳 | 核准 |
+|---|---|---|---|
+| `list_sessions` | 無 | `sessions`：每列 `name`、`agent`、`profile`、`cwd`、`state`（`running`、`stopped`…）、`activity`（`idle`、`busy`…）、`last`（UTC ISO 或 `null`）；讀不到 tmux 時多一個 `warning` | 不問 |
+| `send` | `session`、`message`、`wait`（預設 `false`） | `dispatch`、`state`，做完時有 `reply`，還沒送出時有 `reason`。`wait` 最多等 60 秒；沒等到的照樣留著，完成時往呼叫者的 session 送一則通知 | 問 |
+| `new_session` | `name`、`target`（`claude:<profile>`、`<profile>` 或 `codex`）、`cwd`、`message` | `dispatch`（跟 `sampan new --message` 一樣，開場訊息的派工） | 問 |
+| `dispatch_result` | `id`、`wait`（0–60 秒，預設 0） | `dispatch`、`state`、`label`、`to`、`reply`、`reason` | 不問 |
+| `cancel_dispatch` | `id` | `dispatch`、`state`（只能取消排隊中的） | 問 |
+
+核准表單寫明送給誰（名稱、profile、Claude／Codex）、從哪個 session、完整訊息，呼叫者是 sampan session 時加一句「完成後會在你的 session 送出一則通知」；表單只有一個 `message` 欄位（預設是原訊息），改了就送改過的。同意派工就算同意它的完成通知，不另外問。server 活著時每 3 秒推進這個呼叫者發出的派工。

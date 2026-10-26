@@ -8,6 +8,9 @@ recent_days = 7          # sampan restore 只接回最近幾天有動過的 sess
 # start_dir = "~/Projects"   # n（開新工作）的選目錄從這裡開始；沒寫時 ~/Projects 存在就用它，否則 ~
 # codex_auto_start = true    # 打開 sampan 畫面時，Codex 常駐服務沒在執行就在背景啟動一次；false 不啟動
 
+[mcp]
+# confirm = true             # sampan mcp serve 的 send／new_session／cancel_dispatch 每次都跳表單問你；false 不問、直接做
+
 [codex]
 enabled = true
 home = "~/.codex"        # 沒寫時用環境變數 CODEX_HOME，再沒有就是 ~/.codex

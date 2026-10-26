@@ -215,6 +215,7 @@ Every action also has a command, for scripts or when you prefer typing commands 
 | Remove a session that is not running from the registry | `sampan forget <name> [--dry-run]` (or `X` in the ui): only for a stopped or retired session (run `sampan stop` first if it is still in tmux); the ui asks first. Afterwards it prints the command to resume it by hand; the conversation files are never deleted and the previous registry stays in `history/` |
 | Send a message to a session | `sampan send <name> <message｜-> [--wait] [--timeout seconds]`, see "Sending a message to a session" |
 | List / cancel dispatches | `sampan dispatches [--all]`, `sampan dispatches cancel <id>` |
+| Let an agent send messages through tools | `sampan mcp serve` (an MCP server the agent starts), see "Letting an agent use sampan" |
 | Plugin versions per profile | `sampan plugins status` (manage them interactively with `p` in the ui) |
 | New plugin version / remove a plugin | edit `config.toml`, then `sampan plugins sync` (kept for scripts); `sampan plugins sync --prune --dry-run` previews what would be removed |
 | Account management | `sampan profile list｜add｜rename｜disable｜enable｜forget` (`add <name> [--dir D] [--codex]`), see "Account management"; `o` in the ui |
@@ -235,6 +236,15 @@ After a plugin changes version, restart that profile's Claude sessions completel
 - `sampan dispatches` lists queued dispatches and those waiting for a reply (id, from, to, state, created, reason); `--all` adds the answered, failed and cancelled ones. `sampan dispatches cancel <id>` cancels only one not sent yet.
 - Send one together with a new session: `sampan new <name> <target> <dir> --message <message｜->` (`-` reads stdin). The message is the agent's startup prompt (`claude "$(cat <file>)"`, `codex "$(cat <file>)"`), so startup prompts such as folder trust are still asked first and the message goes in once they are answered; a dispatch already in the "sent" state is recorded, and its reply is read like any other. A command typed in a terminal gets no completion notice. Without `--message` nothing changes.
 - Sending, delivery and cancelling are logged in `actions.log` (`[send]`, `[cancel]`). The scheduled `sampan save` never sends or advances a dispatch.
+
+## Letting an agent use sampan
+
+`sampan mcp serve` is a stdio MCP server: through its tools `list_sessions`, `send`, `new_session`, `dispatch_result` and `cancel_dispatch` an agent (Claude Code, Codex) sends messages to other sessions, opens new ones and reads replies, with the same rules as `sampan send`. `sampan mcp install`, which registers it in each profile, comes in the next step; until then register `sampan mcp serve` yourself with `claude mcp add` / `codex mcp add`.
+
+- By default `[mcp] confirm = true`: the tools that act (`send`, `new_session`, `cancel_dispatch`) show an approval form every time, with who it goes to, which session it comes from and the whole message; approve, decline, or edit the message first. Declined means no dispatch. A client without approval forms is refused (「這個 client 不支援核准表單；要用請在 config 設 [mcp] confirm = false」). The tools that only look never ask.
+- `send` without waiting returns the dispatch id at once; when the target is done, sampan sends one line to the caller's session (`〔sampan：<target> 已回覆派工 <id>，用 sampan 工具 dispatch_result 看內容〕`, with Enter), which the approval of the dispatch covers. `wait=true` waits at most 60 seconds and returns the reply if it came.
+- A caller that is not a session sampan manages (for example one outside tmux) can still use the tools, it only gets no completion notice; it checks with `dispatch_result`.
+- Arguments and results of the tools: see [reference](reference.md#the-tools-of-sampan-mcp-serve).
 
 ## What restore does
 

@@ -1,5 +1,6 @@
 import io
 import os
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -316,6 +317,29 @@ class CliTest(unittest.TestCase):
             self.assertEqual(cli.main(["dispatches", "cancel"]), 2)
         self.assertEqual(cc.call_count, 0)
         self.assertIn("用法", buf.getvalue())
+
+    def test_mcp_serve_identifies_the_caller_and_keeps_stdout_for_the_protocol(self):
+        from sampan.send import Caller
+        caller = Caller("x", "alice", "claude", "%1")
+        seen = {}
+
+        def fake_serve(cfg, run, stdin, stdout, *, caller):
+            seen.update(stdin=stdin, stdout=stdout, caller=caller, sys_stdout=sys.stdout)
+            return 0
+
+        proto = io.StringIO()
+        with mock.patch("sampan.mcp_server.identify_caller", return_value=caller) as ic, \
+                mock.patch("sampan.mcp_server.serve", fake_serve), mock.patch("sys.stdout", proto), \
+                mock.patch("sys.stdin", io.TextIOWrapper(io.BytesIO(b""))), \
+                mock.patch("sampan.runner.run", FakeRunner(strict=True)), mock.patch("os.getppid", return_value=4321):
+            self.assertEqual(cli.main(["mcp", "serve"]), 0)
+            restored = sys.stdout
+        self.assertEqual(ic.call_args.args[2], 4321)
+        self.assertIs(seen["caller"], caller)
+        self.assertIs(seen["stdout"], proto)
+        self.assertIsNot(seen["sys_stdout"], proto)  # a stray print cannot corrupt the protocol stream
+        self.assertIs(restored, proto)
+        self.assertIsInstance(seen["stdin"], io.BufferedIOBase)
 
     def test_dispatches_cancel_end_to_end(self):
         from sampan import dispatch

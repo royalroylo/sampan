@@ -192,6 +192,21 @@ class ConfigTest(unittest.TestCase):
             make_env(self.tmp, base % '[ui]\ncodex_auto_start = "yes"\n')
         self.assertIn("[ui] codex_auto_start", str(cm.exception))
 
+    def test_mcp_confirm_default_true(self):
+        base = 'version = 1\n[profiles.alice]\nconfig_dir = "~/.claude"\ndefault = true\n'
+        self.assertIs(make_env(self.tmp, base).mcp_confirm, True)
+
+    def test_mcp_confirm_false(self):
+        base = 'version = 1\n%s[profiles.alice]\nconfig_dir = "~/.claude"\ndefault = true\n'
+        self.assertIs(make_env(self.tmp, base % '[mcp]\nconfirm = false\n').mcp_confirm, False)
+
+    def test_mcp_confirm_must_be_bool(self):
+        base = 'version = 1\n%s[profiles.alice]\nconfig_dir = "~/.claude"\ndefault = true\n'
+        for bad in ('"no"', '0'):
+            with self.subTest(bad=bad), self.assertRaises(ConfigError) as cm:
+                make_env(self.tmp, base % f'[mcp]\nconfirm = {bad}\n')
+            self.assertIn("[mcp] confirm", str(cm.exception))
+
     def test_codex_home_from_env_and_config(self):
         home = self.tmp / "home"
         base = 'version = 1\n%s[profiles.alice]\nconfig_dir = "~/.claude"\ndefault = true\n'

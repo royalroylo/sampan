@@ -70,6 +70,8 @@ def build_parser():
     ds.add_argument("action", nargs="?", choices=["cancel"], help=argparse.SUPPRESS)
     ds.add_argument("id", nargs="?", help=argparse.SUPPRESS)
     ds.add_argument("--all", action="store_true", help="也列已完成、失敗、取消的")
+    mc = sub.add_parser("mcp", help="MCP server：讓 agent 用工具傳訊息給其他 session").add_subparsers(dest="action", required=True)
+    mc.add_parser("serve", help="stdio MCP server（由 Claude Code／Codex 啟動，不是給人直接跑的）")
     sub.add_parser("status", help="登記表與實際狀態的差異、最後活動、context 用量")
     sv = sub.add_parser("save", help="記錄每個 tmux session 的 agent、profile 與對話 id")
     sv.add_argument("--quiet", action="store_true", help="沒有警告時不輸出（給 launchd 用）")
@@ -392,6 +394,15 @@ def _dispatch(cfg, args):
                 return 2
             return cmd_cancel(cfg, out, args.id)
         return cmd_dispatches(cfg, out, all_=args.all)
+    if cmd == "mcp":
+        from . import mcp_server
+        caller = mcp_server.identify_caller(cfg, run, os.getppid())
+        proto = sys.stdout
+        sys.stdout = sys.stderr  # stdout carries only protocol messages: anything printed by accident goes to stderr
+        try:
+            return mcp_server.serve(cfg, run, sys.stdin.buffer, proto, caller=caller)
+        finally:
+            sys.stdout = proto
     if cmd == "status":
         from .status import cmd_status
         return cmd_status(cfg, run, out)

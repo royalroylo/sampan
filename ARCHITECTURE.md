@@ -24,6 +24,7 @@ What does not happen: nothing in detection, the registry or the leaf modules imp
      (answering startup prompts through a `Relay`), `deliver.py` (paste a dispatch into an empty Claude prompt, or `codex queue`), `send.py` (submit a dispatch, advance it queued → sent → done / failed inside the dispatch lock, read the reply, notify the caller; `sampan send` / `sampan dispatches`), `plugins.py` (read-only status and `sync` for scripts), `plugin_view.py` / `marketplace_view.py` (what the plugin screen shows: rows, cards, save previews; pure), `plugin_apply.py` (runs the `claude plugin` commands of a save, backs up and edits the config, restarts the sessions of chosen profiles), `config_edit.py` (byte-preserving edits of `config.toml`), `actionlog.py` (appends action messages to `actions.log`), `profile_ops.py` (profile list / rename / disable / enable / forget / add and the `[codex]` conversion; edits `config.toml` and the registry), `statusline_setup.py` (wraps / unwraps the `statusLine` command in a profile's `settings.json`), `hook.py`, `launchd.py`, `init.py`, `update.py`.
 4. **Interfaces**
    - `cli.py` (argparse and dispatch, exit codes), `ui/` (curses screen), `doctor.py` (diagnostics).
+   - `mcp_server.py` is `sampan mcp serve`: newline-delimited JSON-RPC over stdio (stdout carries only protocol messages), the five tools on top of `send.py` and `session_run.cmd_new`, elicitation approval (`[mcp] confirm`), who the caller is (`identify_caller`: process tree → tmux pane → registry row), and a background thread advancing the caller's dispatches.
    - `usage.py` is the quota reader plus the `sampan statusline` command that Claude Code runs on every refresh (light imports only): it stores the status-line JSON's rate limits and reads Codex's from the newest rollout; the ui shows them as account lines.
    - `ui/` is split into `text`, `state`, `cards`, `render` (pure), `screen` (the thin curses adapter),
      `actions` (the main loop and question flows), `dirpick`, and `plugin_state` / `plugin_actions` (the plugin
@@ -52,7 +53,7 @@ callable (`runner.py`). That is what makes the suite fast and safe: tests pass a
 
 | Path | Content |
 |---|---|
-| `~/.config/sampan/config.toml` (`SAMPAN_CONFIG`) | profiles, marketplaces, plugin lists, `[restore]`, `[ui]`, `[codex]` (profiles carry `agent` and `disabled`) |
+| `~/.config/sampan/config.toml` (`SAMPAN_CONFIG`) | profiles, marketplaces, plugin lists, `[restore]`, `[ui]`, `[mcp]`, `[codex]` (profiles carry `agent` and `disabled`) |
 | `~/.local/state/sampan/` (`SAMPAN_STATE_DIR`) | state directory |
 | `registry.json` | sessions: tmux name, agent, profile, conversation id, cwd, state, last seen (UTC) |
 | `dispatches.json` (`dispatches.lock`) | dispatch records: who sent what to which session, state queued / sent / done / failed / cancelled, reply; finished ones pruned after 7 days, newest 200 kept |

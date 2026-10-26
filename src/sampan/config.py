@@ -98,6 +98,7 @@ class Config:
     all_profiles: dict  # every profile in config-file order, disabled and Codex ones included
     implicit_codex: bool  # the Codex profile was filled in from [codex] / defaults, not written in the file
     codex_auto_start: bool = True  # [ui] codex_auto_start: start the Codex daemon when the UI opens
+    mcp_confirm: bool = True  # [mcp] confirm: the MCP tools that act ask the user (elicitation) every time
 
     @property
     def codex_profiles(self):
@@ -241,6 +242,10 @@ def load_config(path, *, home=None, state_dir=None):
     codex_auto_start = ui.get("codex_auto_start", True)
     if not isinstance(codex_auto_start, bool):
         raise ConfigError(f"[ui] codex_auto_start 要是 true 或 false，目前是 {codex_auto_start!r}")
+    mcp = table(data.get("mcp", {}), "[mcp]")
+    mcp_confirm = mcp.get("confirm", True)
+    if not isinstance(mcp_confirm, bool):
+        raise ConfigError(f"[mcp] confirm 要是 true 或 false，目前是 {mcp_confirm!r}")
     return Config(
         version=1,
         marketplaces=marketplaces,
@@ -254,4 +259,5 @@ def load_config(path, *, home=None, state_dir=None):
         all_profiles=all_profiles,
         implicit_codex=implicit_codex,
         codex_auto_start=codex_auto_start,
+        mcp_confirm=mcp_confirm,
     )

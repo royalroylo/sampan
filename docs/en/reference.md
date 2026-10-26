@@ -12,6 +12,7 @@ For migration or conversion scripts. A version sampan does not understand is nev
 | `[restore] recent_days` | non-negative integer, default 7; `restore` pre-checks only sessions active within this many days |
 | `[ui] start_dir` | path where the directory chooser of `n` (start new work) starts; default `~/Projects` if it exists, else `~` |
 | `[ui] codex_auto_start` | boolean, default `true`. When the `sampan` screen opens and the Codex daemon is not running, run `codex remote-control start` once in the background; `false` never starts it |
+| `[mcp] confirm` | boolean, default `true`. The `send`, `new_session` and `cancel_dispatch` tools of `sampan mcp serve` ask you every time through an MCP approval form (elicitation): approve, decline, or edit the message first; a client that does not declare elicitation is refused, never skipped. `false` never asks and just acts (still logged in `actions.log`, still cancellable). The read-only `list_sessions` and `dispatch_result` never ask |
 | `[codex] enabled` | boolean, default `true`. With no `agent = "codex"` profile, `[codex]` acts in memory as an implicit Codex profile, converted to `[profiles.<name>]` by the first `sampan profile rename / disable / enable / forget / add --codex`; once any `agent = "codex"` profile exists, all of `[codex]` is ignored; `false` means Codex is off (no Codex profile), and forgetting the last Codex profile writes it |
 | `[codex] home` | Codex folder; default `$CODEX_HOME`, else `~/.codex` (only used for the implicit Codex profile) |
 | `[marketplaces] <name> = "owner/repo"` | plugin source: GitHub `owner/repo` or a git URL (`https://…`, `ssh://…`, `git@host:path`, e.g. a self-hosted Gitea). Local directories are not supported |
@@ -76,3 +77,17 @@ A dispatch made by `sampan new --message` starts as `sent` (`sent_at` is when th
 How the state moves: `queued` → `sent` (delivered, `sent_at`) → `done` (`reply` is the reply to this message) or `failed` (`reason` says why); `cancelled` only comes from `queued` (`sampan dispatches cancel`). `done_at` is when it finished. Every step is taken inside the lock (read the latest, decide, write), so one dispatch is never delivered twice; if Enter fails after the paste (the text is already in the target's box) it becomes `failed` and is never pasted again (the same for the completion notice: it counts as notified, with the `reason` saying so). Exit codes of `sampan send`: 0 sent (`--wait`: answered), 1 failed, 2 refused or the file cannot be read, 124 `--wait` timed out (the dispatch stays). The completion notice (`notify`) goes to the caller's session through `outbox/<id>-notice.txt`.
 
 A file that cannot be read is never overwritten. Finished entries (`done`, `failed`, `cancelled`) older than 7 days are dropped, and only the newest 200 are kept. `outbox/<id>.txt` holds the exact text to deliver (mode 600).
+
+## The tools of `sampan mcp serve`
+
+A stdio MCP server (one JSON-RPC 2.0 message per line; protocol version `2025-06-18`, or `2025-03-26` when the client asks for it). Claude Code or Codex starts it; the caller is found from the server's parent processes: the tmux pane of the nearest claude / codex process, then the registry row of that tmux session with the same agent. When that does not match, the caller is an "unregistered session": the tools still work, it only gets no completion notice. Tool results are JSON text; a refusal (unknown target, declined by the user, a client without approval forms) is a result with `isError: true`.
+
+| Tool | Arguments | Returns | Approval |
+|---|---|---|---|
+| `list_sessions` | none | `sessions`: each with `name`, `agent`, `profile`, `cwd`, `state` (`running`, `stopped`…), `activity` (`idle`, `busy`…), `last` (UTC ISO or `null`); plus `warning` when tmux cannot be read | never asks |
+| `send` | `session`, `message`, `wait` (default `false`) | `dispatch`, `state`, `reply` once done, `reason` while not sent yet. `wait` waits at most 60 seconds; a dispatch not finished by then stays, and a notice goes to the caller's session when it is done | asks |
+| `new_session` | `name`, `target` (`claude:<profile>`, `<profile>` or `codex`), `cwd`, `message` | `dispatch` (the startup-message dispatch, as with `sampan new --message`) | asks |
+| `dispatch_result` | `id`, `wait` (0–60 seconds, default 0) | `dispatch`, `state`, `label`, `to`, `reply`, `reason` | never asks |
+| `cancel_dispatch` | `id` | `dispatch`, `state` (only a queued one can be cancelled) | asks |
+
+The approval form shows who it goes to (name, profile, Claude / Codex), which session it comes from and the whole message, plus 「完成後會在你的 session 送出一則通知」 (a notice will be sent to your session when it is done) when the caller is a sampan session; its one field `message` defaults to the original message, and an edited one is what gets sent. Approving a dispatch approves its completion notice; there is no second question. While the server runs it advances this caller's dispatches every 3 seconds.

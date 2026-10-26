@@ -67,7 +67,8 @@ def _preview(message):
     return line if len(line) <= LOG_PREVIEW else line[:LOG_PREVIEW] + "…"
 
 
-def _target_problem(row, to):
+def target_problem(row, to):
+    """Why `to` (its StatusRow, or None) cannot be sent to, or None."""
     if row is None or row.state in (State.UNREGISTERED, State.NO_AGENT):
         return f"找不到 session「{to}」：不在 sampan 登記表裡（sampan status 看名稱）"
     if row.state != State.RUNNING:
@@ -85,7 +86,7 @@ def submit(cfg, run, caller, to, message, *, notify, now, snapshot_fn=None, stat
         row = _rows(cfg, run, snapshot_fn, status_fn).get(to)
     except RegistryError as e:
         return str(e)
-    problem = _target_problem(row, to)
+    problem = target_problem(row, to)
     if problem:
         return problem
     r = _create(cfg, caller, to, row.agent, row.profile, message, "queued", now, notify=notify,
@@ -295,6 +296,18 @@ def notify_caller(cfg, run, d, sleep, *, rows=None, snapshot_fn=None, status_fn=
     d.notified = True
     actionlog.append(cfg, "send", [f"派工 {d.id}：已通知 {d.from_name}"])
     return True
+
+
+def set_notify(cfg, did, on):
+    """Turn the completion notice of a dispatch from a sampan session on or off (an MCP tool that waited: off while
+    it waits, on again when it gives up; off once the caller has read the reply). Never for one already notified."""
+    try:
+        with dispatch.transaction(cfg.state_dir) as items:
+            d = next((x for x in items if x.id == did), None)
+            if d is not None and not d.notified and d.from_name != TERMINAL_NAME:
+                d.notify = bool(on)
+    except (dispatch.DispatchError, OSError):
+        pass
 
 
 def pending(cfg):

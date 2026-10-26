@@ -191,6 +191,7 @@ Claude Code 只在狀態列指令的輸入裡提供 5h／週額度，所以要�
 | 把沒在跑的 session 從登記表移除 | `sampan forget <名稱> [--dry-run]`（或 ui 按 X）：只限已停止或 retired 的（還在 tmux 裡的先 `sampan stop`）；ui 裡會先問確定。移除後印出手動接回的指令；對話紀錄永遠不刪，移除前的登記表留在 `history/` |
 | 傳訊息給一個 session | `sampan send <名稱> <訊息｜-> [--wait] [--timeout 秒]`，見「傳訊息給 session」 |
 | 看／取消派工 | `sampan dispatches [--all]`、`sampan dispatches cancel <編號>` |
+| 讓 agent 用工具傳訊息 | `sampan mcp serve`（MCP server，由 agent 啟動），見「讓 agent 用 sampan」 |
 | 看各 profile 的 plugin 版本 | `sampan plugins status`（互動管理在 ui 按 `p`） |
 | plugin 有新版／拿掉 plugin | 改 `config.toml` 後 `sampan plugins sync`（給腳本用，仍然可用）；`sampan plugins sync --prune --dry-run` 先看要移除什麼 |
 | 帳號管理 | `sampan profile list｜add｜rename｜disable｜enable｜forget`（`add <名稱> [--dir D] [--codex]`），見「帳號管理」；ui 裡按 `o` |
@@ -211,6 +212,15 @@ Claude Code 只在狀態列指令的輸入裡提供 5h／週額度，所以要�
 - `sampan dispatches` 列排隊中與等回覆的派工（編號、從誰、給誰、狀態、建立時間、原因）；`--all` 連已回覆、失敗、取消的一起列。`sampan dispatches cancel <編號>` 只能取消還沒送出的。
 - 開新 session 時一起送：`sampan new <名稱> <目標> <目錄> --message <訊息｜->`（`-` 從 stdin 讀）。訊息當作 agent 啟動時的第一個 prompt（`claude "$(cat <檔>)"`、`codex "$(cat <檔>)"`），所以資料夾信任等啟動提示照常先問，答完才送出；同時建一筆狀態直接是「已送出」的派工，之後照一般派工看回覆。從終端機下指令不會收到完成通知。沒帶 `--message` 時行為跟以前完全一樣。
 - 送出、送達、取消都記在 `actions.log`（`[send]`、`[cancel]`）。排程的 `sampan save` 永遠不送、不推進派工。
+
+## 讓 agent 用 sampan
+
+`sampan mcp serve` 是一個 stdio MCP server：agent（Claude Code、Codex）透過它的工具 `list_sessions`、`send`、`new_session`、`dispatch_result`、`cancel_dispatch` 傳訊息給其他 session、開新 session、看回覆，規則跟 `sampan send` 一樣。登記到各 profile 的指令 `sampan mcp install` 在下一步加入；在那之前要自己用 `claude mcp add`／`codex mcp add` 登記 `sampan mcp serve`。
+
+- 預設 `[mcp] confirm = true`：會動作的工具（`send`、`new_session`、`cancel_dispatch`）每次都跳核准表單，寫明送給誰、從哪個 session、完整訊息，可以同意、拒絕或改訊息再送；拒絕就不建派工。呼叫端不支援核准表單時直接拒絕（「這個 client 不支援核准表單；要用請在 config 設 [mcp] confirm = false」）。看狀態的工具永遠不問。
+- `send` 不等的話馬上回派工編號；對方做完時 sampan 往呼叫者的 session 送一行通知（`〔sampan：<對方> 已回覆派工 <編號>，用 sampan 工具 dispatch_result 看內容〕`，會按 Enter），同意派工就算同意這則通知。`wait=true` 最多等 60 秒，等到就連回覆一起回。
+- 呼叫者不是 sampan 管的 session（例如不在 tmux 裡）→ 工具照樣能用，只是收不到完成通知，自己用 `dispatch_result` 查。
+- 工具的參數與回傳見 [reference](reference.md#sampan-mcp-serve-的工具)。
 
 ## restore 的規則
 
