@@ -72,7 +72,7 @@ submit() {
     printf '%s\n' "{\"type\":\"assistant\",\"timestamp\":\"$now\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"OK $n\"}],\"usage\":{\"input_tokens\":1300,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}}}" >> "$transcript"
     setstatus idle
 }
-stty raw -echo 2>/dev/null
+stty -icanon -echo -icrnl -inlcr -isig 2>/dev/null  # not "raw": that drops the CR of each output newline
 draw
 inpaste=""
 while IFS= read -rsN1 ch; do
