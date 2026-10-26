@@ -28,6 +28,7 @@ def build_parser():
     nw.add_argument("target", help="claude:<profile>、<profile>（當成 claude）或 codex")
     nw.add_argument("cwd")
     nw.add_argument("--dry-run", action="store_true")
+    nw.add_argument("--folder", help="放進這個資料夾（沒有就建；用 / 分層）；開成功才記")
     nw.add_argument("--message", help="開場訊息，當作 agent 啟動時的第一個 prompt（會建一筆派工）；- 從 stdin 讀")
     rs = sub.add_parser("restore", help="挑選並逐一接回登記表裡的原對話（不開新對話、不送訊息）")
     rs.add_argument("names", nargs="*", help="只看這些 session（仍會先確認）")
@@ -72,6 +73,11 @@ def build_parser():
     ds.add_argument("id", nargs="?", help=argparse.SUPPRESS)
     ds.add_argument("--all", action="store_true", help="也列已完成、失敗、取消的")
     ds.add_argument("--wait", type=int, default=0, metavar="秒", help="show：最多等幾秒等它做完（逾時結束碼 124）")
+    fd = sub.add_parser("folder", usage="sampan folder list | add <路徑> | rename <路徑> <新名稱> | rm <路徑> | move <名稱或路徑>... <目的|/>",
+                        help="session 資料夾：list 看樹、add 建、rename 改名、rm 刪（裡面的搬上一層）、move 搬（/ 是最外層）；只動 folders.json，不動任何 session")
+    fd.add_argument("action", choices=["list", "add", "rename", "rm", "move"])
+    fd.add_argument("args", nargs="*", help=argparse.SUPPRESS)
+    fd.add_argument("--merge", action="store_true", help="同名的資料夾已存在時合併進去")
     mc = sub.add_parser("mcp", help="MCP server：讓 agent 用工具傳訊息給其他 session").add_subparsers(dest="action", required=True)
     mc.add_parser("serve", help="stdio MCP server（由 Claude Code／Codex 啟動，不是給人直接跑的）")
     for verb, help_ in (("install", "把 sampan MCP 裝進各啟用的 Claude profile 與 Codex"), ("uninstall", "從各 profile 與 Codex 移除 sampan MCP")):
@@ -405,6 +411,9 @@ def _dispatch(cfg, args):
                 return cmd_show(cfg, run, out, args.id, wait=args.wait)
             return cmd_cancel(cfg, out, args.id)
         return cmd_dispatches(cfg, out, all_=args.all)
+    if cmd == "folder":
+        from .folder_cmd import cmd_folder
+        return cmd_folder(cfg, out, args.action, list(args.args), merge=args.merge)
     if cmd == "mcp" and args.action in ("install", "uninstall"):
         from . import mcp_install
         from .doctor import current_sampan
@@ -433,6 +442,8 @@ def _dispatch(cfg, args):
         if cmd == "new":
             on_prompt, want = _prompt_fn()
             extra = {}
+            if args.folder is not None:
+                extra["folder"] = args.folder
             if args.message is not None:
                 from .send import command_caller
                 extra["message"] = sys.stdin.read() if args.message == "-" else args.message

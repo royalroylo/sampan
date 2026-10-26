@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from sampan import actionlog, deliver, dispatch
+from sampan import actionlog, deliver, dispatch, folders
 from sampan.registry import Row, load_rows, write_rows
 from sampan.send import Caller
 from sampan.session_run import check_new, cmd_forget, cmd_new, cmd_rename, cmd_set_state
@@ -429,6 +429,71 @@ class ForgetTest(Base):
         self.assertEqual(self.cfg.registry_path.read_text(), before)
         self.assertIn("u", self.msgs[0])
         self.assertNotIn("✔", self.msgs[0])
+
+
+class FolderSyncTest(Base):
+    def setUp(self):
+        super().setUp()
+        self.live = set()
+        self.registry([Row("a1", "claude", "alice", A, str(self.cwd), "active", "t", "srv", None),
+                       Row("u", "claude", "alice", B, str(self.cwd), "retired", "t", "srv", None)])
+        folders.edit(self.cfg.state_dir, lambda t: (folders.place_session(t, "a1", "客戶"),
+                                                    folders.place_session(t, "u", "客戶")))
+
+    def runner(self):
+        r = super().runner()
+        r.on(["tmux", "-u", "has-session"], lambda a: cp(rc=0 if a[-1].lstrip("=") in self.live else 1))
+        r.on(["tmux", "-u", "rename-session"], cp())
+        return r
+
+    def test_rename_syncs_folder(self):
+        self.assertEqual(cmd_rename(self.cfg, self.runner(), self.msgs.append, "a1", "a2"), 0)
+        self.assertEqual(folders.load(self.cfg.state_dir).sessions, {"a2": "客戶", "u": "客戶"})
+
+    def test_forget_syncs_folder(self):
+        self.assertEqual(cmd_forget(self.cfg, self.runner(), self.msgs.append, "u"), 0)
+        self.assertEqual(folders.load(self.cfg.state_dir).sessions, {"a1": "客戶"})
+
+    def test_forget_dry_run_keeps_folder(self):
+        cmd_forget(self.cfg, self.runner(), self.msgs.append, "u", dry_run=True)
+        self.assertEqual(folders.load(self.cfg.state_dir).sessions, {"a1": "客戶", "u": "客戶"})
+
+    def test_rename_still_ok_when_folders_broken(self):
+        (self.cfg.state_dir / "folders.json").write_text("{")
+        self.assertEqual(cmd_rename(self.cfg, self.runner(), self.msgs.append, "a1", "a2"), 0)
+        self.assertEqual(sum(m.startswith("⚠ 資料夾設定沒同步") for m in self.msgs), 1)
+        self.assertEqual((self.cfg.state_dir / "folders.json").read_text(), "{")
+        self.assertIn("a2", {x.tmux for x in load_rows(self.cfg.registry_path)})
+
+    def test_new_with_folder_places_after_success(self):
+        rc = cmd_new(self.cfg, self.runner(), self.msgs.append, "n1", "claude:work", str(self.cwd), folder="開發/甲",
+                     sleep=lambda _: None, timeout=1, uuid4=lambda: A, wait=False)
+        self.assertEqual(rc, 0)
+        t = folders.load(self.cfg.state_dir)
+        self.assertEqual(t.sessions["n1"], "開發/甲")
+        self.assertIn("開發", t.folders)
+
+    def test_new_failure_does_not_write_folder(self):
+        before = (self.cfg.state_dir / "folders.json").read_bytes()
+        rc = cmd_new(self.cfg, self.runner(), self.msgs.append, "n1", "claude:work", str(self.cwd / "nope"),
+                     folder="開發", sleep=lambda _: None, timeout=1)
+        self.assertEqual(rc, 2)
+        rc = cmd_new(self.cfg, self.runner(), self.msgs.append, "n2", "claude:work", str(self.cwd), folder="開發",
+                     sleep=lambda _: None, timeout=1, uuid4=lambda: A)  # no session file: rc 1
+        self.assertEqual(rc, 1)
+        self.assertEqual((self.cfg.state_dir / "folders.json").read_bytes(), before)
+
+    def test_new_with_bad_folder_refused_before_anything_starts(self):
+        r = self.runner()
+        self.assertEqual(cmd_new(self.cfg, r, self.msgs.append, "n1", "claude:work", str(self.cwd), folder="a//b"), 2)
+        self.assertEqual(r.called(["tmux", "-u", "new-session"]), [])
+
+    def test_new_folder_write_failure_only_warns(self):
+        (self.cfg.state_dir / "folders.json").write_text("{")
+        rc = cmd_new(self.cfg, self.runner(), self.msgs.append, "n1", "claude:work", str(self.cwd), folder="開發",
+                     sleep=lambda _: None, timeout=1, uuid4=lambda: A, wait=False)
+        self.assertEqual(rc, 0)
+        self.assertTrue(any(m.startswith("⚠ 資料夾設定沒同步") for m in self.msgs))
 
 
 class RenameTest(Base):

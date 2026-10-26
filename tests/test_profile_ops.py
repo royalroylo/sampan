@@ -453,8 +453,10 @@ class ForgetTest(Base):
                              Row("w1", "claude", "work", A, "/c d", "active"),
                              Row("w2", "claude", "work", "", "/c", "retired"),
                              Row("cx", "codex", "cx", B, "/c", "active")])
-        rc, _ = self.forget("work")
+        with mock.patch.object(profile_ops.folder_cmd, "sync_session") as sync:
+            rc, _ = self.forget("work")
         self.assertEqual(rc, 0)
+        self.assertEqual(sorted(c.args[2:] for c in sync.call_args_list), [("forget", "w1"), ("forget", "w2")])
         cfg = self.reload()
         self.assertNotIn("work", cfg.all_profiles)
         self.assertNotIn("[profiles.work]", self.cfg.path.read_text())

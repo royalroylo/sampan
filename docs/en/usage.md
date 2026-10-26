@@ -214,6 +214,7 @@ Every action also has a command, for scripts or when you prefer typing commands 
 | Move a session to another directory | `sampan move <name> <dir>` (or `m` in the ui): ends the agent, resumes the same conversation in the new directory, trusts the new directory automatically (only when the path shown in the prompt is exactly the new directory) and updates the registry. A missing directory is created; busy sessions, worktrees and the pane you are in are left alone |
 | Never resume this one again | `sampan retire <name>` (undo: `sampan activate <name>`); `sampan restore <name>` on a retired session says "<name> 是 retired；先 sampan activate <name>" |
 | Remove a session that is not running from the registry | `sampan forget <name> [--dry-run]` (or `X` in the ui): only for a stopped or retired session (run `sampan stop` first if it is still in tmux); the ui asks first. Afterwards it prints the command to resume it by hand; the conversation files are never deleted and the previous registry stays in `history/` |
+| Organise sessions in folders | `sampan folder list｜add <path>｜rename <path> <new name>｜rm <path>｜move <name or path>... <destination｜/>`, see "Folders" |
 | Send a message to a session | `sampan send <name> <message｜-> [--wait] [--timeout seconds]`, see "Sending a message to a session" |
 | List / cancel dispatches | `sampan dispatches [--all]`, `sampan dispatches show <id> [--wait seconds]`, `sampan dispatches cancel <id>` |
 | Let an agent send messages through tools | `sampan mcp serve` (an MCP server the agent starts), see "Letting an agent use sampan" |
@@ -223,6 +224,18 @@ Every action also has a command, for scripts or when you prefer typing commands 
 | Let sampan see Claude's quota | `sampan statusline install｜uninstall [--profile P] [--yes]`, see "Account management" |
 
 After a plugin changes version, restart that profile's Claude sessions completely for it to take effect (stop, then restore).
+
+## Folders
+
+Sessions can be put in folders (levels separated by `/`, such as `客戶/甲`). Folders only organise the display: creating, renaming, deleting or moving a folder never stops, forgets or changes any session, and never touches the registry; the data lives in `folders.json` in the state folder (format in the reference).
+
+- `sampan folder list`: prints the tree, a folder as `▾ name/` (`▸` when folded) with its sessions indented below; a session in no folder is at the top level.
+- `sampan folder add 客戶/甲`: creates the folder and any missing parents.
+- `sampan folder rename 客戶/甲 乙 [--merge]`: changes the last segment only; a same-named folder at that level is merged into only with `--merge`.
+- `sampan folder rm 客戶`: deletes the folder; its sessions and subfolders move up one level (no question, and no session is touched).
+- `sampan folder move s1 客戶/甲 開發 [--merge]`: the last argument is the destination (`/` is the top level), the others are session names or folder paths; a folder cannot be moved into itself.
+- `sampan new <name> <target> <dir> --folder 開發`: only once the session started, puts it in the folder (created if missing).
+- `sampan rename`, `sampan forget` and `sampan profile forget` update the names in the folders too; when `folders.json` is broken they still finish and only add a warning line. With a broken `folders.json` every folder command is refused (exit 2) and the file is never overwritten; fix or delete it and retry.
 
 ## Sending a message to a session
 

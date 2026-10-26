@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import actionlog
+from . import actionlog, folder_cmd, folders
 from .claude_state import move_transcript, transcript_carry, transcript_problem
 from .clock import now_iso
 from .codex_state import _is_codex, codex_pid_in_pane, find_rollout
@@ -129,8 +129,27 @@ def check_new(cfg, run, name, target, cwd):
     return agent, profile, resolved
 
 
-def cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.sleep, timeout=15, uuid4=uuid.uuid4,
-            on_prompt=None, wait=True, message=None, caller=None, notify=None):
+def cmd_new(cfg, run, out, name, target, cwd, *, folder=None, **kw):
+    """cmd_new_session, then (only when it returned 0 and was not a dry run) put the session in the folder `folder`
+    of folders.json, creating it. A failed write is only a warning; the return code is the session's."""
+    if folder is not None:
+        folder = folder.strip().strip("/")
+        try:
+            folders.add(folders.Tree(), folder)
+        except folders.FoldersError as e:
+            out(f"❌ {e}")
+            return 2
+    rc = _cmd_new(cfg, run, out, name, target, cwd, **kw)
+    if rc == 0 and folder and not kw.get("dry_run"):
+        try:
+            folders.edit(cfg.state_dir, lambda t: folders.place_session(t, name, folder))
+        except Exception as e:
+            out(f"⚠ 資料夾設定沒同步：{e}")
+    return rc
+
+
+def _cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.sleep, timeout=15, uuid4=uuid.uuid4,
+             on_prompt=None, wait=True, message=None, caller=None, notify=None):
     """target: claude:<profile>, <profile> (taken as claude) or codex.
 
     wait=False: return as soon as the launch command is sent (the ui's n then goes straight into tmux and the user answers the startup menu there). A Claude row is
@@ -266,6 +285,8 @@ def cmd_rename(cfg, run, out, old, new):
             row.tmux = new
             write_rows(cfg.registry_path, sorted(rows, key=lambda r: r.tmux), now_iso(), cfg.history_dir)
     out(f"{old} → {new}" + ("" if live else "（tmux session 沒在執行，只改登記表）"))
+    if row is not None:
+        folder_cmd.sync_session(cfg, out, "rename", old, new)  # after the lock: the registry lock is not reentrant
     return 0
 
 
@@ -296,6 +317,8 @@ def cmd_forget(cfg, run, out, name, *, dry_run=False):
         else:
             write_rows(cfg.registry_path, [r for r in rows if r is not row], now_iso(), cfg.history_dir)
             out(f"✔ 已從登記表移除 {name}")
+    if not dry_run:
+        folder_cmd.sync_session(cfg, out, "forget", name)  # after the lock: the registry lock is not reentrant
     try:
         out(f"  對話還在：{launch_line(cfg, row.agent, row.profile, resume=row.session_id, cwd=row.cwd)}")
     except (ValueError, KeyError):

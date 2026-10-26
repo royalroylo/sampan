@@ -56,6 +56,21 @@ next write. Before a rewrite the previous file is copied to `history/registry-<t
 Times (`saved_at`, `seen_at`, the history file names) are written in UTC (`+00:00`) and converted to local time only for
 display; history files left by older versions may be named in local time.
 
+## `folders.json` (`version = 1`, in the state folder)
+
+Session folders, used only by the screen and `sampan folder`; `save`, `restore` and the reboot resume neither read nor write it, and the registry holds no folders. The format is `{"version": 1, "folders": {"客戶/甲": {"collapsed": false}}, "sessions": {"<name>": "客戶/甲"}}`: the keys of `folders` are full paths (levels separated by `/`, no empty segment, no control character) and `collapsed` is whether the screen shows it folded; `sessions` maps a session name to a folder path, and a session not listed sits at the top level. Reads and writes take the registry lock; the file is mode 600. A session the registry does not have is not listed, and parents missing from `folders` are added automatically. If the file cannot be read, is not JSON or its `version` is not 1, the list shows every session flat, every folder operation exits 2 with an explanation, and the bad file is never overwritten.
+
+| Command | Effect |
+|---|---|
+| `sampan folder list` | Prints the tree: two spaces per level, a folder as `▸ name/` (folded) or `▾ name/`, with its sessions below |
+| `sampan folder add <path>` | Creates the folder (and any missing parents) |
+| `sampan folder rename <path> <new name> [--merge]` | Changes the last segment only; a same-named folder at that level needs `--merge` to be merged into, otherwise exit 2 |
+| `sampan folder rm <path>` | Deletes the folder; its sessions and subfolders move up one level, no session is stopped or forgotten |
+| `sampan folder move <name or path>... <destination｜/> [--merge]` | Moves sessions or folders; `/` is the top level; a source that is a path in `folders.json` is a folder, otherwise it must be a session in the registry, else exit 2 |
+| `sampan new … --folder <path>` | Only after the session started (exit 0) puts it in the folder (created if missing); a failed write is only a warning |
+
+`sampan rename`, `sampan forget` and `sampan profile forget` keep `folders.json` in step; a failed sync only adds a line `⚠ 資料夾設定沒同步：…` and does not affect the action.
+
 ## `dispatches.json` (`version = 1`, in the state folder)
 
 Dispatch records: one message sent from a caller session (or the terminal) to a target session. Reads and writes hold `dispatches.lock` in the same folder; the file is 600 and the folder 700. The format is `{"version": 1, "dispatches": [...]}`, each entry:

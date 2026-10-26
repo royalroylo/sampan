@@ -99,6 +99,24 @@ class CliTest(unittest.TestCase):
             for m in (rs, nw):
                 self.assertEqual(m.call_args.kwargs["on_prompt"] is not None, tty)
 
+    def test_folder_commands_dispatch(self):
+        with mock.patch("sampan.folder_cmd.cmd_folder", return_value=0) as fc:
+            self.assertEqual(cli.main(["folder", "add", "客戶/甲"]), 0)
+            self.assertEqual(fc.call_args.args[2:], ("add", ["客戶/甲"]))
+            self.assertFalse(fc.call_args.kwargs["merge"])
+            cli.main(["folder", "move", "a", "b", "/", "--merge"])
+            self.assertEqual(fc.call_args.args[2:], ("move", ["a", "b", "/"]))
+            self.assertTrue(fc.call_args.kwargs["merge"])
+            cli.main(["folder", "list"])
+            self.assertEqual(fc.call_args.args[2:], ("list", []))
+
+    def test_new_passes_folder_only_when_given(self):
+        with mock.patch("sampan.session_run.cmd_new", return_value=0) as nw:
+            cli.main(["new", "x", "claude:alice", "/tmp", "--folder", "開發"])
+            self.assertEqual(nw.call_args.kwargs["folder"], "開發")
+            cli.main(["new", "x", "claude:alice", "/tmp"])
+            self.assertNotIn("folder", nw.call_args.kwargs)
+
     def test_going_in_from_a_cli_prompt_attaches(self):
         from sampan.prompts import ATTACH
 

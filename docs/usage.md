@@ -190,6 +190,7 @@ Claude Code 只在狀態列指令的輸入裡提供 5h／週額度，所以要�
 | session 換到別的工作目錄 | `sampan move <名稱> <目錄>`（或 ui 按 m）：結束 agent、在新目錄接回同一段對話、自動信任新目錄（只在提示顯示的路徑就是新目錄時）、更新登記表。目錄不存在會建立；忙碌中、worktree、自己的 pane 不動 |
 | 某個 session 以後不用重開 | `sampan retire <名稱>`（恢復：`sampan activate <名稱>`）；對 retired 的 session 打 `sampan restore <名稱>` 會說「<名稱> 是 retired；先 sampan activate <名稱>」 |
 | 把沒在跑的 session 從登記表移除 | `sampan forget <名稱> [--dry-run]`（或 ui 按 X）：只限已停止或 retired 的（還在 tmux 裡的先 `sampan stop`）；ui 裡會先問確定。移除後印出手動接回的指令；對話紀錄永遠不刪，移除前的登記表留在 `history/` |
+| 整理 session 的資料夾 | `sampan folder list｜add <路徑>｜rename <路徑> <新名稱>｜rm <路徑>｜move <名稱或路徑>... <目的｜/>`，見「資料夾」 |
 | 傳訊息給一個 session | `sampan send <名稱> <訊息｜-> [--wait] [--timeout 秒]`，見「傳訊息給 session」 |
 | 看／取消派工 | `sampan dispatches [--all]`、`sampan dispatches show <編號> [--wait 秒]`、`sampan dispatches cancel <編號>` |
 | 讓 agent 用工具傳訊息 | `sampan mcp serve`（MCP server，由 agent 啟動），見「讓 agent 用 sampan」 |
@@ -199,6 +200,18 @@ Claude Code 只在狀態列指令的輸入裡提供 5h／週額度，所以要�
 | 讓 sampan 看到 Claude 額度 | `sampan statusline install｜uninstall [--profile P] [--yes]`，見「帳號管理」 |
 
 多數會動到 session 的指令都有 `--dry-run`。plugin 換版後，要把該 profile 的 Claude session 整個重開才會生效（stop 後再 restore）。
+
+## 資料夾
+
+session 可以放進資料夾（多層用 `/`，例如 `客戶/甲`）。資料夾只是整理顯示用：建、改名、刪、搬資料夾都不會停掉、忘記或改動任何 session，也不動登記表；資料放在狀態資料夾的 `folders.json`（格式見 reference）。
+
+- `sampan folder list`：印出樹，資料夾 `▾ 名稱/`（`▸` 是收合的），session 縮排在下面；不在任何資料夾的 session 在最外層。
+- `sampan folder add 客戶/甲`：建資料夾，缺的上層一起建。
+- `sampan folder rename 客戶/甲 乙 [--merge]`：只改最後一段；同層已有同名時要加 `--merge` 才合併。
+- `sampan folder rm 客戶`：刪掉資料夾，裡面的 session 與子資料夾搬上一層（不問，也不會動到任何 session）。
+- `sampan folder move s1 客戶/甲 開發 [--merge]`：最後一個是目的（`/` 是最外層），前面的可以是 session 名稱或資料夾路徑；不能把資料夾搬進它自己裡面。
+- `sampan new <名稱> <目標> <目錄> --folder 開發`：開成功才放進資料夾（沒有就建）。
+- `sampan rename`、`sampan forget`、`sampan profile forget` 會一併更新資料夾裡的名稱；`folders.json` 壞掉時這些指令照常完成，只多一行警告。`folders.json` 壞掉時資料夾指令一律拒絕（結束碼 2）、不覆寫它；修好或刪掉再試。
 
 ## 傳訊息給 session
 

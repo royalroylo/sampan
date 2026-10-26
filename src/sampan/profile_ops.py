@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import actionlog, registry, usage
+from . import actionlog, folder_cmd, registry, usage
 from .clock import now_iso, now_stamp
 from .config import ConfigError, load_config
 from .config_edit import NAME_RE, _k, _s, append_section, remove_profile, remove_table, rename_profile, set_profile_flag
@@ -359,6 +359,8 @@ def cmd_profile_forget(cfg, run, out, ask, name, *, proc_root=PROC_ROOT):
             except OSError as e:
                 return _undo_config(cfg, out, backups[0], e)
     out(f"✔ 已從設定檔拿掉 profile {name}（目錄 {_disp(p.config_dir, cfg.home)} 保留；登記表 {len(hit)} 列一起移除）")
+    for r in hit:
+        folder_cmd.sync_session(cfg, out, "forget", r.tmux)
     err = usage.move_usage(cfg, name, None)
     if err:
         out(f"⚠ 額度紀錄 {usage.usage_path(cfg, name)} 刪不掉（{err}）")

@@ -53,6 +53,21 @@
 
 `version = 1` 的舊檔仍可讀（缺的 `agent` 視為 `claude`、`pid` 視為 `null`），下次寫入時升為 2。每次改寫前，若 session 有實際變動（`seen_at`、`pid`、`server` 不算），會把舊檔複製到 `history/registry-<時間>.json`（保留最近 20 份）。時間（`saved_at`、`seen_at`、歷史檔名）一律以 UTC 寫入（`+00:00`），畫面上顯示時才換成本地時間；舊版留下的歷史檔名可能是本地時間。
 
+## `folders.json`（`version = 1`，在狀態資料夾裡）
+
+session 資料夾，只給畫面和 `sampan folder` 用；`save`、`restore`、重開機接回都不讀也不寫它，登記表也不放資料夾。格式是 `{"version": 1, "folders": {"客戶/甲": {"collapsed": false}}, "sessions": {"<名稱>": "客戶/甲"}}`：`folders` 的鍵是完整路徑（用 `/` 分層，每段不能是空的、不含控制字元），`collapsed` 是畫面上是否收合；`sessions` 把 session 名稱對到資料夾路徑，不在裡面的 session 在最外層。讀寫時用登記表的鎖；檔 600。登記表沒有的 session 不會列出，資料夾沒寫的上層會自動補上。檔案讀不到、不是 JSON、`version` 不是 1 時，列表平坦列出全部 session，所有資料夾操作回 2 並說明，壞檔不會被覆寫。
+
+| 指令 | 作用 |
+|---|---|
+| `sampan folder list` | 印樹：每層縮排兩格，資料夾 `▸ 名稱/`（收合）或 `▾ 名稱/`，其下是 session 名稱 |
+| `sampan folder add <路徑>` | 建資料夾（缺的上層一起建） |
+| `sampan folder rename <路徑> <新名稱> [--merge]` | 只改最後一段；同層已有同名時要加 `--merge` 才會合併，否則回 2 |
+| `sampan folder rm <路徑>` | 刪資料夾，裡面的 session 與子資料夾搬上一層，不停、不忘記任何 session |
+| `sampan folder move <名稱或路徑>... <目的｜/> [--merge]` | 搬 session 或資料夾；`/` 是最外層；來源是 `folders.json` 裡的路徑就當資料夾，否則必須是登記表裡的 session，找不到回 2 |
+| `sampan new … --folder <路徑>` | 開成功（結束碼 0）後才把新 session 放進資料夾（沒有就建）；寫失敗只警告 |
+
+`sampan rename`、`sampan forget`、`sampan profile forget` 會同步 `folders.json`；同步失敗只多一行 `⚠ 資料夾設定沒同步：…`，不影響原動作。
+
 ## `dispatches.json`（`version = 1`，在狀態資料夾裡）
 
 派工紀錄：一則從呼叫者 session（或終端機）送給目標 session 的訊息。讀寫時用同資料夾的 `dispatches.lock` 鎖住；檔 600、資料夾 700。格式是 `{"version": 1, "dispatches": [...]}`，每筆：
