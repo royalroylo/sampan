@@ -156,7 +156,7 @@ class MainListTest(Base):
         self.assertIn(" work 0 個執行中", last)
         self.assertIn(" codex（Codex） 0 個執行中", last)
         self.assertNotIn("old", last)
-        self.assertIn("p plugin　o 帳號　q 離開", last)
+        self.assertIn("p plugin　o 帳號　D 派工", last)
 
     def test_account_usage_recomputed_at_most_every_60s(self):
         from tests.test_ui_screen import TICK

@@ -28,7 +28,7 @@ What does not happen: nothing in detection, the registry or the leaf modules imp
    - `usage.py` is the quota reader plus the `sampan statusline` command that Claude Code runs on every refresh (light imports only): it stores the status-line JSON's rate limits and reads Codex's from the newest rollout; the ui shows them as account lines.
    - `ui/` is split into `text`, `state`, `cards`, `render` (pure), `screen` (the thin curses adapter),
      `actions` (the main loop and question flows), `dirpick`, and `plugin_state` / `plugin_actions` (the plugin
-     screen's state machines, its question flows including the restart offer, and its `--plain` flow), and `profile_actions` (the accounts screen and the account lines on the main list).
+     screen's state machines, its question flows including the restart offer, and its `--plain` flow), and `profile_actions` (the accounts screen and the account lines on the main list), and `dispatch_watch` (the background thread that advances dispatches while the screen is open, the summary line and the `D` list's cells and cursor).
 
 All external programs (`tmux`, `ps`, `lsof`, `claude`, `launchctl`, `git`, `uv`) go through one injected `run(args)`
 callable (`runner.py`). That is what makes the suite fast and safe: tests pass a `FakeRunner`.

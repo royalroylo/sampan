@@ -5,6 +5,7 @@ from pathlib import Path
 from .. import adopt as adopt_mod
 from .. import restore as restore_mod
 from .. import save as save_mod
+from .. import send as send_mod
 from .. import session_run
 from .. import update as update_mod
 from ..prompts import recording
@@ -15,7 +16,7 @@ from .dirpick import recent_dirs, sessions_by_dir
 from .state import row_text
 
 HELP = ("編號 = 接上／切過去（已停止的先接回）；s 停掉　m 搬目錄　P 換 profile　e 改名　R 接回　A 接手 tmux 外的　r retire　a activate　X 移除"
-        "　n 開新 session　w 立即存檔　p plugin 管理　o 帳號　/文字 搜尋　q 離開")
+        "　n 開新 session　w 立即存檔　p plugin 管理　o 帳號　D 派工　/文字 搜尋　q 離開")
 
 
 def _ask(ask, prompt):
@@ -212,6 +213,22 @@ def _forget(cfg, run, out, ask, name, forget_fn):
     return forget_fn(cfg, run, out, name)
 
 
+def cancel_flow(cfg, out, ask, d, *, cancel_fn=None):
+    """D list, x: cancel a queued dispatch after asking; any other state says why not. 0 done or declined, 1 refused."""
+    if d.state != "queued":
+        out(f"派工 {d.id} 是「{send_mod.STATE_LABELS[d.state]}」，只能取消還沒送出的（排隊中）")
+        return 1
+    if (_ask(ask, f"取消派工 {d.id}（給 {d.to_name}）？(y/N): ") or "").lower() != "y":
+        out("已取消")
+        return 0
+    r = (cancel_fn or send_mod.cancel)(cfg, d.id)
+    if isinstance(r, str):
+        out(f"❌ {r}")
+        return 1
+    out(f"已取消派工 {d.id}")
+    return 0
+
+
 def _plain_search(ask, out, rows, query):
     """/text: case-insensitive substring match on the name. One hit attaches; several are listed with their original numbers and one is asked for."""
     hits = [(i, r) for i, r in enumerate(rows, 1) if query and query.lower() in r.name.lower()]
@@ -241,6 +258,8 @@ def _plain_action(ask, out, rows, current):
         return ("adopt", [])
     if c == "w":
         return ("save", [])
+    if choice == "D":
+        return ("dispatches", [])
     if choice == "U":
         return ("update", [])
     if choice.startswith("/"):
@@ -337,8 +356,9 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
            restore_fn=restore_mod.cmd_restore, restore_picker_fn=None,
            adopt_fn=adopt_mod.cmd_adopt, adopt_picker_fn=None, save_fn=save_mod.cmd_save, loop=False,
            attach_fn=None, choose_dir_fn=None, updater=None, update_fn=update_mod.do_update, argv=(), prompt_fn=None, plugins_fn=None,
-           profiles_fn=None, set_cfg_fn=None):
-    """picker_fn(rows, current) returns (action, list of names); when None, use the plain-text menu where a number is typed.
+           profiles_fn=None, set_cfg_fn=None, dispatches_fn=None):
+    """dispatches_fn(ask=…) is the dispatch list for D (curses: CursesScreen.dispatches); when None, the dispatches are printed.
+    picker_fn(rows, current) returns (action, list of names); when None, use the plain-text menu where a number is typed.
     restore_picker_fn / adopt_picker_fn are the checklist interfaces for R / A; when None, restore / adopt ask in text themselves.
     loop=True: after an action return to the list, leaving only on q / Esc (or when an opened session is attached); False does just one action.
     With loop and picker_fn (curses), an action that raises is shown as "❌ <action> 失敗：<error>" and the list stays (Ctrl-C still interrupts).
@@ -441,6 +461,11 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
             _reload()
         return rc, None
 
+    def _dispatches(names, rows, kw):
+        if dispatches_fn is not None:
+            return dispatches_fn(ask=ask), None
+        return send_mod.cmd_dispatches(cfg, out, all_=False), None
+
     # one handler per action: (names, rows, kw) -> (rc, session to attach to, or None);
     # an unknown action raises directly and is never written to the registry as a state
     handlers = {
@@ -458,6 +483,7 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
         "forget": lambda names, rows, kw: (_forget(cfg, run, out, ask, names[0], forget_fn), None),
         "plugins": _plugins,
         "profiles": _profiles,
+        "dispatches": _dispatches,
         "retired": lambda names, rows, kw: (set_state_fn(cfg, out, names[0], "retired"), None),
         "active": lambda names, rows, kw: (set_state_fn(cfg, out, names[0], "active"), None),
     }

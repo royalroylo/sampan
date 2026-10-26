@@ -4,7 +4,7 @@ import tempfile
 import time
 from datetime import datetime, timezone
 
-from .. import codex_daemon
+from .. import codex_daemon, dispatch
 from ..marketplace_view import build_market_rows, market_card, market_choices
 from ..plugin_apply import check_latest
 from ..plugin_view import NO_SOURCE, _mkt, build_rows, catalog, profile_choices, snapshot
@@ -12,11 +12,14 @@ from ..plugin_view import card_lines as plugin_card
 from ..prompts import SKIP, prompt_choices
 from ..status import status_rows
 from ..tmux import TMUX
-from .actions import cmd_ui, dir_context
+from .actions import cancel_flow, cmd_ui, dir_context
 from .cards import Wrap, _quote_of, adopt_card, card_lines, gather_cards, preview_header, restore_card
 from .codex_others import GO_DESKTOP, OTHER_KEY, ListNote, OwnCols, block_left, other_card, other_cells, other_rows
 from .daemon_watch import apply_codex_status
 from .dirpick import DirPicker
+from .dispatch_watch import LIST_HELP as DISPATCH_HELP
+from .dispatch_watch import LIST_TITLE as DISPATCH_TITLE
+from .dispatch_watch import DispatchPicker, dispatch_cells, dispatch_cols, dispatch_summary
 from .plugin_actions import (
     add_flow,
     disabled_lines,
@@ -56,7 +59,7 @@ from .render import (
 from .state import Checklist, Picker, ProfilePicker, _row_key
 from .text import BACKSPACE, ENTER, MOVES, clean_capture, text_width
 
-KEYS_HELP = "↑↓ 移動　1-9 跳列　/ 搜尋　空白 勾選　Enter 接上　s 停掉　R 接回　A 接手　n 開新　w 存檔　p plugin　o 帳號　q 離開"
+KEYS_HELP = "↑↓ 移動　1-9 跳列　/ 搜尋　空白 勾選　Enter 接上　s 停掉　R 接回　A 接手　n 開新　w 存檔　p plugin　o 帳號　D 派工　q 離開"
 RESTORE_HELP = "↑↓ 移動　空白 勾選　Enter 確認接回　q 取消"
 ADOPT_HELP = "↑↓ 移動　空白 勾選　Enter 確認接手　q 取消"
 PLUGINS_HELP = "↑↓ 移動　1-9 跳列　/ 搜尋　Enter 選 profile　u 更新這個　U 全部更新　a 新增　r 檢查新版　q 返回　Tab 切到來源"
@@ -89,10 +92,13 @@ class CursesScreen:
     scr only uses getmaxyx, erase, addstr, refresh, get_wch (tests use a fake object)."""
 
     def __init__(self, scr, cfg=None, run=None, now_fn=_now, *, clock=time.monotonic, rows_fn=status_rows,
-                 own_pane=None, updater=None, usage_fn=None, interactive=None, sampan_path=None, watcher=None):
+                 own_pane=None, updater=None, usage_fn=None, interactive=None, sampan_path=None, watcher=None,
+                 dispatch_watcher=None, dispatches_load=dispatch.load):
         self.scr, self.cfg, self.run, self.now_fn = scr, cfg, run, now_fn
         # watcher: daemon_watch.DaemonWatcher (curses_ui starts / stops it); its latest snapshot colours the Codex rows
         self.watcher, self._snap = watcher, None
+        # dispatch_watcher: dispatch_watch.DispatchWatcher; its items feed the summary line (dispatches_load reads the D list)
+        self.dispatch_watcher, self.dispatches_load = dispatch_watcher, dispatches_load
         self._tmp_roots = tmp_roots()
         # usage_fn(cfg, profile) -> Usage | None for the account lines and profile cards (default: the files on disk);
         # interactive(args, env) runs a login with the terminal (curses steps out); None = say what to run instead
@@ -335,6 +341,50 @@ class CursesScreen:
         cache = self._usage[1]
         return account_lines(self.cfg, rows, self.now_fn(), usage_fn=lambda cfg, p: cache.get(p.name))
 
+    def _dispatch_line(self):
+        w = self.dispatch_watcher
+        return dispatch_summary(w.items) if w is not None else None
+
+    def dispatches(self, *, ask, **_kw):
+        """The dispatch list (D), newest first; x cancels the queued one under the cursor after asking, q returns 0.
+        Re-read every TICK_MS while waiting for a key (the watcher thread advances them)."""
+        def load():
+            try:
+                return sorted(self.dispatches_load(self.cfg.state_dir), key=lambda d: d.created, reverse=True)
+            except dispatch.DispatchError as e:
+                self.out(f"❌ {e}")
+                return []
+        picker = DispatchPicker(load())
+        if not picker.items:
+            self.out("沒有派工")
+            return 0
+        saved = self.view
+        self._timeout(TICK_MS)
+        try:
+            while True:
+                self.view = dict(title=DISPATCH_TITLE, left=[dispatch_cells(d) for d in picker.items],
+                                 cursor=picker.cursor, card=[], preview=None, solo=True,
+                                 help=DISPATCH_HELP, cols=dispatch_cols(picker.items), empty="沒有派工", notice=None,
+                                 name_w=None)
+                self.draw()
+                k = self.key()
+                if k is None:
+                    picker.reload(load())
+                    continue
+                action = picker.key(k)
+                if action is None:
+                    continue
+                if action[0] == "back":
+                    return 0
+                self.messages = []
+                cancel_flow(self.cfg, self.out, ask, picker.here)
+                picker.reload(load())
+        except KeyboardInterrupt:
+            return 0
+        finally:
+            self.view = saved
+            self._timeout(-1)
+
     def pick(self, rows, current):
         """Arrow-key menu. While waiting for a key, re-capture the pane screen of the row under the cursor (a row with a tmux session) every TICK_MS and re-read the list every REFRESH_S seconds."""
         def load():
@@ -377,7 +427,7 @@ class CursesScreen:
                 left, cursor, name_w = self._left(picker, rows, current, now, extra, down)
                 self.view = dict(title=self.title, left=left, cursor=cursor, card=card, preview=preview,
                                  help=KEYS_HELP, cols=list_cols(rows), empty=list_empty(rows, picker.query),
-                                 name_w=name_w, accounts=self._account_lines(rows),
+                                 name_w=name_w, accounts=self._account_lines(rows), dispatch=self._dispatch_line(),
                                  notice=self.warning or (self.updater.hint() if self.updater is not None else None))
                 self.prompt = picker.prompt
                 self.draw()
@@ -744,10 +794,11 @@ def run_outside(scr, args, env=None):
 
 
 def curses_ui(cfg, run, out, *, current_session=None, own_pane=None, exec_fn=os.execvp, wrapper=None,
-              run_outside=run_outside, updater=None, watcher=None, **kw):
+              run_outside=run_outside, updater=None, watcher=None, dispatch_watcher=None, **kw):
     """The whole ui opens curses only once. When attaching to a session outside tmux, curses steps out temporarily and tmux attach runs in the foreground; after detach we are back at the list.
     On exit the last contents of the message area are printed on the terminal.
-    watcher (daemon_watch.DaemonWatcher, None = none) is started here and stopped when the ui ends, however it ends."""
+    watcher (daemon_watch.DaemonWatcher, None = none) and dispatch_watcher (dispatch_watch.DispatchWatcher) are started here
+    and stopped when the ui ends, however it ends."""
     pending, box = [], {}
 
     def ui_rows(c, r):  # the daemon is read by the watcher thread only: never on the ui thread
@@ -757,14 +808,17 @@ def curses_ui(cfg, run, out, *, current_session=None, own_pane=None, exec_fn=os.
     def main(scr):
         screen = box["screen"] = CursesScreen(scr, cfg, run, rows_fn=rows_fn, own_pane=own_pane,
                                               updater=updater, interactive=lambda args, env: run_outside(scr, args, env),
-                                              watcher=watcher)
+                                              watcher=watcher, dispatch_watcher=dispatch_watcher)
 
         def set_cfg(c):
             screen.cfg = c
+            if dispatch_watcher is not None:
+                dispatch_watcher.cfg = c
             if watcher is not None:
                 watcher.cfg = c  # renamed / added Codex profiles: the next poll saves under the new names
         opts = dict(picker_fn=screen.pick, restore_picker_fn=screen.restore_checklist, prompt_fn=screen.prompt_choice,
                     adopt_picker_fn=screen.adopt_checklist, plugins_fn=screen.plugins, profiles_fn=screen.profiles,
+                    dispatches_fn=screen.dispatches,
                     set_cfg_fn=set_cfg,
                     exec_fn=lambda f, args: pending.append((f, args)),
                     attach_fn=lambda args: run_outside(scr, args), loop=True,
@@ -782,6 +836,8 @@ def curses_ui(cfg, run, out, *, current_session=None, own_pane=None, exec_fn=os.
         wrapper = curses.wrapper
     if watcher is not None:
         watcher.start()
+    if dispatch_watcher is not None:
+        dispatch_watcher.start()
     try:
         rc = wrapper(main)
     except KeyboardInterrupt:
@@ -789,6 +845,8 @@ def curses_ui(cfg, run, out, *, current_session=None, own_pane=None, exec_fn=os.
     finally:
         if watcher is not None:
             watcher.stop()
+        if dispatch_watcher is not None:
+            dispatch_watcher.stop()
     screen = box.get("screen")
     for line in (screen.messages if screen else []):
         out(line)

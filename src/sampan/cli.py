@@ -349,7 +349,9 @@ def _dispatch(cfg, args):
         if interactive:
             checker.start()  # check for a new version in the background: the list appears first
             from .ui.daemon_watch import make_watcher
-            return curses_ui(cfg, run, out, **where, updater=checker, argv=argv, watcher=make_watcher(cfg, run))
+            from .ui.dispatch_watch import make_dispatch_watcher
+            return curses_ui(cfg, run, out, **where, updater=checker, argv=argv, watcher=make_watcher(cfg, run),
+                             dispatch_watcher=make_dispatch_watcher(cfg, run))
         import subprocess
 
         from .prompts import plain_prompt

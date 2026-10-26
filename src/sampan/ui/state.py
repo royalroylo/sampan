@@ -173,6 +173,8 @@ class Picker:
             return ("plugins", [])
         if k == "o":
             return ("profiles", [])
+        if k == "D":
+            return ("dispatches", [])
         if k == "/":
             self.query = ""
             return None
