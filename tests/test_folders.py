@@ -56,6 +56,11 @@ class StoreTest(unittest.TestCase):
         self.assert_unreadable('{"version": 1, "folders": {"a": {"collapsed": "no"}}, "sessions": {}}')
         self.assert_unreadable('{"version": 1, "folders": {}, "sessions": {"a1": 3}}')
 
+    def test_load_bad_path(self):
+        for bad in ("", "/x", "a/", "a//b", "a/ /b", "a\nb"):
+            self.assert_unreadable(json.dumps({"version": 1, "folders": {bad: {"collapsed": False}}, "sessions": {}}))
+            self.assert_unreadable(json.dumps({"version": 1, "folders": {}, "sessions": {"a1": bad}}))
+
     def test_broken_file_is_not_overwritten_by_edit(self):
         self.put("{nope")
         with self.assertRaises(FoldersError):
@@ -154,6 +159,16 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(t.folders, {"甲": False, "甲/乙": False})
         self.assertEqual(t.sessions, {"a1": "甲/乙", "b1": "甲"})
 
+    def test_remove_with_same_named_child(self):
+        t = mk(["客戶", "客戶/客戶", "客戶/客戶/x"], {"a1": "客戶/客戶/x", "b1": "客戶", "c1": "客戶/客戶"})
+        folders.remove(t, "客戶")
+        self.assertEqual(t.folders, {"客戶": False, "客戶/x": False})
+        self.assertEqual(t.sessions, {"a1": "客戶/x", "c1": "客戶"})
+
+    def test_group_nothing_refused(self):
+        with self.assertRaises(FoldersError):
+            folders.group(mk(), [], "合")
+
     def test_remove_missing_refused(self):
         with self.assertRaises(FoldersError):
             folders.remove(mk(), "客戶")
@@ -173,8 +188,7 @@ class OpsTest(unittest.TestCase):
         self.assertNotIn("a1", t.sessions)
 
     def test_move_folder_and_session_into_new_dest(self):
-        t = mk(["客戶", "客戶/甲"], {"a1": "客戶/甲", "b1": ""})
-        t.sessions.pop("b1")
+        t = mk(["客戶", "客戶/甲"], {"a1": "客戶/甲"})
         folders.move(t, [("folder", "客戶/甲"), ("session", "b1")], "開發/乙")
         self.assertEqual(t.folders, {"客戶": False, "開發": False, "開發/乙": False, "開發/乙/甲": False})
         self.assertEqual(t.sessions, {"a1": "開發/乙/甲", "b1": "開發/乙"})

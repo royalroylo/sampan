@@ -73,6 +73,13 @@ def _unreadable(why):
     return FoldersError(f"資料夾設定讀不到：{why}")
 
 
+def _check_path(file, p):
+    for segment in p.split("/"):
+        problem = name_problem(segment)
+        if problem:
+            raise _unreadable(f"{file} 裡的路徑「{p}」不對：{problem}")
+
+
 def load(state_dir):
     path = Path(state_dir) / FOLDERS_FILE
     if not path.exists():
@@ -92,10 +99,12 @@ def load(state_dir):
     for p, meta in raw_folders.items():
         if not isinstance(meta, dict) or not isinstance(meta.get("collapsed", False), bool):
             raise _unreadable(f"{path} 的資料夾「{p}」格式不對")
+        _check_path(path, p)
         tree.folders[p] = meta.get("collapsed", False)
     for name, p in raw_sessions.items():
         if not isinstance(p, str):
             raise _unreadable(f"{path} 的 session「{name}」格式不對")
+        _check_path(path, p)
         tree.sessions[name] = p
     return tree
 
@@ -182,12 +191,13 @@ def remove(tree, path):
     _require(tree, path)
     up = parent(path)
     work = _copy(tree)
-    for child in [p for p in work.folders if parent(p) == path]:
-        _relocate(work, child, join(up, basename(child)), True)
+    children = [p for p in work.folders if parent(p) == path]
     for n, p in list(work.sessions.items()):
         if p == path:
             place_session(work, n, up)
-    del work.folders[path]
+    del work.folders[path]  # before relocating: a child named like path may merge into path's own place
+    for child in children:
+        _relocate(work, child, join(up, basename(child)), True)
     _assign(tree, work)
 
 
