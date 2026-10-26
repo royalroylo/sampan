@@ -339,3 +339,13 @@ class McpDoctorTest(DoctorTest):
         titles = self.mcp_titles()
         self.assertEqual(titles, ["sampan MCP：裝在 alice；未裝：work、codex"])
         self.assertEqual([c.level for c in self.checks() if "sampan MCP" in c.title], ["info"])
+
+    def test_everything_installed_has_no_install_hint(self):
+        for p in self.cfg.profiles.values():
+            p.claude_json.parent.mkdir(parents=True, exist_ok=True)
+            p.claude_json.write_text('{"mcpServers": {"sampan": {}}}')
+        self.cfg.codex.home.mkdir(parents=True, exist_ok=True)
+        (self.cfg.codex.home / "config.toml").write_text('[mcp_servers.sampan]\ncommand = "sampan"\n')
+        hits = [c for c in self.checks() if "sampan MCP" in c.title]
+        self.assertEqual([c.title for c in hits], ["sampan MCP：裝在 alice、work、codex"])
+        self.assertEqual(hits[0].detail, "")

@@ -204,7 +204,7 @@ def _launchd(cfg, run, sampan_path):
         return [Check("warn", "自動存檔排程呼叫的不是目前的 sampan",
                       f"plist 是 {program}，目前是 {launchd.expected_program(sampan_path)}；執行 sampan init 重新安裝")]
     if state == "schedule":
-        return [Check("warn", "自動存檔排程是舊版的計時方式（睡眠時會暫停，可能好幾小時沒存檔）",
+        return [Check("warn", "自動存檔排程是舊版的（每小時一次，或睡眠時會暫停的舊計時方式）",
                       "執行 sampan init 重新安裝（改成每 5 分鐘，睡眠中錯過的會在醒來時補跑）")]
     if state == "not_loaded":
         return [Check("warn", "自動存檔排程的 plist 正確，但 launchd 沒有載入（不會自動存檔）",
@@ -282,8 +282,9 @@ def _mcp(cfg):
     if not here:
         return []
     missing = [n for n, v in st.items() if not v]
-    return [Check("info", f"sampan MCP：裝在 {'、'.join(here)}" + (f"；未裝：{'、'.join(missing)}" if missing else ""),
-                  "sampan mcp install 補裝")]
+    if not missing:
+        return [Check("info", f"sampan MCP：裝在 {'、'.join(here)}")]
+    return [Check("info", f"sampan MCP：裝在 {'、'.join(here)}；未裝：{'、'.join(missing)}", "sampan mcp install 補裝")]
 
 
 def _multi_agent(cfg, run, proc_root):

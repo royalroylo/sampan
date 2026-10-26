@@ -330,7 +330,7 @@ def _offer_launchd(run, out, ask, *, home, state_dir, sampan_path, first, uid, e
         why = {"missing": "沒有安裝", "unreadable": "的 plist 讀不到",
                "wrong": f"呼叫的是 {program}，不是目前的 sampan",
                "env": f"的 SAMPAN_CONFIG／SAMPAN_STATE_DIR 與目前不同（目前：{shown}）",
-               "schedule": "是舊版的計時方式（睡眠時會暫停；新版改成每 5 分鐘，醒來時補跑）",
+               "schedule": "是舊版的（每小時一次，或睡眠時會暫停；新版改成每 5 分鐘，醒來時補跑）",
                "not_loaded": "的 plist 正確，但 launchd 沒有載入"}[state]
         prompt = f"自動存檔排程{why}，要重新安裝並載入嗎？[Y/n] "
     if not _yes(ask, prompt, True):
