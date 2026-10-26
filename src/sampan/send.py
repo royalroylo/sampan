@@ -266,8 +266,10 @@ def _owes_notice(d):
     return d.state in ("done", "failed") and d.notify and not d.notified
 
 
-def advance(cfg, run, did, *, sleep, snapshot_fn=None, status_fn=None, now=None):
+def advance(cfg, run, did, *, sleep, snapshot_fn=None, status_fn=None, now=None, report=False):
     """Move one dispatch forward as far as it can go now; returns a copy of it. Finished ones are left alone.
+    report: the caller gets the returned copy right away (an MCP tool result): if it is finished, its notice is
+    dropped in the same transaction, so the caller is never told twice.
     Raises DispatchError for an unknown id or an unreadable dispatches.json, RegistryError for a bad registry."""
     now = now or _utcnow()
     with dispatch.transaction(cfg.state_dir) as items:
@@ -283,6 +285,8 @@ def advance(cfg, run, did, *, sleep, snapshot_fn=None, status_fn=None, now=None)
                 _deliver(cfg, run, d, rows.get(d.to_name), sleep, now, save)
             elif d.state == "sent":
                 _check(cfg, d, rows.get(d.to_name), now)
+            if report and d.state in dispatch.FINISHED:
+                d.notify = False  # the tool result tells the caller
             if _owes_notice(d):
                 notify_caller(cfg, run, d, sleep, rows=rows, save=save)
         result = replace(d)

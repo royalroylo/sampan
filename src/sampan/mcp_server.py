@@ -333,9 +333,10 @@ class Server:
             raise ToolError(str(e)) from e
 
     def _advance(self, did):
+        """One round for a tool that returns the result: a finished dispatch owes no notice any more (report)."""
         try:
             return send.advance(self.cfg, self.run, did, sleep=self.sleep, snapshot_fn=self.snapshot_fn,
-                                status_fn=self.status_fn, now=self.now_fn())
+                                status_fn=self.status_fn, now=self.now_fn(), report=True)
         except (dispatch.DispatchError, RegistryError) as e:
             raise ToolError(str(e)) from e
 
@@ -441,8 +442,6 @@ class Server:
         d = self._wait(did, wait)
         out = {"dispatch": d.id, "state": d.state, "label": send.STATE_LABELS[d.state], "to": d.to_name,
                "reply": d.reply, "reason": d.reason}
-        if d.state in ("done", "failed") and d.notify and send.from_session(d, self.caller.name):
-            send.set_notify(self.cfg, d.id, False)  # the caller has the reply now: no notice needed
         return out
 
     def tool_cancel_dispatch(self, args):

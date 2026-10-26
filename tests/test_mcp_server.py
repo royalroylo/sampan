@@ -437,6 +437,34 @@ class SendToolTest(Base):
         self.assertTrue(c.response(4)["result"]["isError"])  # wait above 60 is refused
         self.assertIn("60", tool_text(c.response(4)))
 
+    def test_send_failing_in_its_first_round_is_reported_once(self):  # re-review: no second failure notice
+        run = tmux_runner().on(["tmux", "-u", "send-keys"], cp(1, "", "lost pane"))  # pasted, Enter failed
+        c = self.serve(Client([init(1), call(2, "send", {"session": "b", "message": "hi"})]), run=run, confirm=False)
+        self.assertTrue(c.response(2)["result"]["isError"])
+        self.assertIn("失敗", tool_text(c.response(2)))
+        [d] = self.dispatches()
+        self.assertEqual((d.state, d.notify, d.notified), ("failed", False, False))
+        self.assertEqual([w for w in tmux_writes(run) if "%1" in w], [])  # nothing pasted into the caller's pane
+        self.assertNotIn(d.id, send.pending(self.cfg))
+        run2 = tmux_runner()
+        server = mcp_server.Server(self.cfg, run2, io.StringIO(), io.StringIO(), caller=CALLER_A,
+                                   sleep=lambda _s: None, clock=lambda: 0.0, status_fn=self.status_fn,
+                                   now_fn=lambda: NOW)
+        server.mine.add(d.id)
+        server.watch_once()  # a later watcher round sends nothing either
+        self.assertEqual(run2.calls, [])
+
+    def test_codex_caller_with_a_queue_timeout_gets_no_notice(self):
+        self.rows["x"] = status_row("x", agent="codex", profile="codex", sid="sx", pane="%5")
+        run = FakeRunner(strict=True).on(["codex", "queue"], cp(124, "", "timeout"))
+        c = self.serve(Client([init(1), call(2, "send", {"session": "c", "message": "hi"})]), run=run, confirm=False,
+                       caller=Caller("x", "codex", "codex", "%5"))
+        self.assertTrue(c.response(2)["result"]["isError"])
+        self.assertIn("可能已送出", tool_text(c.response(2)))
+        [d] = self.dispatches()
+        self.assertEqual((d.state, d.notify), ("failed", False))
+        self.assertEqual([x["args"][3] for x in run.called(["codex", "queue"])], ["sc"])  # only the dispatch itself
+
     def test_dispatch_result_of_a_failed_one_turns_its_notice_off(self):  # final review 6
         d = send.submit(self.cfg, FakeRunner(strict=True), CALLER_A, "b", "hi", notify=True, now=NOW,
                         status_fn=self.status_fn)
