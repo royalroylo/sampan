@@ -5,8 +5,10 @@ Package layout (the names below are re-exported here so `sampan.ui.<name>` keeps
   state    pure state machines: Picker (arrow-key menu), Checklist (restore/adopt), and the display conversion of state labels
   cards    the info card: per-row data (gather_cards), card contents, key hints and style decisions; pure data
   render   pure functions turning state, card and messages into lines of [(text, style), ...]
+  tree     pure: the session rows and folders.json's folders as one (depth, item) list (FolderItem rows)
   screen   CursesScreen, the thin curses adapter (keys, redraw, preview capture), plus curses_ui / curses_adopt_checklist
-  actions  cmd_ui: the main loop and dispatch, the question flows of the n/s/m/e/U actions, the --plain menu
+  actions  cmd_ui: the main loop and dispatch, the question flows of the n/s/S/m/e/U actions, the --plain menu
+  folder_actions  the question flows of the folder keys (g, f, e / X on a folder row) and saving a fold
   dirpick  DirPicker, the directory chooser state machine (used by n and m)
 
 In a terminal (curses): on the left is the session list (name, agent, profile, state, claude state; the name column is only two cells wider than the
@@ -17,9 +19,19 @@ of that session's agent pane (tmux capture-pane, read-only, no keys sent): captu
 waiting for a key, and the list is re-read every 5 seconds (cursor and checkmarks are kept); question input and checklists are not affected. Under the list one
 line per enabled profile (sessions running, 5h／週額度); at the bottom are the message area (the result of the last action, live progress of long actions, the input line for questions such as y/N and names) and the key help.
 
-Keys: up/down move, space checks, Enter attaches (a stopped session is reattached first), s stops (confirmed in place), m moves to another directory,
-e renames, R reattaches, A adopts claude/codex running outside tmux, r retire, a activate, n new session, w save now, U update sampan,
-p opens the plugin screen, o opens the profile (帳號) screen, X removes a stopped or retired session from the registry, q / Esc quit.
+Keys: up/down move, space checks, Enter attaches (a stopped session is reattached first), s stops (confirmed in place), S restarts (confirmed
+in place: idle ones are stopped and reattached in the background, a stopped one on its own row is reattached, never going in), m moves to another
+directory, e renames, R reattaches, A adopts claude/codex running outside tmux, r retire, a activate, n new session (into the folder under the
+cursor), w save now, U update sampan, p opens the plugin screen, o opens the profile (帳號) screen, X removes a stopped or retired session from
+the registry, q / Esc quit. The key help line leaves w, Enter, R and A out for room; they still work.
+
+Folders (folders.json, display only; no folder key touches a session or the registry): each level lists subfolders, then sessions, by name;
+a folder row is "▾ name (n)" ("▸" when folded, plus "n 忙" when folded with busy ones inside). On a folder row Enter / right / left fold and
+unfold (saved at once, the list stays), space checks it, e renames it, X deletes it (its contents move up one level), s / S act on every session
+under it (folded ones too). g wraps the checked items (else the cursor row) into a new folder, f moves them into a folder chosen from a list
+(CursesScreen.choose_folder). Search lists matching sessions only, each with its folder path dim before the name. A folders.json that cannot be
+trusted gives the flat list and one notice, and the folder keys refuse. --plain lists the tree's order with folder paths, has S, and points to
+`sampan folder` for organising.
 
 When a newer version exists (update.Checker checks in the background, cached for 6 hours, and re-checks in the idle time while waiting for a key) one more
 line appears above the key help saying a new version is available and to press U; U updates after an in-place confirmation, the output is shown live in the

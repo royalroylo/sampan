@@ -172,7 +172,7 @@ class CardTest(unittest.TestCase):
         self.assertEqual(lines[0], "proj-a-handy")
         for want in ("執行中（idle）", "claude ・ carol", "~/Projects/proj-a/handy", "b5768af2", "（3 分鐘前）",
                      "93k", "1 個視窗、1 個 pane", "最後一句話", "「幫我改設定頁」",
-                     "Enter 接上　s 停掉　m 搬　P 換 profile　e 改名　r retire"):
+                     "Enter 接上　s 停掉　S 重開　m 搬　P 換 profile　e 改名　r retire"):
             self.assertIn(want, text)
 
     def test_stopped_card_says_stopped_and_offers_restore(self):
@@ -180,7 +180,7 @@ class CardTest(unittest.TestCase):
         self.assertIn("已停止", text)
         self.assertNotIn("該跑沒跑", text)
         self.assertNotIn("tmux ", text)
-        self.assertIn("Enter 接回　P 換 profile　e 改名　r retire　X 移除", text)
+        self.assertIn("Enter 接回　S 背景接回　P 換 profile　e 改名　r retire　X 移除", text)
 
     def test_codex_card_has_no_profile(self):
         text = "\n".join(self.card(row("cx", agent="codex", profile="", sid=TID), windows=1, panes=2))
@@ -195,7 +195,7 @@ class CardTest(unittest.TestCase):
 
     def test_card_keys_show_X_for_stopped_and_retired(self):
         self.assertEqual(row_keys(row("x", state=State.STOPPED), {"panes": 0}),
-                         "Enter 接回　P 換 profile　e 改名　r retire　X 移除")
+                         "Enter 接回　S 背景接回　P 換 profile　e 改名　r retire　X 移除")
         self.assertEqual(row_keys(row("x", state=State.RETIRED), {"panes": 0}), "a activate　X 移除")
         self.assertNotIn("X 移除", row_keys(row("x", state=State.RUNNING), {"panes": 1}))
 
@@ -209,7 +209,7 @@ class CardTest(unittest.TestCase):
         self.assertEqual(list_state(row("x", State.AGENT_MISMATCH, detail="（登記 codex）")), "agent 不符")
         self.assertEqual(row_keys(row("x", state=State.UNREGISTERED), {"panes": 1}), "Enter 接上")
         self.assertEqual(row_keys(row("x", state=State.RUNNING, agent="codex"), {"panes": 1}),
-                         "Enter 接上　s 停掉　m 搬　e 改名　r retire")  # Codex has no profiles
+                         "Enter 接上　s 停掉　S 重開　m 搬　e 改名　r retire")  # Codex has no profiles
 
     def test_gather_cards_reads_registry_tmux_and_last_message(self):
         cwd = self.cfg.home / "proj"
@@ -897,3 +897,136 @@ class TitleVersionTest(unittest.TestCase):
         class U:
             current = "unknown"
         self.assertEqual(screen_title(U()), "sampan")
+
+
+class FolderScreenTest(unittest.TestCase):
+    """Folder rows on the curses list: rendering, the folder card, a broken folders.json, in-place collapse."""
+
+    def setUp(self):
+        from sampan import folders
+        self.F = folders
+        self.cfg = make_env(Path(tempfile.mkdtemp()))
+        self.r = FakeRunner(strict=True).on(["tmux", "-u", "list-panes"], cp()).on(["tmux", "-u", "list-windows"], cp())
+        self.rows = [row("a"), row("b", agent_status="busy"), row("c", state=State.STOPPED, agent_status="-"),
+                     row("d")]
+
+    def tree(self, fn):
+        self.F.edit(self.cfg.state_dir, fn)
+
+    def screen(self, keys, h=30, w=120):
+        self.scr = FakeScr(keys, h=h, w=w)
+        return CursesScreen(self.scr, self.cfg, self.r, now_fn=lambda: NOW, rows_fn=lambda cfg, run: self.rows)
+
+    def shown(self, i=0):
+        return self.scr.screens[i]
+
+    def test_folder_row_rendering(self):
+        def fn(t):
+            for n in ("a", "b", "c"):
+                self.F.place_session(t, n, "客戶/甲")
+            self.F.set_collapsed(t, "客戶/甲", True)
+        self.tree(fn)
+        s = self.screen(["q"])
+        s.pick(self.rows, None)
+        lines = self.shown()
+        self.assertIn("▾ 客戶 (3)", lines[1])
+        self.assertNotIn("忙", lines[1])  # open folders do not count busy ones
+        self.assertIn("  ▸ 甲 (3)　1 忙", lines[2])
+        self.assertRegex(lines[3], r"^ +1 +d +claude")  # hidden sessions are not numbered; d is the first shown
+        self.assertNotIn(" a ", "\n".join(lines[1:5]))
+
+    def test_session_rows_indented_under_folder(self):
+        self.tree(lambda t: (self.F.place_session(t, "a", "客戶"), self.F.place_session(t, "b", "客戶/甲")))
+        s = self.screen(["q"])
+        s.pick(self.rows, None)
+        lines = self.shown()
+        self.assertIn("▾ 客戶 (2)", lines[1])
+        self.assertIn("  ▾ 甲 (1)", lines[2])
+        self.assertIn(" 1       b", lines[3])  # number, mark, then two spaces per level
+        self.assertIn(" 2     a", lines[4])
+        self.assertIn(" 3   c", lines[5])
+
+    def test_search_shows_folder_path_before_name(self):
+        self.tree(lambda t: self.F.place_session(t, "b", "客戶/甲"))
+        s = self.screen(["/", "b", "\x1b", "q"])
+        s.pick(self.rows, None)
+        self.assertIn("客戶/甲 · b", "\n".join(self.shown(2)))
+        self.assertNotIn("· a", "\n".join(self.shown(1)))  # top-level sessions get no prefix
+
+    def test_folder_card_keys(self):
+        self.tree(lambda t: (self.F.place_session(t, "a", "客戶"), self.F.place_session(t, "b", "客戶"),
+                             self.F.place_session(t, "c", "客戶/甲")))
+        s = self.screen(["q"], w=200)
+        s.pick(self.rows, None)
+        text = "\n".join(self.shown())
+        self.assertIn("│ 客戶", text)
+        self.assertIn("session 數 3", text)
+        self.assertIn("執行中 2　已停止 1　retired 0　忙 1", text)
+        self.assertIn("Enter 收合／展開　g 包成資料夾　f 搬　e 改名　X 刪除資料夾", text)  # the keys line wraps
+        self.assertIn("S 重開全部　n 在這裡開新的", text)
+        self.assertEqual(self.r.called(["tmux", "-u", "capture-pane"]), [])  # no preview on a folder row
+
+    def test_broken_folders_warns_once_and_lists_all(self):
+        self.cfg.state_dir.mkdir(parents=True, exist_ok=True)
+        (self.cfg.state_dir / "folders.json").write_text("{")
+        s = self.screen(["q", "q"], w=400)
+        s.pick(self.rows, None)
+        first = "\n".join(self.shown())
+        self.assertIn("資料夾設定讀不到", first)
+        self.assertIn("先照原樣列出", first)
+        for n in ("a", "b", "c", "d"):
+            self.assertRegex(first, rf"\d +{n} +claude")
+        seen = len(self.scr.screens)
+        s.pick(self.rows, None)
+        self.assertNotIn("資料夾設定讀不到", "\n".join("\n".join(x) for x in self.scr.screens[seen:]))
+        self.assertEqual((self.cfg.state_dir / "folders.json").read_text(), "{")
+
+    def test_folders_changed_on_disk_show_on_refresh(self):
+        t = [0.0]
+
+        def tick():
+            t[0] += 1.0
+            if t[0] == 2.0:
+                self.tree(lambda tr: self.F.place_session(tr, "d", "維運"))
+        self.scr = FakeScr([TICK] * 6 + ["q"], on_tick=tick)
+        s = CursesScreen(self.scr, self.cfg, self.r, now_fn=lambda: NOW, clock=lambda: t[0],
+                         rows_fn=lambda cfg, run: self.rows)
+        s.pick(self.rows, None)
+        self.assertNotIn("維運", "\n".join(self.shown(0)))
+        self.assertIn("▾ 維運 (1)", "\n".join(self.shown(-1)))
+
+    def test_enter_on_folder_collapses_in_place_and_saves(self):
+        self.tree(lambda t: self.F.place_session(t, "a", "客戶"))
+        s = self.screen([" ", "KEY_UP", "\n", "q"])  # mark a, back to the folder row, collapse
+        self.assertEqual(s.pick(self.rows, None), ("quit", []))
+        self.assertTrue(self.F.load(self.cfg.state_dir).folders["客戶"])
+        last = "\n".join(self.shown(-1))
+        self.assertIn("▸ 客戶 (1)", last)
+
+    def test_marks_are_gone_after_a_folder_action(self):
+        s = self.screen([" ", "g", "q"])
+        self.assertEqual(s.pick(self.rows, None), ("group", ["session:a"]))
+        self.assertIn("●", "\n".join(self.shown(1)))
+        s.pick(self.rows, None)
+        self.assertNotIn("●", "\n".join(self.shown(-1)))
+
+    def test_restart_returns_the_confirmed_plan(self):
+        from sampan.restart import RestartPlan
+        s = self.screen(["S", "y"])
+        action = s.pick(self.rows, None)
+        self.assertEqual(action, ("restart!", [RestartPlan(["a"], [], [])]))
+        self.assertIn("將重開：a　確定？(y/N)", "\n".join(self.shown(-1)))
+
+    def test_choose_folder_list(self):
+        s = self.screen(["KEY_DOWN", "KEY_DOWN", "\n"])
+        self.assertEqual(s.choose_folder(["（最外層）", "新資料夾…", "客戶"]), 2)
+        self.assertIn("新資料夾…", "\n".join(self.shown()))
+        s = self.screen(["\x1b"])
+        self.assertIsNone(s.choose_folder(["（最外層）", "新資料夾…"]))
+
+    def test_help_and_row_keys_mention_S(self):
+        s = self.screen(["q"])
+        s.pick(self.rows, None)
+        self.assertIn("S 重開　g 包資料夾　f 搬進資料夾", self.shown()[-1])
+        self.assertIn("S 重開", row_keys(row("x"), {"panes": 1}))
+        self.assertIn("S 背景接回", row_keys(row("x", state=State.STOPPED), {"panes": 0}))

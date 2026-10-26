@@ -130,8 +130,9 @@ def check_new(cfg, run, name, target, cwd):
 
 
 def cmd_new(cfg, run, out, name, target, cwd, *, folder=None, **kw):
-    """cmd_new_session, then (only when it returned 0 and was not a dry run) put the session in the folder `folder`
-    of folders.json, creating it. A failed write is only a warning; the return code is the session's."""
+    """cmd_new_session, then (only when it was not a dry run and returned 0, or returned 1 with the tmux session up:
+    Codex is ready but not registered yet) put the session in the folder `folder` of folders.json, creating it.
+    A failed write is only a warning; the return code is the session's."""
     if folder is not None:
         folder = folder.strip().strip("/")
         try:
@@ -140,7 +141,7 @@ def cmd_new(cfg, run, out, name, target, cwd, *, folder=None, **kw):
             out(f"❌ {e}")
             return 2
     rc = _cmd_new(cfg, run, out, name, target, cwd, **kw)
-    if rc == 0 and folder and not kw.get("dry_run"):
+    if folder and not kw.get("dry_run") and (rc == 0 or (rc == 1 and Tmux(run).has_session(name))):
         try:
             folders.edit(cfg.state_dir, lambda t: folders.place_session(t, name, folder))
         except Exception as e:

@@ -21,6 +21,14 @@ class FoldersError(Exception):
     pass
 
 
+class NameTaken(FoldersError):
+    """The target level already has a folder called name (retry with merge=True to merge into it)."""
+
+    def __init__(self, name):
+        super().__init__(f"同一層已經有「{name}」")
+        self.name = name
+
+
 @dataclass
 class Tree:
     folders: dict[str, bool] = field(default_factory=dict)  # full path -> collapsed
@@ -155,7 +163,7 @@ def _relocate(tree, src, dst, merge):
     if src == dst:
         return
     if dst in tree.folders and not merge:
-        raise FoldersError(f"同一層已經有「{basename(dst)}」")
+        raise NameTaken(basename(dst))
 
     def new(p):
         return dst + p[len(src):] if _inside(p, src) else p
@@ -252,7 +260,7 @@ def group(tree, items, name, *, merge=False):
             break
     dst = join(common, name)
     if dst in tree.folders and not merge:
-        raise FoldersError(f"同一層已經有「{name}」")
+        raise NameTaken(name)
     work = _copy(tree)
     _move(work, items, dst, merge)
     _assign(tree, work)

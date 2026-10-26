@@ -5,6 +5,7 @@ import time
 from datetime import datetime, timezone
 
 from .. import codex_daemon, dispatch
+from .. import folders as F
 from ..marketplace_view import build_market_rows, market_card, market_choices
 from ..plugin_apply import check_latest
 from ..plugin_view import NO_SOURCE, _mkt, build_rows, catalog, profile_choices, snapshot
@@ -13,13 +14,14 @@ from ..prompts import SKIP, prompt_choices
 from ..status import status_rows
 from ..tmux import TMUX
 from .actions import cancel_flow, cmd_ui, dir_context
-from .cards import Wrap, _quote_of, adopt_card, card_lines, gather_cards, preview_header, restore_card
+from .cards import Wrap, _quote_of, adopt_card, card_lines, folder_card, gather_cards, preview_header, restore_card
 from .codex_others import GO_DESKTOP, OTHER_KEY, ListNote, OwnCols, block_left, other_card, other_cells, other_rows
 from .daemon_watch import apply_codex_status
 from .dirpick import DirPicker
 from .dispatch_watch import LIST_HELP as DISPATCH_HELP
 from .dispatch_watch import LIST_TITLE as DISPATCH_TITLE
 from .dispatch_watch import DispatchPicker, dispatch_cells, dispatch_cols, dispatch_summary
+from .folder_actions import save_collapsed
 from .plugin_actions import (
     add_flow,
     disabled_lines,
@@ -43,8 +45,10 @@ from .render import (
     PLUGIN_COLS,
     TOGGLE_COLS,
     _adopt_cells,
+    _cell_text,
     _list_cells,
     _restore_cells,
+    folder_cells,
     list_cols,
     list_empty,
     market_cells,
@@ -58,8 +62,10 @@ from .render import (
 )
 from .state import Checklist, Picker, ProfilePicker, _row_key
 from .text import BACKSPACE, ENTER, MOVES, clean_capture, text_width
+from .tree import FolderItem, build_items, folder_key, folder_of
 
-KEYS_HELP = "↑↓ 移動　1-9 跳列　/ 搜尋　空白 勾選　Enter 接上　s 停　R 接回　A 接手　n 開新　w 存　D 派工　p plugin　o 帳號　q 離開"
+# one line at 120 columns: w (save now), Enter (on every row's card), R and A still work, they are only left out here
+KEYS_HELP = "↑↓ 移動　1-9 跳列　/ 搜尋　空白 勾選　s 停　S 重開　g 包資料夾　f 搬進資料夾　n 開新　D 派工　p plugin　o 帳號　q 離開"
 RESTORE_HELP = "↑↓ 移動　空白 勾選　Enter 確認接回　q 取消"
 ADOPT_HELP = "↑↓ 移動　空白 勾選　Enter 確認接手　q 取消"
 PLUGINS_HELP = "↑↓ 移動　1-9 跳列　/ 搜尋　Enter 選 profile　u 更新這個　U 全部更新　a 新增　r 檢查新版　q 返回　Tab 切到來源"
@@ -69,6 +75,8 @@ CATALOG_HELP = "↑↓ 移動　/ 搜尋　Enter 選這個　i 自己輸入　q 
 PLUGINS_TITLE = "sampan · plugin 管理"
 PROFILES_HELP = "↑↓ 移動　r 改名　d 停用／恢復　f forget　i 裝狀態列　a 新增　q 返回"
 PROMPT_HELP = "↑↓ 選擇　Enter 送出　Esc 先不管"
+FOLDER_PICK_HELP = "↑↓ 移動　Enter 選這個　Esc 取消"
+FOLDER_PICK_TITLE = "sampan · 搬到哪個資料夾"
 TICK_MS = 1000  # while the list waits for a key, re-capture the preview this often
 REFRESH_S = 5  # while the list waits for a key, re-read the session list (state, info cards) this often
 USAGE_S = 60  # the account lines' 額度 are re-read at most this often (and whenever the list is entered again)
@@ -114,6 +122,8 @@ class CursesScreen:
         self.view = dict(title=self.title, left=[], cursor=0, card=[], preview=None, help=KEYS_HELP, cols=LIST_COLS,
                          empty=None, notice=None)
         self.last_name = None  # session the cursor was last on: after an action returns to the list the cursor stays there
+        self._folders = None  # (stat of folders.json or None, Tree or None, error or None): read again only when it changes
+        self._folders_said = None  # the folders.json error last shown: the same one is not shown again
         try:
             import curses
             curses.curs_set(0)
@@ -314,12 +324,60 @@ class CursesScreen:
             reason = None
         return state == "starting" and down, reason
 
+    def _load_folders(self):
+        """(Tree, error) of folders.json: an empty Tree when there is none, (None, message) when it cannot be trusted.
+        Read again only when the file's stat changed (the list is redrawn every second)."""
+        if self.cfg is None:
+            return None, None
+        path = self.cfg.state_dir / F.FOLDERS_FILE
+        try:
+            st = path.stat()
+            stamp = (st.st_mtime_ns, st.st_size, st.st_ino)
+        except OSError:
+            stamp = None
+        if self._folders is None or self._folders[0] != stamp:
+            try:
+                self._folders = (stamp, F.load(self.cfg.state_dir), None)
+            except F.FoldersError as e:
+                self._folders = (stamp, None, str(e))
+        return self._folders[1], self._folders[2]
+
+    def _folders_note(self, err):
+        """The notice for a folders.json error the first time it is seen (a fixed file resets it); None otherwise."""
+        if err is None or err == self._folders_said:
+            self._folders_said = err
+            return None
+        self._folders_said = err
+        return f"{err}，先照原樣列出"
+
+    @staticmethod
+    def _picker_tree(tree, rows):
+        """The tree for the Picker (it resolves against the rows it has, so a session added by a refresh lands in its
+        folder). None when there is no folder at all (no folders.json, or a broken one): the flat list then keeps
+        rows' order exactly as before folders existed; g / f still work, their actions read folders.json themselves."""
+        return tree if tree is not None and F.resolve(tree, [r.name for r in rows]).folders else None
+
     def _left(self, picker, rows, current, now, extra, down):
         """The list lines (tmux rows, then the block) and the cursor's index among them. Row numbers and the name
-        column width follow the unfiltered tmux list; block lines are never numbered or landed on."""
-        cells = {r.name: _list_cells(r, picker.marked, current, i, len(rows)) for i, r in enumerate(rows, 1)}
-        left = [cells[r.name] for r in picker.visible[:picker.n_rows]]
-        name_w = max((text_width(c[0]) for c in cells.values()), default=None)
+        column width follow the list as it is without a search (folder rows and sessions hidden in collapsed folders
+        get no number); block lines are never numbered or landed on. While searching each hit inside a folder shows
+        its folder path, dim, before the name."""
+        total = len(rows)
+        base = build_items(rows, picker.tree, None) if picker.tree is not None else [(0, r) for r in rows]
+        nums = {}
+        for _, it in base:
+            if not isinstance(it, FolderItem):
+                nums[it.name] = len(nums) + 1
+
+        def cells(depth, it):
+            if isinstance(it, FolderItem):
+                return folder_cells(it, picker.marked_folders, total)
+            where = folder_of(picker.tree, it.name) if picker.query is not None else ""
+            return _list_cells(it, picker.marked, current, nums.get(it.name, ""), total, depth=depth,
+                               prefix=f"{where} · " if where else "")
+        left = [cells(d, it) for d, it in picker.items]
+        full = [cells(d, it) for d, it in base] if picker.query is not None else left
+        name_w = max((text_width(_cell_text(c[0])) for c in full + left), default=None)
         lead = " " * (len(str(len(rows))) + 3 if rows else 2)  # under the number and the mark of a tmux row
         starting, failed = self._start_note(rows)
         block = block_left([OwnCols(other_cells(o, now, lead)) for o in picker.visible[picker.n_rows:]], extra,
@@ -394,9 +452,14 @@ class CursesScreen:
         self._usage = None  # back on the list (after an action): read the 額度 again
         self._apply_snap(rows)
         others, extra, down = self._others(rows, now)
+        raw, err = self._load_folders()  # None (broken file): the flat list, said once
+        fnote = self._folders_note(err)
+        tree = self._picker_tree(raw, rows)
         names = [r.name for r in rows] + [o.name for o in others]
+        if tree is not None:
+            names += [folder_key(p) for p in F.resolve(tree, [r.name for r in rows]).folders]
         picker = Picker(rows, self.last_name if self.last_name in names else current, clock=self.clock,
-                        others=others)
+                        others=others, tree=tree)
         shot, tick, refreshed = (None, None), False, self.clock()
         self._timeout(TICK_MS)
         try:
@@ -411,7 +474,9 @@ class CursesScreen:
                     r = picker.visible[picker.cursor]
                     name = self.last_name = r.name
                     info = cards.get(name)
-                    if picker.on_other():  # read only: its card (and rollout context) is built only when selected
+                    if isinstance(r, FolderItem):  # no preview: the folder's own card
+                        card = folder_card(r, rows, picker.tree)
+                    elif picker.on_other():  # read only: its card (and rollout context) is built only when selected
                         if name not in built:
                             built[name] = other_card(r, now, home=self.cfg.home if self.cfg is not None else None)
                         card = built[name]
@@ -428,7 +493,7 @@ class CursesScreen:
                 self.view = dict(title=self.title, left=left, cursor=cursor, card=card, preview=preview,
                                  help=KEYS_HELP, cols=list_cols(rows), empty=list_empty(rows, picker.query),
                                  name_w=name_w, accounts=self._account_lines(rows), dispatch=self._dispatch_line(),
-                                 notice=self.warning or (self.updater.hint() if self.updater is not None else None))
+                                 notice=self.warning or fnote or (self.updater.hint() if self.updater is not None else None))
                 self.prompt = picker.prompt
                 self.draw()
                 k = self.key()
@@ -440,8 +505,19 @@ class CursesScreen:
                         refreshed = self.clock()
                         if self._reload(rows, picker):
                             cards, now, built = load()
+                        new_raw, err = self._load_folders()
+                        if new_raw is not raw:  # changed on disk (another sampan, sampan folder …)
+                            raw = new_raw
+                            fnote = (self._folders_note(err) or fnote) if err else self._folders_note(None)
+                            picker.set_tree(self._picker_tree(raw, rows))
                     continue
                 action = picker.key(k)
+                if action is not None and action[0] == "collapse":  # memory only: saved here, the list stays as it is
+                    save_collapsed(self.cfg, action[1][0], action[1][1] == "1")
+                    raw = self._load_folders()[0]  # our own write: not a change to apply
+                    continue
+                if action is not None and action[0] == "restart!":  # the plan the user just confirmed
+                    action = ("restart!", [picker.restart_plan])
                 if action is not None and (action[0] == "desktop"
                                            or any(str(n).startswith(OTHER_KEY) for n in action[1])):
                     self.messages = [GO_DESKTOP]  # a「Codex 其他對話」row never becomes an action
@@ -498,6 +574,29 @@ class CursesScreen:
             return None
         finally:
             self.draw()
+
+    def choose_folder(self, labels):
+        """f's destination list: returns the index of the row picked with Enter, None on Esc / q / Ctrl-C."""
+        saved, cur = self.view, 0
+        self._timeout(-1)
+        try:
+            while True:
+                self.view = dict(title=FOLDER_PICK_TITLE, left=[(x,) for x in labels], cursor=cur, card=[],
+                                 preview=None, help=FOLDER_PICK_HELP, cols=(), empty=None, notice=None, name_w=None)
+                self.draw()
+                k = self.key()
+                if k is None:
+                    continue
+                if k in MOVES:
+                    cur = max(0, min(len(labels) - 1, cur + MOVES[k]))
+                elif k in ENTER:
+                    return cur if labels else None
+                elif k in ("\x1b", "q"):
+                    return None
+        except KeyboardInterrupt:
+            return None
+        finally:
+            self.view = saved
 
     def restore_checklist(self, cands):
         now = self.now_fn()
@@ -818,7 +917,7 @@ def curses_ui(cfg, run, out, *, current_session=None, own_pane=None, exec_fn=os.
                 watcher.cfg = c  # renamed / added Codex profiles: the next poll saves under the new names
         opts = dict(picker_fn=screen.pick, restore_picker_fn=screen.restore_checklist, prompt_fn=screen.prompt_choice,
                     adopt_picker_fn=screen.adopt_checklist, plugins_fn=screen.plugins, profiles_fn=screen.profiles,
-                    dispatches_fn=screen.dispatches,
+                    dispatches_fn=screen.dispatches, choose_folder_fn=screen.choose_folder,
                     set_cfg_fn=set_cfg,
                     exec_fn=lambda f, args: pending.append((f, args)),
                     attach_fn=lambda args: run_outside(scr, args), loop=True,

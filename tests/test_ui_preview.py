@@ -76,7 +76,7 @@ class HeaderTest(unittest.TestCase):
         self.assertEqual(lines[0], "proj-a-handy（預覽）")
         self.assertEqual(lines[2], "執行中（idle）・claude・carol・context 93k")
         self.assertEqual(lines[3], "~/Projects/proj-a/handy")
-        self.assertEqual(lines[4], "Enter 接上　s 停掉　m 搬　P 換 profile　e 改名　r retire")
+        self.assertEqual(lines[4], "Enter 接上　s 停掉　S 重開　m 搬　P 換 profile　e 改名　r retire")
         self.assertNotIn("幫我改設定頁", "".join(lines))  # the last message isn't included: the preview shows it
 
     def test_codex_header_has_no_profile_or_context(self):

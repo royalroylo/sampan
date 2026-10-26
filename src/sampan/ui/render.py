@@ -28,6 +28,11 @@ def _cell(c):
     return c if isinstance(c, tuple) else (c, "")
 
 
+def _cell_text(c):
+    """The text of a cell; a list cell is several (text, style) runs (the dim folder path of a search hit)."""
+    return "".join(t for t, _s in c) if isinstance(c, list) else _cell(c)[0]
+
+
 def _fit(segs, width):
     """A run of (text, style) truncated/padded by display width to exactly width."""
     out, used = [], 0
@@ -42,14 +47,15 @@ def _fit(segs, width):
 
 def _cells(cells, cols, width, cap=None):
     """One list row → [(text, style), …]: the first column uses the remaining width (at most cap cells when cap is given), the other columns follow cols, extra width stays on the right.
-    A cell may be a string or (string, style)."""
-    cells = [_cell(c) for c in cells]
+    A cell may be a string or (string, style); the first one may also be a list of (string, style) runs."""
+    runs = cells[0] if isinstance(cells[0], list) else None
+    cells = [(_cell_text(runs), "") if runs else _cell(cells[0])] + [_cell(c) for c in cells[1:]]
     first = width - 1 - sum(cols) - len(cols)
     if first < 4:
         return _fit([(" " + " ".join(t for t, _s in cells), "")], width)
     if cap is not None:
         first = max(4, min(first, cap))
-    segs = [(" " + pad(cells[0][0], first), cells[0][1])]
+    segs = [(" ", "")] + _fit(runs, first) if runs else [(" " + pad(cells[0][0], first), cells[0][1])]
     segs += [(" " + pad(t, w), s) for (t, s), w in zip(cells[1:], cols)]
     return _fit(segs, width)
 
@@ -63,7 +69,7 @@ def _list_rows(left, cursor, cols, width, height, empty, name_w=None):
     # with other columns present, the name column extends only NAME_GAP cells past the longest name and the other columns follow right after it (not pushed to the far right)
     # name_w (the widest name cell of the whole list) keeps the columns still while the list is filtered
     plain = [c for c in left if not isinstance(c, (ListNote, OwnCols))]
-    widest = name_w if name_w is not None else max((text_width(_cell(c[0])[0]) for c in plain), default=0)
+    widest = name_w if name_w is not None else max((text_width(_cell_text(c[0])) for c in plain), default=0)
     cap = widest + NAME_GAP if cols and left else None
     rows = []
     for i, cells in enumerate(left[top:top + height]):
@@ -278,13 +284,27 @@ def list_cols(rows):
     return (6, min(PROFILE_MAX, pw), 10, 7)
 
 
-def _list_cells(r, marked, current, num=None, total=0):
-    """One session list row. With num, the row starts with its 1-based position in the unfiltered list, right-aligned to the width of total."""
+def _list_cells(r, marked, current, num=None, total=0, *, depth=0, prefix=""):
+    """One session list row. With num, the row starts with its 1-based position in the unfiltered list, right-aligned to the width of total
+    (num "" keeps the space blank). depth indents the name two cells per folder level; prefix (a search hit's
+    "folder path · ") goes dim before the name."""
     mark = "●" if r.name in marked else " "
     here = " ←" if r.name == current else ""
     lead = f"{num:>{len(str(total))}} " if num is not None else ""
-    return (f"{lead}{mark} {r.name}{here}", r.agent, _profile_cell(r),
+    head = f"{lead}{mark} {'  ' * depth}"
+    name = [(head, ""), (prefix, "dim"), (f"{r.name}{here}", "")] if prefix else f"{head}{r.name}{here}"
+    return (name, r.agent, _profile_cell(r),
             (list_state(r), state_style(r.state)), (r.agent_status, agent_style(r.agent_status)))
+
+
+def folder_cells(item, marked, total=0):
+    """One folder row (ui.tree.FolderItem): no number, the mark, the indent, ▸ (collapsed) or ▾, the name and how many
+    sessions are under it; a collapsed one also says how many of those are busy. No agent / profile / state columns."""
+    mark = "●" if item.path in marked else " "
+    lead = " " * (len(str(total)) + 1) if total else ""
+    busy = f"　{item.busy} 忙" if item.collapsed and item.busy else ""
+    text = f"{lead}{mark} {'  ' * item.depth}{'▸' if item.collapsed else '▾'} {item.path.rpartition('/')[2]} ({item.total}){busy}"
+    return (text, "", "", "", "")
 
 
 def _restore_cells(c, box):

@@ -1,7 +1,9 @@
 """Info card: per-row data (gather_cards), card contents (card_lines, restore_card, adopt_card, preview_header) and the style decisions. Pure data, never touches curses."""
 from .. import claude_state, codex_state
+from .. import folders as F
 from ..adopt import _ago, _short
 from ..registry import RegistryError, load_rows
+from ..restart import BUSY
 from ..status import State, _fmt_time, _fmt_tokens
 from ..tmux import TMUX, Tmux
 from .state import show_state
@@ -99,12 +101,29 @@ def row_keys(row, info):
     if state is State.RETIRED:
         keys = (["Enter 接上"] if live else []) + ["a activate", "X 移除"]
     elif state is State.STOPPED:
-        keys = ["Enter 接回"] + (["P 換 profile"] if row.agent == "claude" else []) + ["e 改名", "r retire", "X 移除"]
+        keys = ["Enter 接回", "S 背景接回"] + (["P 換 profile"] if row.agent == "claude" else []) + ["e 改名", "r retire", "X 移除"]
     elif state is State.RUNNING:
-        keys = ["Enter 接上", "s 停掉", "m 搬"] + (["P 換 profile"] if row.agent == "claude" else []) + ["e 改名", "r retire"]
+        keys = ["Enter 接上", "s 停掉", "S 重開", "m 搬"] + (["P 換 profile"] if row.agent == "claude" else []) + ["e 改名", "r retire"]
     else:
         keys = ["Enter 接上"] if live else []
     return "　".join(keys)
+
+
+FOLDER_KEYS = "Enter 收合／展開　g 包成資料夾　f 搬　e 改名　X 刪除資料夾　s 停全部　S 重開全部　n 在這裡開新的"
+
+
+def folder_card(item, rows, tree):
+    """The card of a folder row (ui.tree.FolderItem): its path, how many sessions are under it (every level, collapsed
+    or not) and in which state, and the folder keys. No preview."""
+    inside = F.sessions_under(tree, item.path) if tree is not None else set()
+    under = [r for r in rows if r.name in inside]
+
+    def count(state):
+        return sum(r.state is state for r in under)
+    busy = sum(r.agent_status in BUSY for r in under)
+    return [item.path, "─" * 200, f"session 數 {len(under)}",
+            f"執行中 {count(State.RUNNING)}　已停止 {count(State.STOPPED)}　retired {count(State.RETIRED)}　忙 {busy}",
+            "", Keys(FOLDER_KEYS)]
 
 
 def _activity_line(last, now):

@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 
 from .. import adopt as adopt_mod
+from .. import folders as folders_mod
+from .. import restart as restart_mod
 from .. import restore as restore_mod
 from .. import save as save_mod
 from .. import send as send_mod
@@ -12,11 +14,14 @@ from ..prompts import recording
 from ..registry import RegistryError, load_rows
 from ..status import State, status_rows
 from ..tmux import TMUX, Tmux
+from . import folder_actions
 from .dirpick import recent_dirs, sessions_by_dir
 from .state import row_text
 
-HELP = ("編號 = 接上／切過去（已停止的先接回）；s 停掉　m 搬目錄　P 換 profile　e 改名　R 接回　A 接手 tmux 外的　r retire　a activate　X 移除"
-        "　n 開新 session　w 立即存檔　p plugin 管理　o 帳號　D 派工　/文字 搜尋　q 離開")
+HELP = ("編號 = 接上／切過去（已停止的先接回）；s 停掉　S 重開　m 搬目錄　P 換 profile　e 改名　R 接回　A 接手 tmux 外的　r retire　a activate　X 移除"
+        "　n 開新 session　w 立即存檔　p plugin 管理　o 帳號　D 派工　/文字 搜尋　q 離開"
+        "（資料夾請用 sampan folder …）")
+FOLDER_HINT = "--plain 不整理資料夾，請用 sampan folder list／add／rename／rm／move"
 
 
 def _ask(ask, prompt):
@@ -43,13 +48,13 @@ def _pick(ask, out, rows, prompt, *, many):
     return picked
 
 
-def _show(out, rows, current):
+def _show(out, rows, current, prefix=None):
     out("═══ sampan sessions ═══")
     if not rows:
         out("  目前沒有任何 session")
     for i, r in enumerate(rows, 1):
         mark = "  ← 目前所在" if r.name == current else ""
-        out(f"  [{i:>2}] {row_text(r)}{mark}")
+        out(f"  [{i:>2}] {(prefix or {}).get(r.name, '')}{row_text(r)}{mark}")
     out("")
     out(HELP)
 
@@ -144,6 +149,23 @@ def _stop(cfg, run, out, ask, names, own_pane, stop_fn, *, confirmed=False):
                    dry_run=False, timeout=90, own_pane=own_pane)
 
 
+def _restart(cfg, run, out, ask, plan, own_pane, restart_fn, kw, *, rows=None, confirmed=True):
+    """S. plan: the RestartPlan confirmed in the list (restart!), or names to plan and confirm here (--plain).
+    Never attaches: the sessions are reattached in the background."""
+    if not confirmed:
+        plan = restart_mod.plan_restart(rows, plan, resume_stopped=True, own_pane=own_pane)
+        line = restart_mod.confirm_line(plan)
+        if not line:
+            why = restart_mod.skip_text(plan.skip).removeprefix("略過：") if plan.skip else ""
+            out(f"沒有可以重開的：{why}" if why else "沒有可以重開的 session")
+            return 0
+        out(line.removesuffix("　確定？(y/N)"))
+        if (_ask(ask, "確定？(y/N): ") or "").lower() != "y":
+            out("已取消")
+            return 0
+    return restart_fn(cfg, run, out, ask, plan, own_pane=own_pane, on_prompt=kw.get("on_prompt"))
+
+
 def _move(cfg, run, out, ask, name, agent, own_pane, move_fn, choose_dir_fn=None, prompt_kw=None):
     if choose_dir_fn is not None:
         raw = choose_dir_fn(_session_cwd(cfg, name), allow_missing=True)
@@ -236,7 +258,7 @@ def cancel_flow(cfg, out, ask, d, *, cancel_fn=None):
     return 0
 
 
-def _plain_search(ask, out, rows, query):
+def _plain_search(ask, out, rows, query, prefix=None):
     """/text: case-insensitive substring match on the name. One hit attaches; several are listed with their original numbers and one is asked for."""
     hits = [(i, r) for i, r in enumerate(rows, 1) if query and query.lower() in r.name.lower()]
     if not hits:
@@ -245,7 +267,7 @@ def _plain_search(ask, out, rows, query):
     if len(hits) == 1:
         return ("attach", [hits[0][1].name])
     for i, r in hits:
-        out(f"  [{i:>2}] {row_text(r)}")
+        out(f"  [{i:>2}] {(prefix or {}).get(r.name, '')}{row_text(r)}")
     answer = _ask(ask, "要開哪一個？(編號，Enter 返回): ")
     if not answer or answer.lower() == "q":
         return ("invalid", [])
@@ -253,8 +275,10 @@ def _plain_search(ask, out, rows, query):
     return ("attach", picked) if picked else ("invalid", [])
 
 
-def _plain_action(ask, out, rows, current):
-    _show(out, rows, current)
+def _plain_action(ask, out, rows, current, tree=None):
+    """tree (folders.Tree or None): the list follows its order, every folder open, each name after its folder path."""
+    rows, prefix = folder_actions.plain_order(rows, tree)
+    _show(out, rows, current, prefix)
     choice = _ask(ask, "選擇: ")
     if not choice or choice.lower() == "q":
         return ("quit", [])
@@ -270,7 +294,7 @@ def _plain_action(ask, out, rows, current):
     if choice == "U":
         return ("update", [])
     if choice.startswith("/"):
-        return _plain_search(ask, out, rows, choice[1:].strip())
+        return _plain_search(ask, out, rows, choice[1:].strip(), prefix)
     if choice.isdigit():
         picked = _pick(lambda _p: choice, out, rows, "", many=False)
         return ("attach", picked) if picked else ("invalid", [])
@@ -282,6 +306,12 @@ def _plain_action(ask, out, rows, current):
         return ("forget", picked) if picked else ("quit" if picked is None else "invalid", [])
     if c == "n":
         return ("new", [])
+    if choice == "S":
+        picked = _pick(ask, out, rows, "要重開哪些？(編號，可多個用空格分隔): ", many=True)
+        return ("restart", picked) if picked else ("quit" if picked is None else "invalid", [])
+    if c in ("g", "f"):
+        out(FOLDER_HINT)
+        return ("invalid", [])
     if choice == "p":
         return ("plugins", [])
     if choice == "o":
@@ -363,7 +393,7 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
            restore_fn=restore_mod.cmd_restore, restore_picker_fn=None,
            adopt_fn=adopt_mod.cmd_adopt, adopt_picker_fn=None, save_fn=save_mod.cmd_save, loop=False,
            attach_fn=None, choose_dir_fn=None, updater=None, update_fn=update_mod.do_update, argv=(), prompt_fn=None, plugins_fn=None,
-           profiles_fn=None, set_cfg_fn=None, dispatches_fn=None):
+           profiles_fn=None, set_cfg_fn=None, dispatches_fn=None, choose_folder_fn=None, restart_fn=None):
     """dispatches_fn(ask=…) is the dispatch list for D (curses: CursesScreen.dispatches); when None, the dispatches are printed.
     picker_fn(rows, current) returns (action, list of names); when None, use the plain-text menu where a number is typed.
     restore_picker_fn / adopt_picker_fn are the checklist interfaces for R / A; when None, restore / adopt ask in text themselves.
@@ -379,7 +409,11 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
     profiles_fn(ask=…) is the profile screen for o (curses: CursesScreen.profiles); when None, the --plain profile menu.
     After it (even when it raises) the config is re-read, so the list and n / P see renamed, disabled or added profiles.
     The config is also re-read before each action when config.toml changed on disk (another terminal ran sampan profile
-    …); set_cfg_fn(cfg) hands every re-read config on (curses: to CursesScreen.cfg)."""
+    …); set_cfg_fn(cfg) hands every re-read config on (curses: to CursesScreen.cfg).
+    choose_folder_fn(labels) -> index or None is f's destination list (curses: CursesScreen.choose_folder); when None,
+    the destinations are numbered in text. restart_fn defaults to restart.cmd_restart, run with stop_fn / restore_fn.
+    --plain lists the sessions in folders.json's order (a broken file: flat, said once); the curses screen reads the
+    folders itself."""
 
     def _stamp():
         try:
@@ -389,6 +423,21 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
         return st.st_mtime_ns, st.st_size
 
     seen = _stamp()
+    folders_said = [None]  # the folders.json error last shown by --plain (each one is said once)
+    if restart_fn is None:
+        def restart_fn(c, rn, o, a, plan, **k):
+            return restart_mod.cmd_restart(c, rn, o, a, plan, stop_fn=stop_fn, restore_fn=restore_fn, **k)
+
+    def _plain_tree():
+        try:
+            tree = folders_mod.load(cfg.state_dir)
+        except folders_mod.FoldersError as e:
+            if str(e) != folders_said[0]:
+                out(f"⚠ {e}，先照原樣列出")
+            folders_said[0] = str(e)
+            return None
+        folders_said[0] = None
+        return tree
 
     def _reload():
         nonlocal cfg, seen
@@ -468,6 +517,26 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
             _reload()
         return rc, None
 
+    def _new_here(names, rows, kw):
+        prompt_kw = {"wait": False}  # go straight in once opened
+        if names and names[0]:
+            prompt_kw["folder"] = names[0]
+        return _new(cfg, run, out, ask, new_fn, choose_dir_fn, prompt_kw)
+
+    def _restart_names(names, rows, kw, confirmed):
+        """restart! carries the RestartPlan confirmed in the list (bare names, already confirmed, are planned again);
+        restart (--plain) carries names to plan and confirm."""
+        if confirmed and names and isinstance(names[0], restart_mod.RestartPlan):
+            plan = names[0]
+        elif confirmed:
+            plan = restart_mod.plan_restart(rows, names, resume_stopped=True, own_pane=own_pane)
+        else:
+            plan = list(names)
+        return _restart(cfg, run, out, ask, plan, own_pane, restart_fn, kw, rows=rows, confirmed=confirmed), None
+
+    def answer(prompt):
+        return _ask(ask, prompt)
+
     def _dispatches(names, rows, kw):
         if dispatches_fn is not None:
             return dispatches_fn(ask=ask), None
@@ -477,7 +546,7 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
     # an unknown action raises directly and is never written to the registry as a state
     handlers = {
         "attach": _attach_row,
-        "new": lambda names, rows, kw: _new(cfg, run, out, ask, new_fn, choose_dir_fn, {"wait": False}),  # go straight in once opened
+        "new": _new_here,
         "stop": lambda names, rows, kw: (_stop(cfg, run, out, ask, names, own_pane, stop_fn, confirmed=False), None),
         "stop!": lambda names, rows, kw: (_stop(cfg, run, out, ask, names, own_pane, stop_fn, confirmed=True), None),
         "save": lambda names, rows, kw: (save_fn(cfg, run, out), None),
@@ -491,6 +560,14 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
         "plugins": _plugins,
         "profiles": _profiles,
         "dispatches": _dispatches,
+        "restart": lambda names, rows, kw: _restart_names(names, rows, kw, False),
+        "restart!": lambda names, rows, kw: _restart_names(names, rows, kw, True),
+        "collapse": lambda names, rows, kw: (folder_actions.save_collapsed(cfg, names[0], names[1] == "1") or 0, None),
+        "group": lambda names, rows, kw: (folder_actions.group_flow(cfg, out, answer, names), None),
+        "file": lambda names, rows, kw: (folder_actions.file_flow(cfg, out, answer, names, rows, choose_folder_fn),
+                                         None),
+        "rename_folder": lambda names, rows, kw: (folder_actions.rename_flow(cfg, out, answer, names[0]), None),
+        "rm_folder": lambda names, rows, kw: (folder_actions.remove_flow(cfg, out, answer, names[0]), None),
         "retired": lambda names, rows, kw: (set_state_fn(cfg, out, names[0], "retired"), None),
         "active": lambda names, rows, kw: (set_state_fn(cfg, out, names[0], "active"), None),
     }
@@ -515,7 +592,10 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
             return 2
         if getattr(rows, "warning", None) and not picker_fn:
             out(f"⚠ {rows.warning}")  # the curses version puts it in the hint line at the bottom of the screen
-        action, names = picker_fn(rows, current_session) if picker_fn else _plain_action(ask, out, rows, current_session)
+        if picker_fn:
+            action, names = picker_fn(rows, current_session)
+        else:
+            action, names = _plain_action(ask, out, rows, current_session, _plain_tree())
         if action == "quit":
             return 0
         if action == "invalid":

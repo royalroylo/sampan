@@ -1156,3 +1156,197 @@ class ChecklistTest(unittest.TestCase):
         c.key("KEY_DOWN"); c.key("KEY_DOWN")  # noqa: E702
         c.key(" ")
         self.assertNotIn("c", c.marked)
+
+
+class FolderUiTest(unittest.TestCase):
+    """The folder actions and S of cmd_ui (curses keys arrive through picker_fn; --plain types numbers)."""
+    setUp, ui, text = UiTest.setUp, UiTest.ui, UiTest.text
+    ui_keys = InteractiveUiTest.ui_keys
+
+    def tree(self, fn):
+        from sampan import folders
+        folders.edit(self.cfg.state_dir, fn)
+
+    def load(self):
+        from sampan import folders
+        return folders.load(self.cfg.state_dir)
+
+    def folders_file(self):
+        return self.cfg.state_dir / "folders.json"
+
+    def test_restart_action_calls_cmd_restart_and_never_attaches(self):
+        from sampan.restart import RestartPlan
+        plan = RestartPlan(["a"], ["s"], [("b", "忙")])
+        seen = []
+
+        def stop(cfg, run, out, **kw):
+            seen.append(("stop", kw["names"], kw["own_pane"]))
+            kw["stopped"].append("a")
+            return 0
+
+        def restore(cfg, run, out, ask, **kw):
+            seen.append(("restore", kw["names"], kw["confirm"]))
+            return 0
+        rows = ROWS + [row("s", state=State.STOPPED, agent_status="-")]
+        rc = cmd_ui(self.cfg, self.r, self.msgs.append, lambda _p: "", current_session="old", own_pane="%9",
+                    rows_fn=lambda c, r: rows, picker_fn=lambda rows, cur: ("restart!", [plan]),
+                    exec_fn=lambda *a: self.execs.append(a), stop_fn=stop, restore_fn=restore)
+        self.assertEqual(rc, 0)
+        self.assertEqual(seen, [("stop", ("a",), "%9"), ("restore", ("a", "s"), False)])
+        self.assertEqual(self.execs, [])
+        self.assertEqual(self.r.called(["tmux", "-u", "switch-client"]), [])
+        self.assertIn("略過：b（忙）", self.text())
+
+    def test_group_action_asks_name_and_writes(self):
+        self.ui_keys(("group", ["session:a", "session:b"]), ["客戶"])
+        self.assertIn("新資料夾名稱：", "\n".join(self.asked))
+        self.assertEqual(self.load().sessions, {"a": "客戶", "b": "客戶"})
+        self.assertIn("已建立資料夾 客戶（2 項）", self.text())
+        self.assertEqual(self.calls, [])  # no session was stopped, renamed or forgotten
+
+    def test_group_bad_name_says_why_and_writes_nothing(self):
+        self.ui_keys(("group", ["session:a"]), ["甲/乙"])
+        self.assertIn("名稱不能含 /", self.text())
+        self.assertFalse(self.folders_file().exists())
+
+    def test_group_name_taken_asks_merge(self):
+        from sampan import folders
+        self.tree(lambda t: folders.place_session(t, "old", "客戶"))
+        before = self.folders_file().read_bytes()
+        self.ui_keys(("group", ["session:a"]), ["客戶", "n"])
+        self.assertIn("同一層已經有「客戶」，合併進去？(y/N)", "\n".join(self.asked))
+        self.assertEqual(self.folders_file().read_bytes(), before)
+        self.ui_keys(("group", ["session:a"]), ["客戶", "y"])
+        self.assertEqual(self.load().sessions, {"a": "客戶", "old": "客戶"})
+
+    def test_rm_folder_asks_and_keeps_sessions(self):
+        from sampan import folders
+        self.tree(lambda t: (folders.place_session(t, "a", "客戶/甲"), folders.place_session(t, "b", "客戶")))
+        self.ui_keys(("rm_folder", ["客戶"]), ["y"])
+        self.assertIn("刪除資料夾 客戶？裡面的 session 會往上移一層，不會停掉 (y/N)", "\n".join(self.asked))
+        t = self.load()
+        self.assertEqual(t.sessions, {"a": "甲"})
+        self.assertNotIn("客戶", t.folders)
+        self.assertEqual(self.calls, [])
+
+    def test_rm_folder_no_keeps_it(self):
+        from sampan import folders
+        self.tree(lambda t: folders.place_session(t, "a", "客戶"))
+        self.ui_keys(("rm_folder", ["客戶"]), [""])
+        self.assertEqual(self.load().sessions, {"a": "客戶"})
+        self.assertIn("已取消", self.msgs)
+
+    def test_rename_folder_asks_and_merges(self):
+        from sampan import folders
+        self.tree(lambda t: (folders.place_session(t, "a", "客戶"), folders.place_session(t, "b", "開發")))
+        self.ui_keys(("rename_folder", ["客戶"]), ["維運"])
+        self.assertIn("新名稱：", "\n".join(self.asked))
+        self.assertEqual(self.load().sessions, {"a": "維運", "b": "開發"})
+        self.ui_keys(("rename_folder", ["維運"]), ["開發", "y"])
+        self.assertEqual(self.load().sessions, {"a": "開發", "b": "開發"})
+
+    def test_file_action_lists_destinations_and_moves(self):
+        from sampan import folders
+        self.tree(lambda t: (folders.add(t, "開發"), folders.place_session(t, "b", "客戶/甲")))
+        self.ui_keys(("file", ["session:a"]), ["4"])
+        text = self.text()
+        for line in ("[1] （最外層）", "[2] 新資料夾…", "[3] 客戶", "[4] 客戶/甲", "[5] 開發"):
+            self.assertIn(line, text)
+        self.assertEqual(self.load().sessions, {"a": "客戶/甲", "b": "客戶/甲"})
+        self.assertIn("已搬到 客戶/甲", text)
+
+    def test_file_action_excludes_moved_folder_and_its_children(self):
+        from sampan import folders
+        self.tree(lambda t: (folders.add(t, "開發"), folders.place_session(t, "b", "客戶/甲")))
+        self.ui_keys(("file", ["folder:客戶"]), ["3"])
+        text = self.text()
+        self.assertNotIn("] 客戶", text)
+        self.assertEqual(self.load().sessions, {"b": "開發/客戶/甲"})
+        self.assertIn("已搬到 開發", text)
+
+    def test_file_action_to_top_and_to_a_new_folder(self):
+        from sampan import folders
+        self.tree(lambda t: folders.place_session(t, "a", "客戶"))
+        self.ui_keys(("file", ["session:a"]), ["1"])
+        self.assertEqual(self.load().sessions, {})
+        self.assertIn("已搬到 最外層", self.text())
+        self.ui_keys(("file", ["session:a"]), ["2", "維運"])
+        self.assertEqual(self.load().sessions, {"a": "維運"})
+
+    def test_file_action_uses_the_chooser_when_given(self):
+        from sampan import folders
+        self.tree(lambda t: folders.add(t, "客戶"))
+        offered = []
+        cmd_ui(self.cfg, self.r, self.msgs.append, lambda _p: "", rows_fn=lambda c, r: ROWS,
+               picker_fn=lambda rows, cur: ("file", ["session:a"]),
+               choose_folder_fn=lambda labels: offered.append(labels) or 2)
+        self.assertEqual(offered, [["（最外層）", "新資料夾…", "客戶"]])
+        self.assertEqual(self.load().sessions, {"a": "客戶"})
+
+    def test_broken_folders_refuse_folder_actions(self):
+        self.folders_file().parent.mkdir(parents=True, exist_ok=True)
+        self.folders_file().write_text("{")
+        for action in (("group", ["session:a"]), ("file", ["session:a"]), ("rename_folder", ["客戶"]),
+                       ("rm_folder", ["客戶"])):
+            with self.subTest(action=action[0]):
+                self.msgs.clear()
+                self.ui_keys(action, [])
+                self.assertIn("資料夾設定壞了，修好或刪掉 folders.json 再試", self.text())
+                self.assertEqual(self.asked, [])
+        self.ui_keys(("collapse", ["客戶", "1"]))
+        self.assertEqual(self.folders_file().read_text(), "{")
+
+    def test_collapse_saves_silently(self):
+        from sampan import folders
+        self.tree(lambda t: folders.place_session(t, "a", "客戶"))
+        self.msgs.clear()
+        self.ui_keys(("collapse", ["客戶", "1"]))
+        self.assertTrue(self.load().folders["客戶"])
+        self.ui_keys(("collapse", ["不存在/的", "0"]))  # a folder only implied: created, never an error
+        self.assertNotIn("❌", self.text())
+
+    def test_new_in_folder_passes_folder(self):
+        seen = []
+        for target in (["客戶"], [""], []):
+            answers = iter(["fresh", "", "", "/tmp"])
+            cmd_ui(self.cfg, self.r, self.msgs.append, lambda _p: next(answers), rows_fn=lambda c, r: ROWS,
+                   picker_fn=lambda rows, cur, t=target: ("new", t), exec_fn=lambda *a: self.execs.append(a),
+                   new_fn=lambda cfg, run, out, name, profile, cwd, **kw: seen.append(kw) or 0)
+        self.assertEqual(seen, [{"wait": False, "folder": "客戶"}, {"wait": False}, {"wait": False}])
+
+    def test_plain_lists_folder_prefix_and_S_restarts(self):
+        from sampan import folders
+        self.tree(lambda t: folders.place_session(t, "b", "客戶"))
+        self.ui(["S", "1 2", "y"])
+        text = self.text()
+        self.assertIn("[ 1] 客戶 · b", text)  # the tree's order: folders first
+        self.assertIn("[ 2] a ", text)
+        self.assertIn("將重開：a　略過：b（忙）", text)
+        self.assertEqual([c[0] for c in self.calls], ["stop"])
+        self.assertEqual(self.calls[0][1]["names"], ("a",))
+        self.assertEqual(self.execs, [])
+
+    def test_plain_S_cancel_and_nothing_to_do(self):
+        self.ui(["S", "1", ""])
+        self.assertEqual(self.calls, [])
+        self.assertIn("已取消", self.text())
+        self.ui(["S", "3"])
+        self.assertIn("沒有可以重開的", self.text())
+        self.assertEqual(self.calls, [])
+
+    def test_plain_folder_keys_point_to_folder_command(self):
+        self.ui(["g"])
+        self.assertIn("sampan folder", self.text())
+        self.assertIn("S 重開", self.text())
+
+    def test_plain_broken_folders_lists_flat_and_warns(self):
+        self.folders_file().parent.mkdir(parents=True, exist_ok=True)
+        self.folders_file().write_text("{")
+        self.ui(["q"])
+        self.assertIn("資料夾設定讀不到", self.text())
+        self.assertIn("[ 1] a ", self.text())
+
+    def test_folder_actions_logged(self):
+        self.ui_keys(("group", ["session:a"]), ["客戶"])
+        log = (self.cfg.state_dir / "actions.log").read_text()
+        self.assertIn("[資料夾] ✔ 已建立資料夾 客戶（1 項）", log)

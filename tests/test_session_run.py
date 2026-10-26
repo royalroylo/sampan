@@ -488,6 +488,22 @@ class FolderSyncTest(Base):
         self.assertEqual(cmd_new(self.cfg, r, self.msgs.append, "n1", "claude:work", str(self.cwd), folder="a//b"), 2)
         self.assertEqual(r.called(["tmux", "-u", "new-session"]), [])
 
+    def test_new_rc1_with_tmux_session_places_folder(self):
+        # Codex returns 1 when it is ready but not registered yet: the tmux session exists, so it is placed
+        from unittest import mock
+        self.live.add("n1")
+        with mock.patch("sampan.session_run._cmd_new", return_value=1):
+            rc = cmd_new(self.cfg, self.runner(), self.msgs.append, "n1", "codex", str(self.cwd), folder="開發")
+        self.assertEqual(rc, 1)
+        self.assertEqual(folders.load(self.cfg.state_dir).sessions["n1"], "開發")
+
+    def test_new_rc1_without_tmux_session_does_not_place(self):
+        from unittest import mock
+        with mock.patch("sampan.session_run._cmd_new", return_value=1):
+            rc = cmd_new(self.cfg, self.runner(), self.msgs.append, "n1", "codex", str(self.cwd), folder="開發")
+        self.assertEqual(rc, 1)
+        self.assertNotIn("n1", folders.load(self.cfg.state_dir).sessions)
+
     def test_new_folder_write_failure_only_warns(self):
         (self.cfg.state_dir / "folders.json").write_text("{")
         rc = cmd_new(self.cfg, self.runner(), self.msgs.append, "n1", "claude:work", str(self.cwd), folder="開發",
