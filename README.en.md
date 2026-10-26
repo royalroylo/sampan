@@ -45,7 +45,7 @@ Tip: sampan is a long name to type, and on macOS `sam` plus Tab collides with `/
 - macOS: one launchd job runs `sampan save` every 5 minutes. It only saves.
 - Claude's `settings.json` is not touched unless you run `sampan init --hook` (or accept repairing a hook installed earlier).
 - It types into tmux panes only when you act: open, resume, stop, move or send (`sampan send`, only into an empty prompt).
-- Only when you run `sampan mcp install` does it add the sampan MCP to each profile's and Codex's config (`claude mcp add --scope user`, `codex mcp add`); `sampan mcp uninstall` removes it.
+- Only when you run `sampan mcp install` does it add the sampan MCP to each profile's and Codex's config (`claude mcp add --scope user`, `codex mcp add`); `sampan mcp uninstall` removes it. With `[mcp] confirm` on (the default) it also edits Codex's `config.toml` so Codex asks before sampan's acting tools: only sampan's own `[mcp_servers.sampan.tools.*]` tables change, after a backup `config.toml.bak-sampan-<time>`.
 - Network: while the UI is open it checks sampan's version tags on GitHub at most every 6 hours; `U` checks again right away when no newer version is known yet, and `sampan update` always checks again.
 - `sampan init` asks questions and must be run by you in a terminal. It refuses to run without one unless `--yes` is given.
 
