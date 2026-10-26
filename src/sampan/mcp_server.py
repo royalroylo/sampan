@@ -2,10 +2,12 @@
 
 Interface layer. The transport is newline-delimited JSON-RPC 2.0: one message per line, UTF-8 in, ASCII-only JSON out
 (stdout carries protocol messages and nothing else). The main thread reads stdin; each tools/call runs in its own
-thread, because a tool may wait for the user's approval (an `elicitation/create` request this server sends with its
-own id, answered by the client among other messages) or for a reply. A background thread advances this caller's
-pending dispatches every 3 seconds while the server is alive. Every write to stdout holds one lock.
+thread, because a tool may wait for a reply. The tools that act (ACTING_TOOLS) are not asked about here: with
+`[mcp] confirm` on, tools/list marks them `_meta["anthropic/requiresUserInteraction"] = true`, so the agent's own
+permission prompt asks the user, even in auto mode. A background thread advances this caller's pending dispatches
+every 3 seconds while the server is alive. Every write to stdout holds one lock.
 """
+import copy
 import json
 import sys
 import threading
@@ -22,12 +24,8 @@ from .update import current_version
 PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26")  # the first is answered when the client asks for another one
 WATCH_S = 3
 WAIT_MAX_S = 60  # a tool call may not block longer than this (MCP clients time tool calls out themselves)
-ELICIT_TIMEOUT_S = 600
-SEPARATOR = "──── 訊息內容（由 agent 提供）────"  # everything below it in a form is the agent's text
-NOTICE = "完成或失敗後會在你的 session 送出一則通知"
-NO_ELICITATION = "這個 client 不支援核准表單；要用請在 config 設 [mcp] confirm = false"
-DECLINED = "使用者拒絕"
-AGENT_LABELS = {"claude": "Claude", "codex": "Codex"}
+INTERACTION_META = "anthropic/requiresUserInteraction"
+ACTING_TOOLS = ("send", "new_session", "cancel_dispatch")
 
 PARSE_ERROR, INVALID_REQUEST, METHOD_NOT_FOUND, INVALID_PARAMS = -32700, -32600, -32601, -32602
 
@@ -71,6 +69,16 @@ TOOLS = [
 TOOL_NAMES = {t["name"] for t in TOOLS}
 
 
+def tools_list(confirm):
+    """A copy of TOOLS for tools/list; with confirm, the acting tools carry the mark that makes the agent ask the user."""
+    tools = copy.deepcopy(TOOLS)
+    if confirm:
+        for t in tools:
+            if t["name"] in ACTING_TOOLS:
+                t["_meta"] = {INTERACTION_META: True}
+    return tools
+
+
 def _utcnow():
     return datetime.now(timezone.utc)
 
@@ -98,16 +106,6 @@ def identify_caller(cfg, run, pid):
         return send.unsure_caller(e)
 
 
-def _who(caller):
-    label = send.caller_label(caller)
-    return f"{label}（{caller.profile}）" if caller.name is not None and caller.profile else label
-
-
-def _form(header_lines, body):
-    """An approval form: fixed header lines from sampan, then the separator, then the agent's text verbatim."""
-    return "\n".join(header_lines) + "\n" + SEPARATOR + "\n" + body
-
-
 def _ok(obj):
     return {"content": [{"type": "text", "text": json.dumps(obj, ensure_ascii=False)}], "isError": False}
 
@@ -130,14 +128,8 @@ class Server:
         self.resolve = resolve  # () -> Caller, asked again before every tool that acts or reads a dispatch
         self.sleep, self.clock, self.now_fn = sleep, clock, now_fn
         self.status_fn, self.snapshot_fn = status_fn or status_rows, snapshot_fn
-        self.elicitation = False
         self.mine = set()  # dispatch ids created by this server (an unregistered caller's have no from_name to match)
         self._write_lock = threading.Lock()
-        self._cv = threading.Condition()
-        self._next_id = 0
-        self._waiting = set()
-        self._responses = {}
-        self._eof = False
         self._threads = []
         self._stop = threading.Event()
 
@@ -170,9 +162,6 @@ class Server:
                     break
                 self._handle_line(line)
         finally:
-            with self._cv:
-                self._eof = True  # approvals still waiting will never be answered
-                self._cv.notify_all()
             for t in self._threads:
                 t.join()
             self._stop.set()
@@ -199,10 +188,8 @@ class Server:
             return
         method, rid = msg.get("method"), msg.get("id")
         if method is None:
-            if "result" in msg or "error" in msg:
-                self._take_response(msg)
-            else:
-                self._error(rid, INVALID_REQUEST, "缺少 method")
+            if "result" not in msg and "error" not in msg:
+                self._error(rid, INVALID_REQUEST, "缺少 method")  # a client's response to us is ignored
             return
         if not isinstance(method, str):
             self._error(rid, INVALID_REQUEST, "method 要是字串")
@@ -215,7 +202,7 @@ class Server:
         elif method == "ping":
             self._result(rid, {})
         elif method == "tools/list":
-            self._result(rid, {"tools": TOOLS})
+            self._result(rid, {"tools": tools_list(self.cfg.mcp_confirm)})
         elif method == "tools/call":
             name = params.get("name") if isinstance(params, dict) else None
             if name not in TOOL_NAMES:
@@ -231,8 +218,6 @@ class Server:
     def _initialize(self, rid, params):
         params = params if isinstance(params, dict) else {}
         asked = params.get("protocolVersion")
-        caps = params.get("capabilities")
-        self.elicitation = isinstance(caps, dict) and isinstance(caps.get("elicitation"), dict)
         self._result(rid, {
             "protocolVersion": asked if asked in PROTOCOL_VERSIONS else PROTOCOL_VERSIONS[0],
             "capabilities": {"tools": {}},
@@ -240,53 +225,6 @@ class Server:
             "instructions": "sampan 管理 tmux 裡的 Claude Code／Codex session。用 send 傳訊息給另一個 session，"
                             "用 dispatch_result 看回覆。",
         })
-
-    def _take_response(self, msg):
-        rid = msg.get("id")
-        with self._cv:
-            if rid in self._waiting:
-                self._responses[rid] = msg
-                self._cv.notify_all()
-                return
-        _log(f"收到不認得的回應 id {rid!r}")
-
-    def _elicit(self, message, properties, required=()):
-        """Ask the user through the client's form. The accepted content (dict); ToolError when not accepted."""
-        if not self.elicitation:
-            raise ToolError(NO_ELICITATION)
-        schema = {"type": "object", "properties": properties}
-        if required:
-            schema["required"] = list(required)
-        with self._cv:
-            self._next_id += 1
-            rid = self._next_id
-            self._waiting.add(rid)
-        self._write({"jsonrpc": "2.0", "id": rid, "method": "elicitation/create",
-                     "params": {"message": message, "requestedSchema": schema}})
-        with self._cv:
-            self._cv.wait_for(lambda: rid in self._responses or self._eof, timeout=ELICIT_TIMEOUT_S)
-            self._waiting.discard(rid)
-            resp = self._responses.pop(rid, None)
-        if resp is None:
-            raise ToolError(f"{DECLINED}（沒有收到核准表單的回應）")
-        if "error" in resp:
-            err = resp["error"]
-            raise ToolError(f"核准表單失敗：{err.get('message') if isinstance(err, dict) else err}")
-        result = resp.get("result") if isinstance(resp.get("result"), dict) else {}
-        if result.get("action") != "accept":
-            raise ToolError(DECLINED)
-        content = result.get("content")
-        return content if isinstance(content, dict) else {}
-
-    def _approve_message(self, text, message):
-        """With [mcp] confirm: ask, and return the message as the user left it. The field is optional (a client
-        need not prefill `default`): empty or absent means unchanged, a non-empty value is the edited message."""
-        if not self.cfg.mcp_confirm:
-            return message
-        content = self._elicit(text, {"message": {"type": "string", "title": "訊息",
-                                                  "description": "可以改了再送；留空＝照原訊息送", "default": message}})
-        edited = content.get("message")
-        return edited if isinstance(edited, str) and edited.strip() else message
 
     # --- tools -----------------------------------------------------------------------------------------------
 
@@ -378,11 +316,6 @@ class Server:
         problem = send.target_problem(row, to)
         if problem:
             raise ToolError(problem)
-        header = [f"送給 {to}（{row.profile}，{AGENT_LABELS.get(row.agent, row.agent)}）／從 {_who(caller)}"]
-        if caller.name is not None:
-            header.append(f"（60 秒內沒回完的話）{NOTICE}" if wait else NOTICE)
-        message = self._approve_message(_form(header, message), message)
-        # submit checks the target again: it may have stopped while the form was open
         d = send.submit(self.cfg, self.run, caller, to, message, notify=not wait, now=self.now_fn(),
                         snapshot_fn=self.snapshot_fn, status_fn=self.status_fn)
         if isinstance(d, str):
@@ -406,13 +339,8 @@ class Server:
         checked = session_run.check_new(self.cfg, self.run, name, target, cwd)
         if isinstance(checked, str):
             raise ToolError(checked)
-        agent, profile, cwd = checked
+        cwd = checked[2]
         caller = self._refresh_caller()
-        header = [f"開新 session 並送給 {name}（{profile or self.cfg.codex.profile}，{AGENT_LABELS[agent]}）／從 {_who(caller)}",
-                  f"目錄：{cwd}"]
-        if caller.name is not None:
-            header.append(NOTICE)
-        message = self._approve_message(_form(header, message), message)
         try:
             before = {d.id for d in dispatch.load(self.cfg.state_dir)}
         except dispatch.DispatchError as e:
@@ -450,9 +378,6 @@ class Server:
         refusal = send.cancel_refusal(d)
         if refusal:
             raise ToolError(refusal)
-        if self.cfg.mcp_confirm:
-            what = "取消派工" if d.state == "queued" else "不再等回覆：派工"
-            self._elicit(_form([f"{what} {did}（給 {d.to_name}）／從 {_who(self.caller)}"], d.text), {})
         r = send.cancel(self.cfg, did, now=self.now_fn())
         if isinstance(r, str):
             raise ToolError(r)

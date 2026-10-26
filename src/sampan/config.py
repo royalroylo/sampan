@@ -98,7 +98,7 @@ class Config:
     all_profiles: dict  # every profile in config-file order, disabled and Codex ones included
     implicit_codex: bool  # the Codex profile was filled in from [codex] / defaults, not written in the file
     codex_auto_start: bool = True  # [ui] codex_auto_start: start the Codex daemon when the UI opens
-    mcp_confirm: bool = True  # [mcp] confirm: the MCP tools that act ask the user (elicitation) every time
+    mcp_confirm: bool = True  # [mcp] confirm: the MCP tools that act are marked, so the agent's own permission prompt asks the user
 
     @property
     def codex_profiles(self):
