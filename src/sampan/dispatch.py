@@ -7,6 +7,7 @@ import fcntl
 import json
 import os
 import secrets
+import time
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import timedelta
@@ -93,12 +94,25 @@ def _write(state_dir, items):
 
 
 @contextmanager
-def transaction(state_dir):
-    """Hold the lock across load, caller changes and write-back; yields the mutable list. An exception writes nothing."""
+def transaction(state_dir, *, wait_s=None):
+    """Hold the lock across load, caller changes and write-back; yields the mutable list. An exception writes nothing.
+    wait_s None blocks until the lock is free; a number tries for at most that many seconds, then raises DispatchError
+    (for callers that must not stall, like the curses ui)."""
     state_dir = private_dir(state_dir)
     with os.fdopen(os.open(state_dir / "dispatches.lock", os.O_WRONLY | os.O_CREAT, PRIVATE_FILE), "w") as fh:
         try_chmod(fh.fileno(), PRIVATE_FILE)
-        fcntl.flock(fh, fcntl.LOCK_EX)
+        if wait_s is None:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+        else:
+            end = time.monotonic() + wait_s
+            while True:
+                try:
+                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError:
+                    if time.monotonic() >= end:
+                        raise DispatchError("正在送出，稍後再試") from None
+                    time.sleep(0.02)
         try:
             items = load(state_dir)
             yield items

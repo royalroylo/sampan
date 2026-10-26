@@ -213,6 +213,9 @@ def _forget(cfg, run, out, ask, name, forget_fn):
     return forget_fn(cfg, run, out, name)
 
 
+CANCEL_WAIT_S = 0.3  # the ui never waits longer than this for the dispatches lock
+
+
 def cancel_flow(cfg, out, ask, d, *, cancel_fn=None):
     """D list, x: cancel a queued dispatch after asking; any other state says why not. 0 done or declined, 1 refused."""
     if d.state != "queued":
@@ -221,7 +224,7 @@ def cancel_flow(cfg, out, ask, d, *, cancel_fn=None):
     if (_ask(ask, f"取消派工 {d.id}（給 {d.to_name}）？(y/N): ") or "").lower() != "y":
         out("已取消")
         return 0
-    r = (cancel_fn or send_mod.cancel)(cfg, d.id)
+    r = (cancel_fn or (lambda c, did: send_mod.cancel(c, did, wait_s=CANCEL_WAIT_S)))(cfg, d.id)
     if isinstance(r, str):
         out(f"❌ {r}")
         return 1

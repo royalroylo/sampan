@@ -393,7 +393,7 @@ class CursesPluginScreenTest(unittest.TestCase):
         self.assertIn("↑↓ 移動　1-9 跳列　/ 搜尋　Enter 選 profile　u 更新這個", shown[0])
         self.assertNotIn("plugin 管理", screens[-1].split("\n")[0])
         self.assertTrue(screens[-1].startswith("═══ sampan"))
-        self.assertIn("p plugin　o 帳號　D 派工", screens[-1])
+        self.assertIn("p plugin　o 帳號　q 離開", screens[-1])
 
     def test_layer2_toggle_save_confirm_applies(self):
         run = FakeRunner(strict=True)

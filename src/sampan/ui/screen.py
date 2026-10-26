@@ -59,7 +59,7 @@ from .render import (
 from .state import Checklist, Picker, ProfilePicker, _row_key
 from .text import BACKSPACE, ENTER, MOVES, clean_capture, text_width
 
-KEYS_HELP = "↑↓ 移動　1-9 跳列　/ 搜尋　空白 勾選　Enter 接上　s 停掉　R 接回　A 接手　n 開新　w 存檔　p plugin　o 帳號　D 派工　q 離開"
+KEYS_HELP = "↑↓ 移動　1-9 跳列　/ 搜尋　空白 勾選　Enter 接上　s 停　R 接回　A 接手　n 開新　w 存　D 派工　p plugin　o 帳號　q 離開"
 RESTORE_HELP = "↑↓ 移動　空白 勾選　Enter 確認接回　q 取消"
 ADOPT_HELP = "↑↓ 移動　空白 勾選　Enter 確認接手　q 取消"
 PLUGINS_HELP = "↑↓ 移動　1-9 跳列　/ 搜尋　Enter 選 profile　u 更新這個　U 全部更新　a 新增　r 檢查新版　q 返回　Tab 切到來源"
@@ -93,12 +93,12 @@ class CursesScreen:
 
     def __init__(self, scr, cfg=None, run=None, now_fn=_now, *, clock=time.monotonic, rows_fn=status_rows,
                  own_pane=None, updater=None, usage_fn=None, interactive=None, sampan_path=None, watcher=None,
-                 dispatch_watcher=None, dispatches_load=dispatch.load):
+                 dispatch_watcher=None, dispatches_load=dispatch.load, cancel_fn=None):
         self.scr, self.cfg, self.run, self.now_fn = scr, cfg, run, now_fn
         # watcher: daemon_watch.DaemonWatcher (curses_ui starts / stops it); its latest snapshot colours the Codex rows
         self.watcher, self._snap = watcher, None
         # dispatch_watcher: dispatch_watch.DispatchWatcher; its items feed the summary line (dispatches_load reads the D list)
-        self.dispatch_watcher, self.dispatches_load = dispatch_watcher, dispatches_load
+        self.dispatch_watcher, self.dispatches_load, self.cancel_fn = dispatch_watcher, dispatches_load, cancel_fn
         self._tmp_roots = tmp_roots()
         # usage_fn(cfg, profile) -> Usage | None for the account lines and profile cards (default: the files on disk);
         # interactive(args, env) runs a login with the terminal (curses steps out); None = say what to run instead
@@ -377,7 +377,7 @@ class CursesScreen:
                 if action[0] == "back":
                     return 0
                 self.messages = []
-                cancel_flow(self.cfg, self.out, ask, picker.here)
+                cancel_flow(self.cfg, self.out, ask, picker.here, cancel_fn=self.cancel_fn)
                 picker.reload(load())
         except KeyboardInterrupt:
             return 0

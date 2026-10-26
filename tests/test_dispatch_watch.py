@@ -227,16 +227,42 @@ class ScreenTest(unittest.TestCase):
 
     def test_x_on_queued_asks_then_cancels_and_refreshes(self):
         calls = []
+
+        def cancel(cfg, did):
+            calls.append(did)
+            self.items[0] = mk(did, "cancelled")
+            return self.items[0]
         s = self.screen(["x", "q"], [mk("a1")])
-        from sampan import send as send_mod
-        orig = send_mod.cancel
-        send_mod.cancel = lambda cfg, did, **k: calls.append(did) or self.items.__setitem__(0, mk(did, "cancelled")) or self.items[0]
-        try:
-            s.dispatches(ask=lambda p: "y")
-        finally:
-            send_mod.cancel = orig
+        s.cancel_fn = cancel
+        s.dispatches(ask=lambda p: "y")
         self.assertEqual(calls, ["a1"])
         self.assertIn("已取消", self.shown())
+
+    def test_help_line_with_q_fits_120_columns(self):
+        s = self.screen(["q"])
+        s.pick([row("a")], None)
+        self.assertIn("q 離開", self.scr.screens[-1][-1])
+
+    def test_cancel_returns_promptly_when_the_lock_is_held(self):
+        import fcntl
+        import os
+        import time
+
+        from sampan import send
+        with dispatch.transaction(self.cfg.state_dir) as items:
+            items.append(mk("a1"))
+        fd = os.open(self.cfg.state_dir / "dispatches.lock", os.O_WRONLY)
+        fcntl.flock(fd, fcntl.LOCK_EX)  # another process is delivering
+        try:
+            t0 = time.monotonic()
+            r = send.cancel(self.cfg, "a1", wait_s=0.2)
+            took = time.monotonic() - t0
+        finally:
+            os.close(fd)
+        self.assertEqual(r, "正在送出，稍後再試")
+        self.assertLess(took, 2)
+        self.assertEqual(dispatch.load(self.cfg.state_dir)[0].state, "queued")
+        self.assertEqual(send.cancel(self.cfg, "a1", wait_s=0.2).state, "cancelled")  # free again
 
     def test_ui_d_key_runs_the_handler(self):
         called = []

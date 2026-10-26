@@ -340,10 +340,11 @@ def pending(cfg):
     return [d.id for d in dispatch.load(cfg.state_dir) if d.state in ("queued", "sent") or _owes_notice(d)]
 
 
-def cancel(cfg, did, *, now=None):
-    """Cancel a queued dispatch. The cancelled Dispatch, or why not (str)."""
+def cancel(cfg, did, *, now=None, wait_s=None):
+    """Cancel a queued dispatch. The cancelled Dispatch, or why not (str). wait_s: give up on a busy lock after that many
+    seconds (the ui, which must not stall behind a delivery); None waits."""
     try:
-        with dispatch.transaction(cfg.state_dir) as items:
+        with dispatch.transaction(cfg.state_dir, wait_s=wait_s) as items:
             d = next((x for x in items if x.id == did), None)
             if d is None:
                 return f"沒有派工 {did}"
