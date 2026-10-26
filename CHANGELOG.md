@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-10-27
+
+### Fixed
+- `sampan send` (and completion notices) no longer keep a dispatch queued as 「對方畫面停在選單或提示」 when an idle Claude shows its session title in the top rule of the input box (「──── <title> ─」, Claude Code 2.1.3xx); the box is recognised and its dim suggestion still counts as empty.
+
 ## [0.11.0] - 2026-10-26
 
 ### Added
@@ -326,7 +331,8 @@ First public release. Versions up to 0.5.3 were released privately under the nam
 ### Security
 - Credentials in git URLs are no longer shown in output.
 
-[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.11.1...HEAD
+[0.11.1]: https://github.com/royalroylo/sampan/releases/tag/v0.11.1
 [0.11.0]: https://github.com/royalroylo/sampan/releases/tag/v0.11.0
 [0.10.0]: https://github.com/royalroylo/sampan/releases/tag/v0.10.0
 [0.9.1]: https://github.com/royalroylo/sampan/releases/tag/v0.9.1
