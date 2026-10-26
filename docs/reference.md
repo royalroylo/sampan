@@ -51,3 +51,21 @@
 | `pid` | 最後一次看到的 agent 行程，整數或 `null` |
 
 `version = 1` 的舊檔仍可讀（缺的 `agent` 視為 `claude`、`pid` 視為 `null`），下次寫入時升為 2。每次改寫前，若 session 有實際變動（`seen_at`、`pid`、`server` 不算），會把舊檔複製到 `history/registry-<時間>.json`（保留最近 20 份）。時間（`saved_at`、`seen_at`、歷史檔名）一律以 UTC 寫入（`+00:00`），畫面上顯示時才換成本地時間；舊版留下的歷史檔名可能是本地時間。
+
+## `dispatches.json`（`version = 1`，在狀態資料夾裡）
+
+派工紀錄：一則從呼叫者 session（或終端機）送給目標 session 的訊息。讀寫時用同資料夾的 `dispatches.lock` 鎖住；檔 600、資料夾 700。格式是 `{"version": 1, "dispatches": [...]}`，每筆：
+
+| 欄位 | 說明 |
+|---|---|
+| `id` | 4 個小寫 hex |
+| `from_name`、`from_profile`、`from_agent` | 呼叫者（人在終端機送的，`from_name` 是「終端機」） |
+| `to_name`、`to_agent`、`to_profile` | 目標 session |
+| `text` | 含來源行的完整送出內容 |
+| `state` | `queued`、`sent`、`done`、`failed`、`cancelled` 其中之一 |
+| `created`、`sent_at`、`done_at` | UTC ISO 時間；`sent_at`、`done_at` 可為 `null` |
+| `reply`、`reason` | 回覆內容（或 `null`）；失敗或取消的原因 |
+| `notify`、`notified` | 是否要在完成時通知呼叫者、是否已通知 |
+| `thread_id` | 對話識別，或 `null` |
+
+讀不懂的檔不會覆蓋。已完成（`done`、`failed`、`cancelled`）超過 7 天的會被清掉，總數只留最新 200 筆。`outbox/<id>.txt` 放要送出的原文（檔 600）。

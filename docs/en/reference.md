@@ -54,3 +54,21 @@ Version 1 files are still read (a missing `agent` counts as `claude`, a missing 
 next write. Before a rewrite the previous file is copied to `history/registry-<time>.json` (newest 20 kept) only when a session really changed (`seen_at`, `pid` and `server` do not count).
 Times (`saved_at`, `seen_at`, the history file names) are written in UTC (`+00:00`) and converted to local time only for
 display; history files left by older versions may be named in local time.
+
+## `dispatches.json` (`version = 1`, in the state folder)
+
+Dispatch records: one message sent from a caller session (or the terminal) to a target session. Reads and writes hold `dispatches.lock` in the same folder; the file is 600 and the folder 700. The format is `{"version": 1, "dispatches": [...]}`, each entry:
+
+| Field | Meaning |
+|---|---|
+| `id` | four lowercase hex digits |
+| `from_name`, `from_profile`, `from_agent` | the caller (for a person at the terminal, `from_name` is "終端機") |
+| `to_name`, `to_agent`, `to_profile` | the target session |
+| `text` | the full text sent, including the source line |
+| `state` | one of `queued`, `sent`, `done`, `failed`, `cancelled` |
+| `created`, `sent_at`, `done_at` | UTC ISO times; `sent_at` and `done_at` may be `null` |
+| `reply`, `reason` | the reply (or `null`); why it failed or was cancelled |
+| `notify`, `notified` | whether to notify the caller when done, and whether that happened |
+| `thread_id` | conversation identifier, or `null` |
+
+A file that cannot be read is never overwritten. Finished entries (`done`, `failed`, `cancelled`) older than 7 days are dropped, and only the newest 200 are kept. `outbox/<id>.txt` holds the exact text to deliver (mode 600).

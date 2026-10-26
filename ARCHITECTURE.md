@@ -17,7 +17,7 @@ What does not happen: nothing in detection, the registry or the leaf modules imp
      `screens.py` (every Claude / Codex screen marker and prompt parser lives here and only here),
      `status.py` (the `State` enum and `StatusRow` shown to the user).
 2. **Registry** (the only durable state)
-   - `registry.py` reads and writes `registry.json`; `config.py` reads `config.toml`; `fsutil.py` does atomic writes;
+   - `registry.py` reads and writes `registry.json`; `dispatch.py` stores dispatch records (`dispatches.json`, its own lock, `outbox/`); `config.py` reads `config.toml`; `fsutil.py` does atomic writes;
      `clock.py` stores times in UTC and formats them in local time.
 3. **Actions** (change things, always on explicit command)
    - `save.py`, `restore.py`, `session_run.py` (new / stop / move / rename), `adopt.py`, `launch.py`, `prompts.py`
@@ -54,6 +54,8 @@ callable (`runner.py`). That is what makes the suite fast and safe: tests pass a
 | `~/.config/sampan/config.toml` (`SAMPAN_CONFIG`) | profiles, marketplaces, plugin lists, `[restore]`, `[ui]`, `[codex]` (profiles carry `agent` and `disabled`) |
 | `~/.local/state/sampan/` (`SAMPAN_STATE_DIR`) | state directory |
 | `registry.json` | sessions: tmux name, agent, profile, conversation id, cwd, state, last seen (UTC) |
+| `dispatches.json` (`dispatches.lock`) | dispatch records: who sent what to which session, state queued / sent / done / failed / cancelled, reply; finished ones pruned after 7 days, newest 200 kept |
+| `outbox/<id>.txt` | the exact text of a dispatch, handed to tmux through a buffer file |
 | `history/registry-*.json` | previous registries (newest 20 by modification time) |
 | `save.log` | one line per `sampan save` run; `sampan doctor` reads it |
 | `actions.log` (`.1`, `.lock`) | messages of the plugin, marketplace, restart, forget, switch and profile actions that ran, with time and action; credentials masked (`actionlog.py`) |
