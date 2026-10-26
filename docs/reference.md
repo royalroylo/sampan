@@ -123,3 +123,7 @@ stdio MCP server（每行一則 JSON-RPC 2.0；協定版本 `2025-06-18`，clien
 - **Claude Code**：官方 MCP 文件有 elicitation 對話框與 `Elicitation` hook，非互動（headless）session 會要求 server 取消需要輸入的請求；文件**沒有**說 `bypassPermissions`／`--dangerously-skip-permissions` 會不會自動回答 elicitation，也沒有驗證過，視為未確認。另外 `Elicitation` hook 可以代為回答，裝了這種 hook 的 profile 同樣會繞過人。
 
 來源：官方 [Codex 設定參考](https://developers.openai.com/codex/config-reference)（轉到 learn.chatgpt.com/docs/config-file/config-reference）；第三方 [MCP Server Elicitations in Codex CLI](https://codex.danielvaughan.com/2026/04/10/mcp-elicitation-codex-cli/)；Claude Code [MCP 文件](https://code.claude.com/docs/en/mcp)。Codex 官方 MCP 頁沒有 elicitation 的說明，版本細節只有第三方來源。
+
+## `sampan restart <名稱…>`
+
+重開指定的 session，每筆結果記在 `actions.log`（標籤 `重開`）。分類：登記表裡執行中且 `agent_status` 不是 `busy`／`working`／`waiting`、也不在 sampan 自己所在的 pane 的 → 先 `sampan stop`（逾時 90 秒）再背景接回；已停止的 → 只接回；retired、狀態不明、其他狀態、忙碌中、找不到的 → 略過，最後一行印「略過：名稱（原因）…」。接回用 `restore` 的不確認、不等待進入模式，不會把你帶進任何 session。可重開與可接回的都沒有時回傳 1；否則回傳 stop 與 restore 中最差的結束碼。

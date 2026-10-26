@@ -110,6 +110,17 @@ class CliTest(unittest.TestCase):
             cli.main(["folder", "list"])
             self.assertEqual(fc.call_args.args[2:], ("list", []))
 
+    def test_cli_restart_nothing_to_do_rc1(self):
+        from sampan.status import State
+        from tests.helpers import status_row
+        rows = [status_row("a", State.RETIRED)]
+        out = io.StringIO()
+        with mock.patch("sampan.status.status_rows", return_value=rows), \
+                mock.patch("sampan.restart.cmd_restart") as cr, redirect_stdout(out):
+            self.assertEqual(cli.main(["restart", "a", "zz"]), 1)
+        cr.assert_not_called()
+        self.assertIn("略過：a（retired）、zz（找不到）", out.getvalue())
+
     def test_new_passes_folder_only_when_given(self):
         with mock.patch("sampan.session_run.cmd_new", return_value=0) as nw:
             cli.main(["new", "x", "claude:alice", "/tmp", "--folder", "開發"])

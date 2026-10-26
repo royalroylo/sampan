@@ -43,6 +43,8 @@ def build_parser():
     sp.add_argument("--timeout", type=int, default=90, help="等待秒數（預設 90）")
     sp.add_argument("--keep-tmux", action="store_true", help="agent 結束後保留 tmux session（預設：只剩那個 pane 就關掉）")
     sp.add_argument("--dry-run", action="store_true")
+    rt = sub.add_parser("restart", help="重開這些 session：閒置的先停再背景接回原對話，已停止的直接接回，忙的略過")
+    rt.add_argument("names", nargs="+", help="session 名稱")
     rn = sub.add_parser("rename", help="改 session 名稱（tmux 與登記表一起改，agent 照常執行）")
     rn.add_argument("name")
     rn.add_argument("new")
@@ -437,6 +439,16 @@ def _dispatch(cfg, args):
     if cmd == "status":
         from .status import cmd_status
         return cmd_status(cfg, run, out)
+    if cmd == "restart":
+        from . import restart, status
+        own = os.environ.get("TMUX_PANE")
+        plan = restart.plan_restart(status.status_rows(cfg, run), args.names, resume_stopped=True, own_pane=own)
+        if not plan.restart and not plan.resume:
+            out("沒有可重開的 session。" + ("略過：" + "、".join(f"{n}（{w}）" for n, w in plan.skip)
+                                         if plan.skip else ""))
+            return 1
+        on_prompt, _want = _prompt_fn()
+        return restart.cmd_restart(cfg, run, out, input, plan, own_pane=own, on_prompt=on_prompt)
     if cmd in ("new", "stop", "move", "switch", "rename", "forget", "retire", "activate"):
         from . import session_run
         if cmd == "new":

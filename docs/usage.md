@@ -183,6 +183,7 @@ Claude Code 只在狀態列指令的輸入裡提供 5h／週額度，所以要�
 | 以某個帳號開 claude／開 codex | `sampan claude [profile] [claude 參數…]`（不帶 profile 會列選單；第一個字不是 profile 也不是 `-` 開頭會報錯，不會當成提示詞送出）、`sampan codex` |
 | 存下目前每個 session 的對話 id | `sampan save`（排程每 5 分鐘也會跑） |
 | 讓 agent 正常結束（先收起來，要用時再 restore） | `sampan stop [名稱…] [--profile <p>] [--force] [--keep-tmux]`：結束後若那個 tmux session 只剩這一個 pane，就一起關掉；有其他視窗或 pane 則保留 |
+| 重開指定的 session | `sampan restart <名稱…>`：閒置的先停再背景接回原對話（不會把你帶進去），已停止的直接接回；忙碌中的、sampan 自己所在的 pane、retired 的略過，並在最後列出名稱與原因。全部都不能重開時回傳 1 |
 | 重開機後接回 | `sampan restore [名稱…] [--all] [--dry-run]` |
 | 接手在 tmux 外（例如終端機程式的分頁）跑的 claude／codex | `sampan adopt [--dry-run]`（或 ui 按 A）：列出 tmux 外的 claude／codex（目錄、最後活動、最後一句話），勾選後逐一問 session 名稱；你自己在原視窗 `/exit`（Codex：`/quit`），sampan 等它結束後才在新的 tmux session 接回同一段對話並登記。sampan 不對原視窗按任何鍵；判斷不出對話 id 或 profile 的不能選 |
 | 改 session 名稱 | `sampan rename <名稱> <新名稱>`（或 ui 按 e）：tmux session 與登記表一起改，agent 照常執行、不送任何按鍵。名稱不能含 `.` 或 `:` |
