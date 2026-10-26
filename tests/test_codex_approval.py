@@ -1,4 +1,6 @@
 """codex_approval: the approval_mode = "prompt" tables sampan keeps in Codex's config.toml, edited as text."""
+import ast
+import codecs
 import os
 import stat
 import subprocess
@@ -197,18 +199,20 @@ class ApplyTest(unittest.TestCase):
         raw = text.encode()
         self.path.write_bytes(raw)
         src = Path(ca.__file__).resolve().parents[1]
+        # the child's code must be pure ASCII: under LC_ALL=C Linux cannot decode a non-ASCII -c argument
         code = ("import locale, sys; from datetime import datetime; from sampan import codex_approval as ca; "
                 "print(locale.getpreferredencoding(False)); "
-                f"print(ca.apply({str(self.path)!r}, True, now=datetime(2026, 10, 27, 1, 30)).startswith('已更新')); "
+                f"print(ascii(ca.apply({str(self.path)!r}, True, now=datetime(2026, 10, 27, 1, 30))).replace(' ', '_')); "
                 f"print(all(ca.tool_prompts({str(self.path)!r}, t) for t in ca.ACTING_TOOLS))")
         env = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C", "PYTHONUTF8": "0", "PYTHONCOERCECLOCALE": "0",
                "PYTHONPATH": str(src), "HOME": str(self.dir)}
         r = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 0, r.stderr)
         enc, applied, prompts = r.stdout.split()
-        if "ascii" not in enc.lower():
+        if codecs.lookup(enc).name != "ascii":  # Linux names it ANSI_X3.4-1968
             self.skipTest(f"C locale is {enc} here")
-        self.assertEqual((applied, prompts), ("True", "True"))
+        self.assertTrue(ast.literal_eval(applied).startswith("已更新"), applied)  # printed with ascii(): the command line stays ASCII
+        self.assertEqual(prompts, "True")
         self.assertEqual((self.dir / BACKUP).read_bytes(), raw)
         new = self.path.read_bytes()
         self.assertEqual(ca.strip_sections(new.decode("utf-8")).encode("utf-8"), ca.strip_sections(text).encode("utf-8"))
