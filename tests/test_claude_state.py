@@ -220,6 +220,25 @@ class ReplyToTest(unittest.TestCase):
         sent = json.loads((FIX / "claude_transcript_paste.jsonl").read_text().splitlines()[0])["message"]["content"]
         self.assertEqual(reply_to(FIX / "claude_transcript_paste.jsonl", sent), Reply(True, True, "OK"))
 
+    def test_real_transcript_long_paste_is_wrapped(self):
+        f = FIX / "claude_transcript_pasted_content.jsonl"
+        long = "L1 只回 OK\nL2\nL3\nL4\nL5\nL6\nL7\nL8\nL9\nL10"
+        self.assertEqual(reply_to(f, long).found, True)
+        self.assertEqual(reply_to(f, long + "\n").found, True)  # trailing newlines never count
+        self.assertTrue(reply_to(f, long).text.startswith("你貼了一段 10 行"))
+        short = reply_to(f, "A1 只回 OK\nA2\nA3")
+        self.assertTrue(short.done and short.text.startswith("A1–A3"))
+        self.assertEqual(reply_to(f, "L1 只回 OK\nL2"), Reply(False, False, ""))  # a prefix is not the message
+
+    def test_wrapped_record_needs_matching_ids_and_one_block(self):
+        w = lambda i, j, body: u("\n\n<pasted_content id=\"%s\">\n%s\n</pasted_content id=\"%s\">\n" % (i, body, j))
+        f = write_jsonl([w("ab12", "cd34", "x\ny\nz\nw"), a(text("r"))])
+        self.assertEqual(reply_to(f, "x\ny\nz\nw").found, False)
+        f = write_jsonl([w("ab12", "ab12", "x\ny\nz\nw"), a(text("r"))])
+        self.assertEqual(reply_to(f, "x\ny\nz\nw"), Reply(True, True, "r"))
+        f = write_jsonl([w("ab12", "ab12", "x\ny\nz\nw"), a(text("r"))])
+        self.assertEqual(reply_to(f, "Base directory for this skill: /tmp/skills/x"), Reply(False, False, ""))
+
     def test_question_and_answer(self):
         f = write_jsonl([u("old"), a(text("old reply")), u("hi"), a(text("hello"))])
         self.assertEqual(reply_to(f, "hi"), Reply(True, True, "hello"))

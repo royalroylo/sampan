@@ -3,7 +3,8 @@
 # Uses #!/bin/bash (not env) so the process name (comm) is "claude", which is how sampan finds agents.
 # Draws a Claude-style prompt box (rules, "❯" + NBSP, a dim placeholder) and takes typed keys and bracketed pastes the way
 # `sampan send` needs: Enter submits, a submitted text is saved under $FAKE_CLAUDE_RECEIVED (default ~/.fake-claude-received)
-# and recorded in the transcript with a short "OK" reply, with the session file busy for a second in between.
+# and recorded in the transcript (a paste of more than 3 lines shows as "[Pasted text #N +K lines]" in the box and is
+# stored wrapped in a pasted_content block, like the real thing; shorter ones raw) with a short "OK" reply, with the session file busy for a second in between.
 # Does NOT exercise: real startup prompts (trust folder), the SessionStart hook, waiting states, worktrees.
 if [ "${1:-}" = auth ]; then
     [ "${2:-}" = status ] && echo '{"loggedIn": true, "email": "fake@example.com"}'
@@ -39,6 +40,7 @@ trap 'exit 0' TERM HUP INT
 recv="${FAKE_CLAUDE_RECEIVED:-$HOME/.fake-claude-received}"
 mkdir -p "$recv"
 buf=""
+collapsed=""  # set when the box shows a long paste as "[Pasted text …]"
 n=0
 rule="────────────────────────────────────────────────────────"
 setstatus() { printf '{"pid":%d,"sessionId":"%s","cwd":"%s","status":"%s","tmux":"%s"}\n' "$$" "$sid" "$PWD" "$1" "${TMUX_PANE:-}" > "$sfile"; }
@@ -54,19 +56,24 @@ draw() {
     if [ -z "$buf" ]; then
         printf '❯\xc2\xa0\033[2mTry "write a test for <filepath>"\033[0m\n'
     else
-        printf '❯\xc2\xa0%s\n' "$buf"
+        printf '❯\xc2\xa0%s\n' "${collapsed:-$buf}"
     fi
     echo "$rule"
     echo "  ? for shortcuts"
 }
 submit() {
-    local text="$1" now
+    local text="$1" now rec="$1"
     [ "$text" = "/exit" ] && exit 0
+    if [ -n "$collapsed" ]; then
+        rec=$'\n\n<pasted_content id="bfc0">\n'"$text"
+        [[ "$text" == *$'\n' ]] || rec+=$'\n'
+        rec+=$'</pasted_content id="bfc0">\n'
+    fi
     n=$((n + 1))
     printf %s "$text" > "$recv/$sid.$n"
     setstatus busy
     now=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
-    printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"$now\",\"message\":{\"role\":\"user\",\"content\":\"$(jstr "$text")\"}}" >> "$transcript"
+    printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"$now\",\"message\":{\"role\":\"user\",\"content\":\"$(jstr "$rec")\"}}" >> "$transcript"
     sleep 1
     now=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
     printf '%s\n' "{\"type\":\"assistant\",\"timestamp\":\"$now\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"OK $n\"}],\"usage\":{\"input_tokens\":1300,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}}}" >> "$transcript"
@@ -80,14 +87,18 @@ while IFS= read -rsN1 ch; do
     if [ -n "$inpaste" ]; then
         [ "$ch" = $'\r' ] && ch=$'\n'  # tmux turns the newlines of a paste into CR
         buf+="$ch"
-        if [[ "$buf" == *$'\033[201~' ]]; then buf=${buf%$'\033[201~'}; inpaste=""; draw; fi
+        if [[ "$buf" == *$'\033[201~' ]]; then buf=${buf%$'\033[201~'}; inpaste=""
+            nl=${buf//[!$'\n']/}
+            if [ ${#nl} -gt 2 ]; then collapsed="[Pasted text #1 +${#nl} lines]"; fi
+            draw
+        fi
         continue
     fi
     case "$ch" in
         $'\033') IFS= read -rsN5 -t 1 rest
             if [ "$rest" = "[200~" ]; then inpaste=1; fi ;;
-        $'\r'|$'\n') t="$buf"; buf=""; submit "$t"; draw ;;
-        $'\025') buf=""; draw ;;
+        $'\r'|$'\n') t="$buf"; buf=""; submit "$t"; collapsed=""; draw ;;
+        $'\025') buf=""; collapsed=""; draw ;;
         $'\177') buf=${buf%?}; draw ;;
         *) buf+="$ch"; draw ;;
     esac

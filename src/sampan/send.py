@@ -130,7 +130,7 @@ def _create(cfg, caller, to, to_agent, to_profile, message, state, now, *, notif
         with dispatch.transaction(cfg.state_dir) as items:
             did = dispatch.new_id({d.id for d in items})
             text = deliver.compose(caller_label(caller), caller.profile, did, message)
-            if strip:
+            if strip or state == "queued":  # a trailing newline (stdin) is never part of the message
                 text = text.rstrip("\n")
             dispatch.write_outbox(cfg.state_dir, did, text)
             d = dispatch.Dispatch(

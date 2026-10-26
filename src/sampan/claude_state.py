@@ -182,6 +182,16 @@ def _assistant_text(rec):
     return "".join(texts) if "".join(texts).strip() else ""  # a record with only thinking / tool_use has no text
 
 
+PASTED_RE = re.compile(r'\n\n<pasted_content id="([^"<>]+)">\n(.*)</pasted_content id="\1">\n', re.S)
+
+
+def _bound_text(content):
+    """What a user record says, for binding to a sent text: a long paste is stored wrapped in exactly one
+    pasted_content block (ids match), which is removed; trailing newlines never count."""
+    m = PASTED_RE.fullmatch(content)
+    return (m.group(2) if m else content).rstrip("\n")
+
+
 def reply_to(path, sent):
     """The reply to the last user record whose text equals sent: the last assistant text after it and before the next
     message the user typed. Skill injections, compaction summaries, tool results and thinking-only records are never
@@ -201,7 +211,8 @@ def _reply_to(path, sent):
             continue
         if not isinstance(rec, dict):
             continue
-        if _user_content(rec, join=True) == sent:
+        content = _user_content(rec, join=True)
+        if content is not None and _bound_text(content) == sent.rstrip("\n"):
             window = []
             for later in reversed(after):  # oldest first, up to the next typed message
                 if _user_content(later, join=True) is not None:

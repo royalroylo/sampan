@@ -226,6 +226,22 @@ class AdvanceClaudeTest(Base):
         self.assertEqual(run2.calls, [])
         self.assertEqual(self.stored(d.id), d)
 
+    def test_message_ending_in_newline_binds_its_reply(self):
+        d = self.submit(message="line one\nline two\n")
+        self.assertFalse(d.text.endswith("\n"))
+        self.assertEqual(dispatch.outbox_path(self.cfg.state_dir, d.id).read_text(), d.text)
+        d = self.advance(tmux_runner(), d.id)
+        self.transcript(SID_B, [user(d.text), assistant("ok")])
+        self.assertEqual(self.advance(FakeRunner(strict=True), d.id, later(5)).reply, "ok")
+
+    def test_long_paste_wrapped_by_claude_binds_its_reply(self):
+        d = self.submit(message="1\n2\n3\n4\n5\n")
+        d = self.advance(tmux_runner(), d.id)
+        wrapped = '\n\n<pasted_content id="ab12">\n' + d.text + '\n</pasted_content id="ab12">\n'
+        self.transcript(SID_B, [user(wrapped), assistant("got it")])
+        d = self.advance(FakeRunner(strict=True), d.id, later(5))
+        self.assertEqual((d.state, d.reply), ("done", "got it"))
+
     def test_busy_target_stays_queued_without_any_tmux_call(self):
         d = self.submit()
         self.set_row("b", agent_status="busy")
