@@ -63,6 +63,16 @@ class McpInstallTest(unittest.TestCase):
         self.assertEqual(add["args"][0], "codex")
         self.assertNotIn("CODEX_HOME", add["env"])
 
+    def test_ambient_codex_home_is_removed_when_the_configured_home_is_default(self):
+        cfg = make_env(Path(tempfile.mkdtemp()), TOML)
+        r = self.runner()
+        with mock.patch.dict("os.environ", {"CODEX_HOME": "/elsewhere"}):
+            mcp_install.install(cfg, r, self.o, sampan_path=SP)
+        codex = [c for c in r.calls if c["args"][0] == "codex"]
+        self.assertTrue(codex)
+        for c in codex:  # both get and add
+            self.assertNotIn("CODEX_HOME", c["env"])
+
     def test_already_installed_is_skipped_and_said(self):
         r = self.runner(installed={"default"})
         mcp_install.install(self.cfg, r, self.o, sampan_path=SP)

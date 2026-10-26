@@ -17,7 +17,10 @@ def _targets(cfg):
     """(label, agent, env) for every enabled Claude profile and for Codex when enabled."""
     out = [(p.name, "claude", p.env(os.environ)) for p in cfg.profiles.values()]
     if cfg.codex.enabled:
-        out.append((cfg.codex.profile or "codex", "codex", {**os.environ, **codex_env(cfg)}))
+        env = {**os.environ, **codex_env(cfg)}
+        if not codex_env(cfg):  # the configured home is ~/.codex: an ambient CODEX_HOME would point codex elsewhere
+            env.pop("CODEX_HOME", None)
+        out.append((cfg.codex.profile or "codex", "codex", env))
     return out
 
 
