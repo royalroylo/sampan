@@ -67,7 +67,7 @@ Session folders, used only by the screen and `sampan folder`; `save`, `restore` 
 | `sampan folder rename <path> <new name> [--merge]` | Changes the last segment only; a same-named folder at that level needs `--merge` to be merged into, otherwise exit 2 |
 | `sampan folder rm <path>` | Deletes the folder; its sessions and subfolders move up one level, no session is stopped or forgotten |
 | `sampan folder move <name or path>... <destination｜/> [--merge]` | Moves sessions or folders; `/` is the top level; a source that is a path in `folders.json` is a folder, otherwise it must be a session in the registry, else exit 2 |
-| `sampan new … --folder <path>` | Only after the session started (exit 0) puts it in the folder (created if missing); a failed write is only a warning |
+| `sampan new … --folder <path>` | Only after the session started puts it in the folder (created if missing): exit 0, or exit 1 with the tmux session there (Codex ready but not registered yet); a failed write is only a warning |
 
 `sampan rename`, `sampan forget` and `sampan profile forget` keep `folders.json` in step; a failed sync only adds a line `⚠ 資料夾設定沒同步：…` and does not affect the action.
 
@@ -129,4 +129,4 @@ Sources: official [Codex configuration reference](https://developers.openai.com/
 
 ## `sampan restart <name…>`
 
-Restarts the named sessions; each result is logged in `actions.log` (label `重開`). Classification: running in the registry with an `agent_status` that is not `busy`, `working` or `waiting`, and not in the pane sampan itself runs in, then `sampan stop` (90 second timeout) and a background reattach; stopped, then only reattached; retired, state unknown, any other state, busy or not found, then skipped, with a final line "略過：name（reason）…". The reattach is a `restore` without confirmation and without taking you in, so you are never brought into a session. Exit 1 when there is nothing to restart or reattach; otherwise the worst exit code of stop and restore.
+Restarts the named sessions; each result is logged in `actions.log` (label `重開`). Classification: running in the registry with `agent_status` `idle`, and not in the pane sampan itself runs in, then `sampan stop` (90 second timeout) and a background reattach; stopped, then only reattached; busy (`busy`, `working` or `waiting`, reason 「忙」), any other status that is not idle (reason for example 「沒有閒著（unknown）」), retired, state unknown, any other state or not found, then skipped, with a final line "略過：name（reason）…". The reattach is a `restore` without confirmation that does not take you in by itself; an agent that stops at a startup menu (trust this directory and so on) is waited for and its question handed to you, as with `R` (by number in a terminal); in the sampan screen, choosing "go in and do it yourself" takes you into that session. Exit 1 when there is nothing to restart or reattach; otherwise the worst exit code of stop and restore.

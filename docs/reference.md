@@ -64,7 +64,7 @@ session 資料夾，只給畫面和 `sampan folder` 用；`save`、`restore`、�
 | `sampan folder rename <路徑> <新名稱> [--merge]` | 只改最後一段；同層已有同名時要加 `--merge` 才會合併，否則回 2 |
 | `sampan folder rm <路徑>` | 刪資料夾，裡面的 session 與子資料夾搬上一層，不停、不忘記任何 session |
 | `sampan folder move <名稱或路徑>... <目的｜/> [--merge]` | 搬 session 或資料夾；`/` 是最外層；來源是 `folders.json` 裡的路徑就當資料夾，否則必須是登記表裡的 session，找不到回 2 |
-| `sampan new … --folder <路徑>` | 開成功（結束碼 0）後才把新 session 放進資料夾（沒有就建）；寫失敗只警告 |
+| `sampan new … --folder <路徑>` | 開成功後才把新 session 放進資料夾（沒有就建）：結束碼 0，或結束碼 1 但 tmux session 已經在（Codex 已就緒、還沒登記）；寫失敗只警告 |
 
 `sampan rename`、`sampan forget`、`sampan profile forget` 會同步 `folders.json`；同步失敗只多一行 `⚠ 資料夾設定沒同步：…`，不影響原動作。
 
@@ -126,4 +126,4 @@ stdio MCP server（每行一則 JSON-RPC 2.0；協定版本 `2025-06-18`，clien
 
 ## `sampan restart <名稱…>`
 
-重開指定的 session，每筆結果記在 `actions.log`（標籤 `重開`）。分類：登記表裡執行中且 `agent_status` 不是 `busy`／`working`／`waiting`、也不在 sampan 自己所在的 pane 的 → 先 `sampan stop`（逾時 90 秒）再背景接回；已停止的 → 只接回；retired、狀態不明、其他狀態、忙碌中、找不到的 → 略過，最後一行印「略過：名稱（原因）…」。接回用 `restore` 的不確認、不等待進入模式，不會把你帶進任何 session。可重開與可接回的都沒有時回傳 1；否則回傳 stop 與 restore 中最差的結束碼。
+重開指定的 session，每筆結果記在 `actions.log`（標籤 `重開`）。分類：登記表裡執行中、`agent_status` 是 `idle`、也不在 sampan 自己所在的 pane 的 → 先 `sampan stop`（逾時 90 秒）再背景接回；已停止的 → 只接回；忙碌中的（`busy`／`working`／`waiting`，原因「忙」）、其他不是 idle 的（原因例如「沒有閒著（unknown）」）、retired、狀態不明、其他狀態、找不到的 → 略過，最後一行印「略過：名稱（原因）…」。接回用 `restore` 的不確認模式，不會主動把你帶進 session；agent 啟動時停在選單（信任目錄等）的，跟 `R` 一樣等選單出現、把問題交給你回答（終端機裡用編號問）；在 sampan 畫面裡選「進去自己操作」就會進到那個 session。可重開與可接回的都沒有時回傳 1；否則回傳 stop 與 restore 中最差的結束碼。
