@@ -124,7 +124,8 @@ class Base(unittest.TestCase):
         rc = mcp_server.serve(cfg, run or FakeRunner(strict=True), client, client, caller=caller,
                               sleep=sleep or (lambda _s: None), clock=clock or (lambda: 0.0),
                               status_fn=self.status_fn, now_fn=lambda: NOW,
-                              watch_interval=kw.pop("watch_interval", NO_WATCH), **kw)
+                              watch_interval=kw.pop("watch_interval", NO_WATCH),
+                              parent_agent=kw.pop("parent_agent", True), **kw)
         self.assertEqual(rc, 0)
         return client
 
@@ -222,7 +223,73 @@ class ToolsListTest(Base):
                     else:
                         self.assertNotIn("_meta", t)
                 self.assertEqual(set(tools), mcp_server.TOOL_NAMES)
-                self.assertIn('"_meta": {"anthropic/requiresUserInteraction": true}' if confirm else "", json.dumps(c.response(2)))
+                marked = '"_meta": {"anthropic/requiresUserInteraction": true}' in json.dumps(c.response(2))
+                self.assertIs(marked, confirm)
+
+
+class ParentAgentTest(Base):
+    """With confirm on, only a server started by an agent (claude / codex as its direct parent) may act: a shell piping
+    JSON-RPC into `sampan mcp serve` and claiming clientInfo claude-code is refused."""
+    SHELL = [ps_line(1, 0, "launchd", "launchd"), ps_line(100, 1, "/bin/zsh", "-zsh"),
+             ps_line(200, 100, "claude", "claude"), ps_line(300, 200, "/bin/zsh", "zsh -c x"),
+             ps_line(400, 300, "sampan", "sampan mcp serve")]
+
+    def ps(self, lines):
+        r = FakeRunner(strict=True)
+        r.on(["ps", "-A"], cp(out="\n".join(lines) + "\n"))
+        return r
+
+    def test_parent_is_agent(self):
+        codex = "/Users/u/.codex/packages/app-server-daemon/releases/0.164.0-aarch64-apple-darwin/bin/codex"
+        cases = [(300, self.SHELL, False), (200, self.SHELL, True), (999, self.SHELL, False),
+                 (500, [ps_line(500, 1, codex, codex + " app-server")], True),
+                 (500, [ps_line(500, 1, "/opt/bin/claude", "claude")], True),
+                 (500, [ps_line(500, 1, "claude", "claude", stat="Z")], False),
+                 (500, [ps_line(500, 1, "node", "node claude")], False)]
+        for ppid, lines, want in cases:
+            with self.subTest(ppid=ppid, lines=lines):
+                self.assertIs(mcp_server.parent_is_agent(self.ps(lines), ppid), want)
+        failing = FakeRunner(strict=True)
+        failing.on(["ps", "-A"], cp(1))
+        self.assertIs(mcp_server.parent_is_agent(failing, 200), False)  # lookup failure: fail closed
+        boom = FakeRunner(strict=True)
+        boom.on(["ps", "-A"], lambda _a: (_ for _ in ()).throw(OSError("no ps")))
+        with mock.patch.object(mcp_server, "_log") as log:
+            self.assertIs(mcp_server.parent_is_agent(boom, 200), False)
+        self.assertEqual(log.call_count, 1)
+
+    def test_shell_parent_refused_even_as_claude_code(self):
+        calls = {"send": {"session": "b", "message": "hi"}, "cancel_dispatch": {"id": "ffff"},
+                 "new_session": {"name": "n1", "target": "claude:work", "cwd": self._tmp.name, "message": "x"}}
+        run = tmux_runner()
+        with mock.patch.object(mcp_server.session_run, "cmd_new", side_effect=AssertionError("no")):
+            c = self.serve(Client([init(1, client="claude-code")] + [call(i + 2, n, a) for i, (n, a) in
+                                                                     enumerate(calls.items())]),
+                           run=run, parent_agent=False)
+        for i in range(len(calls)):
+            self.assertTrue(c.response(i + 2)["result"]["isError"])
+            self.assertEqual(tool_text(c.response(i + 2)), mcp_server.NOT_ASKING)
+        self.assertEqual(self.dispatches(), [])
+        self.assertEqual(tmux_writes(run), [])
+
+    def test_agent_parent_allowed(self):
+        c = self.serve(Client([init(1, client="claude-code"), call(2, "send", {"session": "b", "message": "hi"})]),
+                       run=tmux_runner(), parent_agent=True)
+        self.assertFalse(c.response(2)["result"]["isError"])
+
+    def test_confirm_off_needs_no_agent_parent(self):
+        c = self.serve(Client([init(1, client="other"), call(2, "send", {"session": "b", "message": "hi"})]),
+                       run=tmux_runner(), confirm=False, parent_agent=False)
+        self.assertFalse(c.response(2)["result"]["isError"])
+
+    def test_read_only_tools_allowed_without_agent_parent(self):
+        c = self.serve(Client([init(1, client="other"), call(2, "list_sessions", {})]), parent_agent=False)
+        self.assertFalse(c.response(2)["result"]["isError"])
+
+    def test_server_defaults_to_no_agent_parent(self):
+        server = mcp_server.Server(self.cfg, FakeRunner(strict=True), io.StringIO(), io.StringIO(), caller=CALLER_A)
+        server.client_name = "claude-code"
+        self.assertEqual(server._client_asks("send"), mcp_server.NOT_ASKING)
 
 
 class FailClosedTest(Base):

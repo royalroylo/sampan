@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import dispatch, send, session_run
+from .procs import list_procs
 from .registry import RegistryError, load_rows
 from .send import Caller, CallerUnsure, lookup_caller  # noqa: F401  (CallerUnsure, lookup_caller re-exported)
 from .status import status_rows
@@ -33,6 +34,9 @@ ACTING_TOOLS = ("send", "new_session", "cancel_dispatch")
 ASKING_CLIENTS = {"claude-code", "codex-mcp-client"}  # Codex: only with approval_mode = "prompt" (codex_approval)
 NOT_ASKING = "這個 client 不會先問使用者；要用請在 config 設 [mcp] confirm = false"
 CODEX = "codex-mcp-client"
+# basename of the command of the process that must have started the server (checked 2026-10-27: Claude Code runs
+# `claude`, Codex runs `…/.codex/packages/app-server-daemon/releases/<version>/bin/codex`)
+AGENT_PARENTS = ("claude", "codex")
 CODEX_NOT_PROMPT = "Codex 的 sampan 工具沒設成每次詢問（{path}）：跑 sampan mcp install"
 
 PARSE_ERROR, INVALID_REQUEST, METHOD_NOT_FOUND, INVALID_PARAMS = -32700, -32600, -32601, -32602
@@ -119,6 +123,17 @@ def identify_caller(cfg, run, pid):
         return send.unsure_caller(e)
 
 
+def parent_is_agent(run, ppid):
+    """True when process ppid is a live claude / codex: the server was started by an agent, not piped into from a
+    shell (where clientInfo could claim anything). Unknown or unreadable → False (fail closed)."""
+    try:
+        p = list_procs(run).get(ppid)
+    except Exception as e:  # noqa: BLE001  a failed lookup refuses, it never allows
+        _log(f"讀不到啟動 sampan mcp serve 的行程：{e}")
+        return False
+    return p is not None and not p.zombie and p.comm in AGENT_PARENTS
+
+
 def _ok(obj):
     return {"content": [{"type": "text", "text": json.dumps(obj, ensure_ascii=False)}], "isError": False}
 
@@ -136,8 +151,9 @@ def _arg_str(args, key):
 
 class Server:
     def __init__(self, cfg, run, stdin, stdout, *, caller, sleep=time.sleep, clock=time.monotonic, status_fn=None,
-                 snapshot_fn=None, now_fn=_utcnow, resolve=None):
+                 snapshot_fn=None, now_fn=_utcnow, resolve=None, parent_agent=False):
         self.cfg, self.run, self.stdin, self.stdout, self.caller = cfg, run, stdin, stdout, caller
+        self.parent_agent = parent_agent  # started by claude / codex (parent_is_agent); False refuses the acting tools
         self.resolve = resolve  # () -> Caller, asked again before every tool that acts or reads a dispatch
         self.sleep, self.clock, self.now_fn = sleep, clock, now_fn
         self.status_fn, self.snapshot_fn = status_fn or status_rows, snapshot_fn
@@ -247,10 +263,11 @@ class Server:
 
     def _client_asks(self, tool):
         """None when the user will be asked before `tool` acts (or confirm is off); else the refusal text. Fail closed:
-        the mark on the tool only works if the client honours it, so an unknown client is refused."""
+        the mark on the tool only works if the client honours it, so an unknown client is refused, and so is any
+        client when the server was not started by an agent (clientInfo is only what the other end says)."""
         if not self.cfg.mcp_confirm or tool not in ACTING_TOOLS:
             return None
-        if self.client_name not in ASKING_CLIENTS:
+        if not self.parent_agent or self.client_name not in ASKING_CLIENTS:
             return NOT_ASKING
         if self.client_name == CODEX:  # Codex asks only when its config.toml says so; read now, the user may change it.
             from . import codex_approval  # imports this module (ACTING_TOOLS)
@@ -451,8 +468,10 @@ class Server:
 
 
 def serve(cfg, run, stdin, stdout, *, caller, sleep=time.sleep, clock=time.monotonic, status_fn=None,
-          snapshot_fn=None, now_fn=_utcnow, watch_interval=WATCH_S, resolve=None):
+          snapshot_fn=None, now_fn=_utcnow, watch_interval=WATCH_S, resolve=None, parent_agent=False):
     """Serve MCP on stdin/stdout until stdin closes. Returns 0. resolve: () -> Caller, to look the caller up again
-    before each tool that acts or reads a dispatch (`caller` is the identity found at start)."""
+    before each tool that acts or reads a dispatch (`caller` is the identity found at start). parent_agent: the
+    server's parent is claude / codex (parent_is_agent, found once at start)."""
     return Server(cfg, run, stdin, stdout, caller=caller, sleep=sleep, clock=clock, status_fn=status_fn,
-                  snapshot_fn=snapshot_fn, now_fn=now_fn, resolve=resolve).serve(watch_interval)
+                  snapshot_fn=snapshot_fn, now_fn=now_fn, resolve=resolve,
+                  parent_agent=parent_agent).serve(watch_interval)

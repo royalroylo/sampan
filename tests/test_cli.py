@@ -9,7 +9,7 @@ from unittest import mock
 
 from sampan import cli
 from sampan.send import TERMINAL, Caller
-from tests.fakes import FakeRunner, cp
+from tests.fakes import FakeRunner, cp, ps_line
 from tests.helpers import make_env
 
 
@@ -378,14 +378,16 @@ class CliTest(unittest.TestCase):
         caller = Caller("x", "alice", "claude", "%1")
         seen = {}
 
-        def fake_serve(cfg, run, stdin, stdout, *, caller, resolve):
-            seen.update(stdin=stdin, stdout=stdout, caller=caller, sys_stdout=sys.stdout, again=resolve())
+        def fake_serve(cfg, run, stdin, stdout, *, caller, resolve, parent_agent):
+            seen.update(stdin=stdin, stdout=stdout, caller=caller, sys_stdout=sys.stdout, again=resolve(),
+                        parent_agent=parent_agent)
             run(["tmux", "-u", "list-panes"])
             run(["codex", "queue"], stdin="given")
             return 0
 
         proto = io.StringIO()
         fake_run = FakeRunner()
+        fake_run.on(["ps", "-A"], cp(out=ps_line(4321, 1, "claude", "claude") + "\n"))
         with mock.patch("sampan.mcp_server.identify_caller", return_value=caller) as ic, \
                 mock.patch("sampan.mcp_server.lookup_caller", return_value=caller) as lc, \
                 mock.patch("sampan.mcp_server.serve", fake_serve), mock.patch("sys.stdout", proto), \
@@ -397,13 +399,34 @@ class CliTest(unittest.TestCase):
         self.assertEqual(lc.call_args.args[2], 4321)  # again on demand (unsure lookups raise, kept by the server)
         self.assertIs(seen["again"], caller)
         self.assertIs(seen["caller"], caller)
+        self.assertIs(seen["parent_agent"], True)  # the parent (4321) is claude
         self.assertIs(seen["stdout"], proto)
         self.assertIsNot(seen["sys_stdout"], proto)  # a stray print cannot corrupt the protocol stream
         self.assertIs(restored, proto)
         self.assertIsInstance(seen["stdin"], io.BufferedIOBase)
         import subprocess
         # a child never inherits the JSON-RPC stdin (an explicit stdin is kept)
-        self.assertEqual([c["stdin"] for c in fake_run.calls], [subprocess.DEVNULL, "given"])
+        self.assertEqual([c["stdin"] for c in fake_run.calls], [subprocess.DEVNULL] * 2 + ["given"])
+
+    def test_mcp_serve_from_a_shell_has_no_agent_parent(self):
+        from sampan.send import Caller
+        caller = Caller(None, "", "claude", None, kind="unregistered")
+        seen = {}
+
+        def fake_serve(cfg, run, stdin, stdout, *, caller, resolve, parent_agent):
+            seen["parent_agent"] = parent_agent
+            return 0
+
+        for ps in (cp(out=ps_line(4321, 1, "/bin/zsh", "-zsh") + "\n"), cp(1)):
+            with self.subTest(ps=ps):
+                fake_run = FakeRunner(strict=True)
+                fake_run.on(["ps", "-A"], ps)
+                with mock.patch("sampan.mcp_server.identify_caller", return_value=caller), \
+                        mock.patch("sampan.mcp_server.serve", fake_serve), mock.patch("sys.stdout", io.StringIO()), \
+                        mock.patch("sys.stdin", io.TextIOWrapper(io.BytesIO(b""))), \
+                        mock.patch("sampan.runner.run", fake_run), mock.patch("os.getppid", return_value=4321):
+                    self.assertEqual(cli.main(["mcp", "serve"]), 0)
+                self.assertIs(seen["parent_agent"], False)
 
     def test_dispatches_cancel_end_to_end(self):
         from sampan import dispatch
@@ -458,6 +481,17 @@ class AgentRefusedTest(unittest.TestCase):
             rc, text, _ = self.run_cli(["send", "api", "hi"], self.UNREG)
         self.assertEqual((rc, cs.call_count), (2, 0))
         self.assertIn(AGENT_REFUSED, text)
+
+    def test_unsure_lookup_send_refused_when_confirm(self):
+        from sampan.send import AGENT_REFUSED, CallerUnsure
+        buf = io.StringIO()
+        with redirect_stdout(buf), mock.patch("sampan.runner.run", FakeRunner(strict=True)), \
+                mock.patch("sampan.send.lookup_caller", side_effect=CallerUnsure("讀不到 tmux", "claude")) as lc, \
+                mock.patch("sampan.send.cmd_send") as cs:
+            rc = cli.main(["send", "api", "hi"])
+        self.assertEqual(lc.call_count, 1)  # the real command_caller ran: an unsure lookup is an unregistered agent
+        self.assertEqual((rc, cs.call_count), (2, 0))
+        self.assertIn(AGENT_REFUSED, buf.getvalue())
 
     def test_agent_new_with_message_refused(self):
         from sampan.send import AGENT_REFUSED

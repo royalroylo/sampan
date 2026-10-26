@@ -140,6 +140,17 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(ca.apply(self.path, False, now=NOW), "不用改")
         self.assertEqual(self.backups(), [])
 
+    def test_apply_is_idempotent_when_prompt_tables_are_followed_by_another_server(self):
+        text = ca.with_prompt(INSTALLED) + '\n[mcp_servers.other]\ncommand = "x"\n'
+        self.assertFalse(ca.needs_fix(text, True))
+        self.assertNotEqual(ca.with_prompt(text), text)  # the tables are not at the end: a rewrite would move them
+        self.path.write_text(text)
+        self.assertEqual(ca.apply(self.path, True, now=NOW, dry_run=True), "不用改")
+        self.assertEqual(ca.apply(self.path, True, now=NOW), "不用改")
+        self.assertEqual(ca.apply(self.path, True, now=NOW), "不用改")
+        self.assertEqual(self.path.read_text(), text)
+        self.assertEqual(self.backups(), [])
+
     def test_not_installed_or_missing_is_left_alone(self):
         self.assertEqual(ca.apply(self.path, True, now=NOW), "不用改")  # no file
         self.assertFalse(self.path.exists())

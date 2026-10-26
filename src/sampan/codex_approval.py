@@ -142,6 +142,8 @@ def apply(path: Path, confirm: bool, *, now, dry_run=False) -> str:
     data = _parse(text)
     if confirm and _sampan(data) is None:
         return "不用改"
+    if not needs_fix(text, confirm):  # already right, wherever the tables are: rewriting would only move them
+        return "不用改"
     new = with_prompt(text) if confirm else strip_sections(text)
     try:
         tomllib.loads(new)

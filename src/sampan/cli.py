@@ -444,11 +444,12 @@ def _dispatch(cfg, args):
         run = no_stdin(run)  # a child must never read the JSON-RPC stream on our stdin
         ppid = os.getppid()
         caller = mcp_server.identify_caller(cfg, run, ppid)
+        parent_agent = mcp_server.parent_is_agent(run, ppid)  # once: our parent does not change
         proto = sys.stdout
         sys.stdout = sys.stderr  # stdout carries only protocol messages: anything printed by accident goes to stderr
         try:
             return mcp_server.serve(cfg, run, sys.stdin.buffer, proto, caller=caller,
-                                    resolve=lambda: mcp_server.lookup_caller(cfg, run, ppid))
+                                    resolve=lambda: mcp_server.lookup_caller(cfg, run, ppid), parent_agent=parent_agent)
         finally:
             sys.stdout = proto
     if cmd == "status":
