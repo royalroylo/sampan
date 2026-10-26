@@ -357,6 +357,8 @@ def claude_input_state(screen):
     text = plain[prompt][len(PROMPT_PREFIX):].strip()
     if re.match(r"\d+\.\s", text) or text.startswith("/"):
         return "blocked"  # a numbered option of a dialog, or a slash-command menu
+    if any(plain[i].strip() for i in range(top + 1, bottom) if i != prompt):
+        return "draft"  # another line inside the box (e.g. a draft that starts with a blank line) is not empty
     if not text:
         return "empty"
     after = lines[prompt].split(PROMPT_PREFIX, 1)[1] if PROMPT_PREFIX in lines[prompt] else ""

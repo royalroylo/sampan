@@ -38,7 +38,9 @@ def to_claude(tmux, pane_id, outbox, did, sleep):
         if r.returncode != 0:
             return first_line(r.stderr) or f"tmux 結束碼 {r.returncode}"
     sleep(PASTE_SETTLE_S)
-    tmux.send_keys(pane_id, "Enter")
+    r = tmux.send_keys(pane_id, "Enter")
+    if r.returncode != 0:
+        return first_line(r.stderr) or f"tmux 結束碼 {r.returncode}"  # the text is already in the box
     return None
 
 

@@ -82,6 +82,13 @@ class ToClaudeTest(unittest.TestCase):
         self.assertIn("no such file", reason)
         self.assertEqual(len(writes(run)), 1)
 
+    def test_failed_enter_is_reported(self):
+        run = FakeRunner(strict=True)
+        run.on(["tmux", "-u", "capture-pane"], cp(0, screen("claude_empty_placeholder.ansi")))
+        run.on(["tmux", "-u", "load-buffer"], cp()).on(["tmux", "-u", "paste-buffer"], cp())
+        run.on(["tmux", "-u", "send-keys"], cp(1, "", "can't find pane\nx"))
+        self.assertEqual(self.deliver(Tmux(run)), "can't find pane")
+
     def test_message_is_byte_exact_and_never_in_argv(self):
         msg = 'line1\n「中文」 "q" $HOME `x` \\n ' + "字" * 5000
         text = compose("api", "work", "ab12", msg)

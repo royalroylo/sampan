@@ -113,3 +113,17 @@ class ClaudeInputStateTest(unittest.TestCase):
     def test_minimal_empty(self):
         rule = "─" * 40
         self.assertEqual(claude_input_state(f"{rule}\n❯\xa0\n{rule}\n  footer"), "empty")
+
+    def test_other_nonblank_line_inside_the_box_is_a_draft(self):
+        lines = fixture("claude_empty_placeholder.ansi").split("\n")
+        i = next(n for n, ln in enumerate(lines) if "❯" in ln)
+        for extra in ("second line", "\x1b[2mdim line\x1b[0m"):
+            with self.subTest(extra=extra):
+                self.assertEqual(claude_input_state("\n".join(lines[:i] + [extra] + lines[i:])), "draft")  # blank-first draft: text above ❯ ...
+                self.assertEqual(claude_input_state("\n".join(lines[:i + 1] + [extra] + lines[i + 1:])), "draft")
+
+    def test_dim_placeholder_followed_by_normal_text_is_a_draft(self):
+        screen = fixture("claude_empty_placeholder.ansi")
+        self.assertIn('\x1b[0m', screen)
+        i = screen.index('to..."\x1b[0m') + len('to..."\x1b[0m')
+        self.assertEqual(claude_input_state(screen[:i] + "typed" + screen[i:]), "draft")
