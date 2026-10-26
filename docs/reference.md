@@ -67,29 +67,35 @@
 | `state` | `queued`、`sent`、`done`、`failed`、`cancelled` 其中之一 |
 | `created`、`sent_at`、`done_at` | UTC ISO 時間；`sent_at`、`done_at` 可為 `null` |
 | `reply`、`reason` | 回覆內容（或 `null`）；失敗或取消的原因 |
-| `notify`、`notified` | 是否要在完成時通知呼叫者、是否已通知 |
+| `notify`、`notified` | 是否要在完成或失敗時通知呼叫者、是否已通知 |
 | `thread_id` | 對話識別，或 `null` |
+| `startup` | `sampan new --message` 的開場訊息（新 session 可能還沒登記）；沒有這欄的舊紀錄視為 `false` |
 
-`sampan new --message` 建的派工一開始就是 `sent`（`sent_at` 是開新 session 的時間；`text` 與 `outbox/<id>.txt` 都不以換行結尾，因為 `$(cat …)` 會去掉結尾換行，不然回覆對不上）；`thread_id` 由之後的推進從狀態列補。
+`sampan new --message` 建的派工一開始就是 `sent`（`sent_at` 是開新 session 的時間；`text` 與 `outbox/<id>.txt` 都不以換行結尾，因為 `$(cat …)` 會去掉結尾換行，不然回覆對不上）；`thread_id` 由之後的推進從狀態列補。新 session 還沒被認出來時不判失敗，`reason` 寫「對方 session 還在啟動」：Codex 還沒有對話（未登記）時只要那個 Codex 還在跑就一直等；tmux 在、agent 還沒看到（Claude 已登記但「該跑沒跑」、或沒有 agent）時最多等 120 秒；停在信任資料夾等提示時一直等。
 
-狀態怎麼走：`queued`（排隊）→ `sent`（已送出，`sent_at`）→ `done`（`reply` 是這則訊息的回覆）或 `failed`（`reason` 寫原因）；`cancelled` 只能從 `queued` 來（`sampan dispatches cancel`）。`done_at` 是結束的時間。推進只在鎖裡做（先讀最新的再判斷再寫），所以同一筆不會被送兩次；貼上後按 Enter 失敗（文字已在對方輸入框）直接算 `failed`，不會再貼一次（完成通知同理：算已通知，`reason` 寫明）。`sampan send` 的結束碼：0 送出（`--wait`：已回覆）、1 失敗、2 拒絕或讀不到檔、124 `--wait` 逾時（派工照樣留著）。完成通知（`notify`）用 `outbox/<id>-notice.txt` 送到呼叫者的 session。
+狀態怎麼走：`queued`（排隊）→ `sent`（已送出，`sent_at`）→ `done`（`reply` 是這則訊息的回覆）或 `failed`（`reason` 寫原因）；`cancelled` 從 `queued` 來（還沒送出，`reason`「已取消」），或從 `sent` 來（不再等回覆，訊息已在對方那裡，`reason`「不再等回覆」，不發通知）。`done_at` 是結束的時間。推進只在鎖裡做（先讀最新的再判斷再寫），所以同一筆不會被送兩次。按任何鍵或跑 `codex queue` 之前，先把紀錄寫成 `sent`（`reason`「送出中」）：sampan 在送到一半被砍掉，這筆也不會再送一次（之後變「找不到回覆」），也就是最多送一次；只有確定什麼都沒送出（對方輸入框有字、讀不到畫面、tmux 載入失敗…）才退回 `queued`。貼上後按 Enter 失敗（文字已在對方輸入框）或 `codex queue` 逾時（Codex 可能已收下）直接算 `failed`（「可能已送出，請確認」），不會再送一次（完成通知同理：算已通知，`reason` 寫明）。對方畫面在 tmux 捲動模式（copy mode）時不貼，繼續排隊。
+
+`sent` 之後怎麼結束：對方閒著時，逐字稿裡這則訊息之後有回答 → `done`；這則之後沒有回答、就有人打了下一則 →「對方沒回這則就換了下一則」；Codex 這輪結束但沒有回覆文字、或 Claude 連續兩次閒著都沒有回覆文字 →「對方這輪結束了，但沒有回覆文字」；連續兩次閒著都找不到這則訊息 →「找不到回覆」（中間只要看到對方在忙就重新算）。
+
+`sampan send` 的結束碼：0 送出或排隊中（`--wait`：已回覆）、1 失敗、2 拒絕或讀不到檔、124 `--wait` 逾時（派工照樣留著）、130 按了 Ctrl-C（派工照樣留著）。`sampan dispatches show <編號> [--wait 秒]`：推進一次（或每 2 秒推進到做完、最多等那麼久），印出狀態、從誰給誰、原因與完整回覆；結束碼 0 已回覆或還在進行（沒帶 `--wait`）、1 失敗或取消、2 沒有這筆或讀不到檔、124 `--wait` 逾時、130 Ctrl-C。完成或失敗通知（`notify`）用 `outbox/<id>-notice.txt` 送到呼叫者的 session：完成是 `〔sampan：<對方> 已回覆派工 <編號>，用 sampan 工具 dispatch_result 看內容〕`，失敗是 `〔sampan：給 <對方> 的派工 <編號> 失敗：<原因>〕`。
+
+`sampan send`／`sampan new --message` 的呼叫者也從上層行程找（跟 MCP 一樣）：agent 用它的 shell 工具跑的，記成那個 sampan session（或「未登記的 session」），送給自己會拒絕；只有上層沒有 claude／codex 行程時才是「終端機」。這兩個指令不發完成通知，用 `sampan dispatches show` 看回覆。
 
 讀不懂的檔不會覆蓋。已完成（`done`、`failed`、`cancelled`）超過 7 天的會被清掉，總數只留最新 200 筆。`outbox/<id>.txt` 放要送出的原文（檔 600）。
 
 ## `sampan mcp serve` 的工具
 
-stdio MCP server（每行一則 JSON-RPC 2.0；協定版本 `2025-06-18`，client 要 `2025-03-26` 時用它）。由 Claude Code／Codex 啟動，呼叫者是誰從 server 的上層行程找：最近的 claude／codex 行程所在的 tmux pane，再對到登記表裡同名、同 agent 的那列；對不到就是「未登記的 session」（來源行與派工紀錄寫「未登記的 session（claude）」這樣，不會寫成「終端機」），工具照樣能用，只是收不到完成通知。每次呼叫會動作或看派工的工具前都重新找一次（Codex 要有對話後才登記、session 可能被接手或改名）；只有讀不到（tmux、ps 或登記表讀不到）時才沿用已知的身分；確定對不到登記表（沒有那列、agent 不同）就改成未登記。`dispatch_result`、`cancel_dispatch` 只認這個呼叫者發出的派工（這個 server 建的，或 `from_kind` 是 `session` 而且 `from_name` 是呼叫者的 session），別人的一律回「沒有派工 <編號>（或不是這個 session 發出的）」。工具回傳的文字是 JSON；拒絕（找不到對方、使用者拒絕、client 不支援核准表單）是 `isError: true` 的結果。
+stdio MCP server（每行一則 JSON-RPC 2.0；協定版本 `2025-06-18`，client 要 `2025-03-26` 時用它）。由 Claude Code／Codex 啟動，呼叫者是誰從 server 的上層行程找：最近的 claude／codex 行程所在的 tmux pane，再對到登記表裡同名、同 agent 的那列；對不到就是「未登記的 session」（來源行與派工紀錄寫「未登記的 session（claude）」這樣；上層沒有 agent 行程、或一開始就讀不到 ps 時寫「未登記的 session」——MCP 的呼叫者永遠不會寫成「終端機」），工具照樣能用，只是收不到完成通知。每次呼叫會動作或看派工的工具前都重新找一次（Codex 要有對話後才登記、session 可能被接手或改名）；只有讀不到（tmux、ps 或登記表讀不到）時才沿用已知的身分；確定對不到登記表（沒有那列、agent 不同）就改成未登記。`dispatch_result`、`cancel_dispatch` 只認這個呼叫者發出的派工（這個 server 建的，或 `from_kind` 是 `session` 而且 `from_name` 是呼叫者的 session），別人的一律回「沒有派工 <編號>（或不是這個 session 發出的）」。工具回傳的文字是 JSON；拒絕（找不到對方、使用者拒絕、client 不支援核准表單）是 `isError: true` 的結果。
 
 | 工具 | 參數 | 回傳 | 核准 |
 |---|---|---|---|
 | `list_sessions` | 無 | `sessions`：每列 `name`、`agent`、`profile`、`cwd`、`state`（`running`、`stopped`…）、`activity`（`idle`、`busy`…）、`last`（UTC ISO 或 `null`）；讀不到 tmux 時多一個 `warning` | 不問 |
-| `send` | `session`、`message`、`wait`（預設 `false`） | `dispatch`、`state`，做完時有 `reply`，還沒送出時有 `reason`。`wait` 最多等 60 秒；沒等到的照樣留著，完成時往呼叫者的 session 送一則通知 | 問 |
+| `send` | `session`、`message`、`wait`（預設 `false`） | `dispatch`、`state`，做完時有 `reply`，還沒送出時有 `reason`。`wait` 最多等 60 秒；沒等到的照樣留著，完成或失敗時往呼叫者的 session 送一則通知 | 問 |
 | `new_session` | `name`、`target`（`claude:<profile>`、`<profile>` 或 `codex`）、`cwd`、`message` | `dispatch`（跟 `sampan new --message` 一樣，開場訊息的派工） | 問 |
 | `dispatch_result` | `id`、`wait`（0–60 秒，預設 0） | `dispatch`、`state`、`label`、`to`、`reply`、`reason` | 不問 |
-| `cancel_dispatch` | `id` | `dispatch`、`state`（只能取消排隊中的） | 問 |
+| `cancel_dispatch` | `id` | `dispatch`、`state`；排隊中的取消，已送出的改成不再等回覆（多一個 `reason`「不再等回覆」） | 問 |
 
-核准表單寫明送給誰（名稱、profile、Claude／Codex）、從哪個 session、完整訊息，呼叫者是 sampan session 時加一句「完成後會在你的 session 送出一則通知」；agent 給的訊息一律放在固定的分隔線「──── 訊息內容（由 agent 提供）────」下面，分隔線以上只有 sampan 寫的字；名稱、目標、目錄有換行或控制字元會在問之前就拒絕，目錄顯示解析後的實際路徑。表單只有一個 `message` 欄位（預設是原訊息），改了就送改過的；同意後會再檢查一次對方（表單開著時對方可能停了）。`new_session` 跟 `sampan new` 用同一套檢查（名稱、profile 停用、Codex 停用、tmux session 已存在、目錄不存在），都在問之前做。同意派工就算同意它的完成通知，不另外問。server 活著時每 3 秒推進這個呼叫者發出的派工。
-
+核准表單寫明送給誰（名稱、profile、Claude／Codex）、從哪個 session、完整訊息，呼叫者是 sampan session 時加一句「完成或失敗後會在你的 session 送出一則通知」；agent 給的訊息一律放在固定的分隔線「──── 訊息內容（由 agent 提供）────」下面，分隔線以上只有 sampan 寫的字；名稱、目標、目錄有換行或控制字元會在問之前就拒絕，目錄顯示解析後的實際路徑。表單只有一個選填的 `message` 欄位（預設是原訊息；client 不一定會預先填入）：留空或沒給就送原訊息，填了就送改過的；同意後會再檢查一次對方（表單開著時對方可能停了）。`new_session` 跟 `sampan new` 用同一套檢查（名稱、profile 停用、Codex 停用、tmux session 已存在、目錄不存在），都在問之前做。同意派工就算同意它的完成或失敗通知，不另外問。`dispatch_result` 看到已回覆或失敗的結果後就不再發通知。server 活著時每 3 秒推進這個呼叫者發出的派工；它跑的子程式一律 stdin 接 `/dev/null`，不會讀到 JSON-RPC 的輸入。
 
 ### 安裝與核准表單的前提
 

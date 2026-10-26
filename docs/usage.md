@@ -33,7 +33,7 @@
 | 這件事做完了 | `r` | 標成 retired，之後不會出現在接回清單 |
 | 從登記表移除一個不用的 session | `X`（只有已停止或 retired 的列） | 在畫面底部問確定（之後不會再列出，也不會被 `R` 接回）；移除後印出手動接回的指令。對話紀錄不會刪，舊的登記表留在 `history/` |
 | 看各帳號的額度、改名、停用、新增、裝狀態列 | `o` | 開帳號畫面，見下面「帳號管理」。清單上方會有每個帳號一行（`名稱 N 個執行中・5h …・週 …（時間）`） |
-| 看派工、取消還沒送出的 | `D` | 列出派工（編號、從、給、狀態、建立時間、原因，新的在上）；游標移到排隊中的按 `x`，在畫面底部問確定後取消，已送出或已結束的只會說明為什麼不能取消。沒有派工時只顯示「沒有派工」。有排隊或等回覆的派工時，清單下方會多一行 `派工：N 排隊、M 等回覆（D 看清單）`；畫面開著時 sampan 每 3 秒在背景推進這些派工（送出、讀回覆、補發完成通知） |
+| 看派工、取消還沒送出的 | `D` | 列出派工（編號、從、給、狀態、建立時間、原因，新的在上）；游標移到排隊中的按 `x`，在畫面底部問確定後取消；已送出、等回覆的按 `x` 問確定後改成不再等回覆（訊息收不回）；已結束的只會說明為什麼不能取消。沒有派工時只顯示「沒有派工」。有排隊或等回覆的派工時，清單下方會多一行 `派工：N 排隊、M 等回覆（D 看清單）`；畫面開著時 sampan 每 3 秒在背景推進這些派工（送出、讀回覆、補發完成或失敗通知）；離開畫面時若正好在送，會等它送完（最多約 35 秒，畫面會寫「等派工送完再離開…」） |
 | 管理 plugin 與 marketplace 來源 | `p` | 進到 plugin 管理畫面，見下面「plugin 管理畫面」 |
 | 立刻存一次登記表 | `w` | 平常每 5 分鐘會自動存 |
 | 更新 sampan | `U`（有新版時按鍵說明上面會出現「有新版 v…（目前 …），按 U 更新」） | 在畫面底部問確定，跑 `uv tool upgrade sampan`（版本沒變再 `uv tool install --reinstall git+https://github.com/royalroylo/sampan@v<最新版>`），輸出顯示在訊息區；成功後自動重新開啟 sampan 回到清單，失敗就留在清單。不知道有新版時，`U` 會先當下重新查一次（不看快取）；仍是最新版（或查不到）只會告知，不會問；要重新安裝請用 `sampan update --force` |
@@ -191,7 +191,7 @@ Claude Code 只在狀態列指令的輸入裡提供 5h／週額度，所以要�
 | 某個 session 以後不用重開 | `sampan retire <名稱>`（恢復：`sampan activate <名稱>`）；對 retired 的 session 打 `sampan restore <名稱>` 會說「<名稱> 是 retired；先 sampan activate <名稱>」 |
 | 把沒在跑的 session 從登記表移除 | `sampan forget <名稱> [--dry-run]`（或 ui 按 X）：只限已停止或 retired 的（還在 tmux 裡的先 `sampan stop`）；ui 裡會先問確定。移除後印出手動接回的指令；對話紀錄永遠不刪，移除前的登記表留在 `history/` |
 | 傳訊息給一個 session | `sampan send <名稱> <訊息｜-> [--wait] [--timeout 秒]`，見「傳訊息給 session」 |
-| 看／取消派工 | `sampan dispatches [--all]`、`sampan dispatches cancel <編號>` |
+| 看／取消派工 | `sampan dispatches [--all]`、`sampan dispatches show <編號> [--wait 秒]`、`sampan dispatches cancel <編號>` |
 | 讓 agent 用工具傳訊息 | `sampan mcp serve`（MCP server，由 agent 啟動），見「讓 agent 用 sampan」 |
 | 看各 profile 的 plugin 版本 | `sampan plugins status`（互動管理在 ui 按 `p`） |
 | plugin 有新版／拿掉 plugin | 改 `config.toml` 後 `sampan plugins sync`（給腳本用，仍然可用）；`sampan plugins sync --prune --dry-run` 先看要移除什麼 |
@@ -202,24 +202,26 @@ Claude Code 只在狀態列指令的輸入裡提供 5h／週額度，所以要�
 
 ## 傳訊息給 session
 
-`sampan send <名稱> <訊息>` 把一則訊息交給一個執行中的 session（訊息寫 `-` 就從 stdin 讀，多行、引號、`$` 都照原樣）。sampan 先建一筆「派工」，對方開頭會先看到一行來源：`〔sampan 轉送｜來自 終端機｜派工 7f3a〕`。
+`sampan send <名稱> <訊息>` 把一則訊息交給一個執行中的 session（訊息寫 `-` 就從 stdin 讀，多行、引號、`$` 都照原樣）。sampan 先建一筆「派工」，對方開頭會先看到一行來源：`〔sampan 轉送｜來自 終端機｜派工 7f3a〕`。agent 用它的 shell 工具跑 `sampan send` 時，來源寫那個 session（或「未登記的 session」），不會冒充「終端機」；送給自己照樣拒絕。
 
 - 只送給 sampan 登記表裡、狀態是執行中的 session；找不到、沒在執行、送給自己都會拒絕（結束碼 2），不猜。
-- **Claude**：對方閒著（`sampan status` 的活動是 idle）**而且輸入框是空的**，才用 tmux 貼上整則訊息再按 Enter。對方在忙、在等你回答、畫面停在選單或提示、輸入框裡有人打了一半的字（「對方輸入框有未送出的字」）→ 不送、繼續排隊，不會清掉別人的草稿。
-- **Codex**：用 `codex queue` 交給它的對話，Codex 自己排在目前這輪之後。
-- 回覆只認**這則訊息**：在對方的逐字稿找到這則訊息，取它之後、對方回到閒著時的最後一段回答。對方中途 `/clear`、換了對話或被停掉 → 派工變「失敗」並寫明原因（例如「找不到回覆」），不拿別段文字充數。
-- 不帶 `--wait`：試送一次，印出派工編號就結束；之後由 `--wait` 的指令、MCP 工具或開著的 `sampan` 畫面接著推進（沒人盯時派工停在原狀態，下次有人盯再接著做）。
-- `--wait`：每 2 秒看一次，對方回完就把回覆印到 stdout（結束碼 0）；失敗印原因（結束碼 1）；超過 `--timeout`（預設 600 秒）印「還在做，派工 <編號>」（結束碼 124），派工照樣留著。
-- `sampan dispatches` 列排隊中與等回覆的派工（編號、從誰、給誰、狀態、建立時間、原因）；`--all` 連已回覆、失敗、取消的一起列。`sampan dispatches cancel <編號>` 只能取消還沒送出的。
-- 開新 session 時一起送：`sampan new <名稱> <目標> <目錄> --message <訊息｜->`（`-` 從 stdin 讀）。訊息當作 agent 啟動時的第一個 prompt（`claude "$(cat <檔>)"`、`codex "$(cat <檔>)"`），所以資料夾信任等啟動提示照常先問，答完才送出；同時建一筆狀態直接是「已送出」的派工，之後照一般派工看回覆。從終端機下指令不會收到完成通知。沒帶 `--message` 時行為跟以前完全一樣。
+- **Claude**：對方閒著（`sampan status` 的活動是 idle）**而且輸入框是空的**，才用 tmux 貼上整則訊息再按 Enter。對方在忙、在等你回答、畫面停在選單或提示、輸入框裡有人打了一半的字（「對方輸入框有未送出的字」）、畫面在 tmux 捲動模式（「對方畫面在捲動模式」）→ 不送、繼續排隊，不會清掉別人的草稿。
+- **Codex**：用 `codex queue` 交給它的對話，Codex 自己排在目前這輪之後。`codex queue` 逾時（30 秒）算「可能已送出，請確認」的失敗，不會再送一次。
+- 最多送一次：按鍵或 `codex queue` 之前紀錄就先寫成已送出，sampan 送到一半被砍掉也不會重送（那筆之後會變「找不到回覆」）。
+- 回覆只認**這則訊息**：在對方的逐字稿找到這則訊息，取它之後、對方回到閒著時的最後一段回答。對方中途 `/clear`、換了對話或被停掉 → 派工變「失敗」並寫明原因（例如「找不到回覆」），不拿別段文字充數。對方沒回這則就有人打了下一則（例如按 Esc 中斷後繼續打字）→「對方沒回這則就換了下一則」；這輪結束了卻沒有回覆文字 →「對方這輪結束了，但沒有回覆文字」。
+- 不帶 `--wait`：試送一次，印出派工編號就結束（排隊中也是結束碼 0）；之後由 `--wait` 的指令、`sampan dispatches show`、MCP 工具或開著的 `sampan` 畫面接著推進（沒人盯時派工停在原狀態，下次有人盯再接著做）。
+- `sampan dispatches show <編號> [--wait 秒]`：推進一次（帶 `--wait` 就最多等那麼久），印出狀態、原因與**完整回覆**。沒帶 `--wait` 送出的，用它看回覆。
+- `--wait`：每 2 秒看一次，對方回完就把回覆印到 stdout（結束碼 0）；失敗印原因（結束碼 1）；超過 `--timeout`（預設 600 秒）印「還在做，派工 <編號>」（結束碼 124），派工照樣留著；按 Ctrl-C 也一樣留著（結束碼 130）。
+- `sampan dispatches` 列排隊中與等回覆的派工（編號、從誰、給誰、狀態、建立時間、原因）；`--all` 連已回覆、失敗、取消的一起列。`sampan dispatches cancel <編號>` 取消還沒送出的；已送出、等回覆的改成不再等回覆（訊息已在對方那裡，收不回）。
+- 開新 session 時一起送：`sampan new <名稱> <目標> <目錄> --message <訊息｜->`（`-` 從 stdin 讀）。訊息當作 agent 啟動時的第一個 prompt（`claude "$(cat <檔>)"`、`codex "$(cat <檔>)"`），所以資料夾信任等啟動提示照常先問，答完才送出；同時建一筆狀態直接是「已送出」的派工，之後照一般派工看回覆；新 session 還沒被認出來（還在開、停在信任提示、Codex 還沒有對話）時不判失敗，原因寫「對方 session 還在啟動」。下指令的不會收到完成通知，用 `sampan dispatches show` 看。沒帶 `--message` 時行為跟以前完全一樣。
 - 送出、送達、取消都記在 `actions.log`（`[send]`、`[cancel]`）。排程的 `sampan save` 永遠不送、不推進派工。
 
 ## 讓 agent 用 sampan
 
-`sampan mcp serve` 是一個 stdio MCP server：agent（Claude Code、Codex）透過它的工具 `list_sessions`、`send`、`new_session`、`dispatch_result`、`cancel_dispatch` 傳訊息給其他 session、開新 session、看回覆，規則跟 `sampan send` 一樣。登記到各 profile 的指令 `sampan mcp install` 在下一步加入；在那之前要自己用 `claude mcp add`／`codex mcp add` 登記 `sampan mcp serve`。
+`sampan mcp serve` 是一個 stdio MCP server：agent（Claude Code、Codex）透過它的工具 `list_sessions`、`send`、`new_session`、`dispatch_result`、`cancel_dispatch` 傳訊息給其他 session、開新 session、看回覆，規則跟 `sampan send` 一樣。用 `sampan mcp install` 把它登記到每個啟用的 Claude profile 與 Codex（`sampan mcp uninstall` 移除，兩者都有 `--dry-run`），裝好後重開該 profile 的 session 才看得到工具。
 
-- 預設 `[mcp] confirm = true`：會動作的工具（`send`、`new_session`、`cancel_dispatch`）每次都跳核准表單，寫明送給誰、從哪個 session、完整訊息，可以同意、拒絕或改訊息再送；拒絕就不建派工。呼叫端不支援核准表單時直接拒絕（「這個 client 不支援核准表單；要用請在 config 設 [mcp] confirm = false」）。看狀態的工具永遠不問。
-- `send` 不等的話馬上回派工編號；對方做完時 sampan 往呼叫者的 session 送一行通知（`〔sampan：<對方> 已回覆派工 <編號>，用 sampan 工具 dispatch_result 看內容〕`，會按 Enter），同意派工就算同意這則通知。`wait=true` 最多等 60 秒，等到就連回覆一起回。
+- 預設 `[mcp] confirm = true`：會動作的工具（`send`、`new_session`、`cancel_dispatch`）每次都跳核准表單，寫明送給誰、從哪個 session、完整訊息，可以同意、拒絕或改訊息再送（訊息欄留空就送原訊息）；拒絕就不建派工。呼叫端不支援核准表單時直接拒絕（「這個 client 不支援核准表單；要用請在 config 設 [mcp] confirm = false」）。看狀態的工具永遠不問。
+- `send` 不等的話馬上回派工編號；對方做完時 sampan 往呼叫者的 session 送一行通知（`〔sampan：<對方> 已回覆派工 <編號>，用 sampan 工具 dispatch_result 看內容〕`，會按 Enter），失敗時也送一行（`〔sampan：給 <對方> 的派工 <編號> 失敗：<原因>〕`），同意派工就算同意這則通知。`wait=true` 最多等 60 秒，等到就連回覆一起回。
 - 呼叫者不是 sampan 管的 session（例如不在 tmux 裡）→ 工具照樣能用，只是收不到完成通知，自己用 `dispatch_result` 查。
 - 工具的參數與回傳見 [reference](reference.md#sampan-mcp-serve-的工具)。
 
