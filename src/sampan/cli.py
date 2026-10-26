@@ -72,6 +72,9 @@ def build_parser():
     ds.add_argument("--all", action="store_true", help="也列已完成、失敗、取消的")
     mc = sub.add_parser("mcp", help="MCP server：讓 agent 用工具傳訊息給其他 session").add_subparsers(dest="action", required=True)
     mc.add_parser("serve", help="stdio MCP server（由 Claude Code／Codex 啟動，不是給人直接跑的）")
+    for verb, help_ in (("install", "把 sampan MCP 裝進各啟用的 Claude profile 與 Codex"), ("uninstall", "從各 profile 與 Codex 移除 sampan MCP")):
+        mi = mc.add_parser(verb, help=help_)
+        mi.add_argument("--dry-run", action="store_true")
     sub.add_parser("status", help="登記表與實際狀態的差異、最後活動、context 用量")
     sv = sub.add_parser("save", help="記錄每個 tmux session 的 agent、profile 與對話 id")
     sv.add_argument("--quiet", action="store_true", help="沒有警告時不輸出（給 launchd 用）")
@@ -394,6 +397,13 @@ def _dispatch(cfg, args):
                 return 2
             return cmd_cancel(cfg, out, args.id)
         return cmd_dispatches(cfg, out, all_=args.all)
+    if cmd == "mcp" and args.action in ("install", "uninstall"):
+        from . import mcp_install
+        from .doctor import current_sampan
+        from .runner import run
+        if args.action == "install":
+            return mcp_install.install(cfg, run, out, sampan_path=current_sampan(), dry_run=args.dry_run)
+        return mcp_install.uninstall(cfg, run, out, dry_run=args.dry_run)
     if cmd == "mcp":
         from . import mcp_server
         ppid = os.getppid()

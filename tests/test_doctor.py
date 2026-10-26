@@ -322,3 +322,20 @@ class ScopedInstallDoctorTest(DoctorTest):
     def test_repo_project_scope_points_to_the_repo_settings(self):
         warns = self._checks_for("work", [("project", "1", "/repo/y")])
         self.assertTrue(any("/repo/y" in c.title and ".claude/settings.json" in c.detail for c in warns))
+
+
+class McpDoctorTest(DoctorTest):
+    def mcp_titles(self):
+        return [c.title for c in self.checks() if "sampan MCP" in c.title]
+
+    def test_nothing_installed_is_quiet(self):
+        self.assertEqual(self.mcp_titles(), [])
+
+    def test_shows_where_it_is_installed_and_where_not(self):
+        for name in ("alice", "work"):
+            p = self.cfg.profiles[name]
+            p.claude_json.parent.mkdir(parents=True, exist_ok=True)
+            p.claude_json.write_text('{"mcpServers": {"sampan": {}}}' if name == "alice" else "{}")
+        titles = self.mcp_titles()
+        self.assertEqual(titles, ["sampan MCP：裝在 alice；未裝：work、codex"])
+        self.assertEqual([c.level for c in self.checks() if "sampan MCP" in c.title], ["info"])

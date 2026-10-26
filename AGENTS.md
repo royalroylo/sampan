@@ -10,7 +10,7 @@ which conversation each session runs, so sessions can be resumed after an agent 
    (`claude`, required). Codex CLI (`codex`) is optional.
 3. Tell them what it changes on the machine (see "What it changes on your machine" in README.md):
    - `~/.config/sampan/` and `~/.local/state/sampan/` (config, registry, history).
-   - macOS: one launchd job that runs `sampan save` every hour. It only saves.
+   - macOS: one launchd job that runs `sampan save` every 5 minutes. It only saves.
    - Claude's `settings.json` is untouched unless they run `sampan init --hook`.
    - It types into tmux panes only when the user acts: open, resume, stop, move or send (`sampan send`, only into an empty prompt).
 
@@ -29,6 +29,7 @@ which conversation each session runs, so sessions can be resumed after an agent 
 - To open an agent session for the user (also from another machine over SSH), use
   `sampan new <name> <claude:profile|codex> <dir>` instead of `tmux new-session … claude`: it registers the session
   and records its conversation, so it can be resumed later.
+- `sampan mcp install` / `uninstall` edit the Claude profiles' and Codex's config (through `claude mcp add` / `codex mcp add`): run them only when the user asks, and `--dry-run` first if unsure.
 - `sampan update` is not read-only: it reinstalls sampan. Only run it if the user asks, and do not pass `--yes` to `sampan update` on the user's behalf.
 
 ## Working on the code

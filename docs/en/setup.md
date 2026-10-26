@@ -20,3 +20,7 @@ If you would rather not edit `~/.zshrc`, create a profile in your own terminal a
 
 Do **not** turn on tmux-continuum's auto-restore (`@continuum-restore on`) or tmux-resurrect's automatic resume: they
 restore panes outside sampan and conflict with "you confirm, original conversation only". Leave resuming to `sampan restore`.
+
+## Letting agents send messages (sampan MCP)
+
+`sampan mcp install` adds the sampan MCP to every enabled Claude profile and to Codex (`--dry-run` shows the commands first; `sampan mcp uninstall` removes it). Restart the profile's sessions afterwards. By default every `send`, `new_session` and `cancel_dispatch` shows an approval form; a Codex started with `--dangerously-bypass-approvals-and-sandbox` auto-approves the form, see [reference.md](reference.md#installing-and-what-the-approval-form-relies-on).

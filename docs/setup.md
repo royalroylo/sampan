@@ -18,3 +18,7 @@
 ## 建議的 tmux 設定
 
 **不要**開 tmux-continuum 的自動還原（`@continuum-restore on`）或 tmux-resurrect 的自動接回：它們會在 sampan 之外還原 pane，與 `sampan restore` 的「由你確認、只用原對話」互相干擾。接回只交給 `sampan restore`。
+
+## 讓 agent 用工具傳訊息（sampan MCP）
+
+`sampan mcp install` 把 sampan MCP 裝進每個啟用的 Claude profile 與 Codex（`--dry-run` 先看會跑什麼指令，`sampan mcp uninstall` 移除）。裝好後重開該 profile 的 session。預設每次 `send`、`new_session`、`cancel_dispatch` 都會跳核准表單；用 `--dangerously-bypass-approvals-and-sandbox` 開的 Codex 會自動同意表單，見 [reference.md](reference.md#安裝與核准表單的前提)。

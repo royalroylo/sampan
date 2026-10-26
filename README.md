@@ -44,6 +44,7 @@ sampan init
 - macOS：新增一個 launchd 排程，每 5 分鐘跑 `sampan save`，只存檔。
 - 不會動 Claude 的 `settings.json`，除非你自己跑 `sampan init --hook`（或同意修復以前裝的 hook）。
 - 只有你動手（開、接回、停止、搬目錄、`sampan send` 傳訊息）時，才會對 tmux 的 pane 打字；傳訊息只送進空的輸入框。
+- 只有你自己跑 `sampan mcp install` 時，才會用 `claude mcp add --scope user` 與 `codex mcp add` 把 sampan MCP 寫進各 profile 與 Codex 的設定（`sampan mcp uninstall` 移除）。
 - 網路：畫面開著時，最多每 6 小時到 GitHub 查一次 sampan 的版本 tag；還不知道有新版時按 `U` 會當下重新查，`sampan update` 每次都重新查。
 - `sampan init` 會問問題，要由你在終端機自己跑；沒有終端機時它會拒絕，除非加 `--yes`。
 

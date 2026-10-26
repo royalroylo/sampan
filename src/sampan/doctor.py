@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
 
-from . import actionlog, codex_daemon, launchd
+from . import actionlog, codex_daemon, launchd, mcp_install
 from . import deps as deps_mod
 from . import update as update_mod
 from .claude_state import stale_session_files
@@ -275,6 +275,17 @@ def _codex_daemon(cfg, run, snapshot_fn=None):
     return [Check("info", f"Codex 常駐服務：執行中（{snap.home}）")]
 
 
+def _mcp(cfg):
+    """Where the sampan MCP is installed; quiet when it is nowhere."""
+    st = mcp_install.status(cfg)
+    here = [n for n, v in st.items() if v]
+    if not here:
+        return []
+    missing = [n for n, v in st.items() if not v]
+    return [Check("info", f"sampan MCP：裝在 {'、'.join(here)}" + (f"；未裝：{'、'.join(missing)}" if missing else ""),
+                  "sampan mcp install 補裝")]
+
+
 def _multi_agent(cfg, run, proc_root):
     tmux = Tmux(run)
     panes = tmux.panes()
@@ -316,7 +327,7 @@ def run_checks(cfg, run, *, now, uid, sampan_path=None, proc_root=PROC_ROOT, whi
     current = current or update_mod.current_version()
     latest_fn = latest_fn or (lambda: update_mod.check(cfg.state_dir, run=run)[0])
     return (_version(current, latest_fn) + _deps(cfg, which, env, platform) + _profile_dirs(cfg) + _owners(cfg, uid) + _plugins(cfg) + _auth(cfg, run) + _stale(cfg, run)
-            + _hooks(cfg) + _statusline(cfg, now) + _codex(cfg) + _codex_daemon(cfg, run, daemon_fn) + _multi_agent(cfg, run, proc_root) + _action_log(cfg)
+            + _hooks(cfg) + _statusline(cfg, now) + _codex(cfg) + _codex_daemon(cfg, run, daemon_fn) + _mcp(cfg) + _multi_agent(cfg, run, proc_root) + _action_log(cfg)
             + (_launchd(cfg, run, sampan_path) + _save_log(cfg, now) if platform == "darwin" else
                [Check("info", "這台不是 macOS，沒有自動存檔排程（需要時自己跑 sampan save，或用 cron／systemd timer）")]))
 

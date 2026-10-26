@@ -89,3 +89,16 @@ stdio MCP server（每行一則 JSON-RPC 2.0；協定版本 `2025-06-18`，clien
 | `cancel_dispatch` | `id` | `dispatch`、`state`（只能取消排隊中的） | 問 |
 
 核准表單寫明送給誰（名稱、profile、Claude／Codex）、從哪個 session、完整訊息，呼叫者是 sampan session 時加一句「完成後會在你的 session 送出一則通知」；agent 給的訊息一律放在固定的分隔線「──── 訊息內容（由 agent 提供）────」下面，分隔線以上只有 sampan 寫的字；名稱、目標、目錄有換行或控制字元會在問之前就拒絕，目錄顯示解析後的實際路徑。表單只有一個 `message` 欄位（預設是原訊息），改了就送改過的；同意後會再檢查一次對方（表單開著時對方可能停了）。`new_session` 跟 `sampan new` 用同一套檢查（名稱、profile 停用、Codex 停用、tmux session 已存在、目錄不存在），都在問之前做。同意派工就算同意它的完成通知，不另外問。server 活著時每 3 秒推進這個呼叫者發出的派工。
+
+
+### 安裝與核准表單的前提
+
+`sampan mcp install` 對每個啟用的 Claude profile 跑 `claude mcp add --scope user sampan -- <sampan 路徑> mcp serve`（帶該 profile 的 `CLAUDE_CONFIG_DIR`），Codex 啟用時跑 `codex mcp add sampan -- <sampan 路徑> mcp serve`（Codex 家目錄不是 `~/.codex` 時帶 `CODEX_HOME`）；已經裝了的略過。`sampan mcp uninstall` 對應 `remove`。兩者都有 `--dry-run`，每行結果記在 `actions.log`（標籤 `mcp`）。裝好後要重開該 profile 的 session 才看得到工具。`sampan doctor` 用一行顯示裝在哪些 profile（都沒裝時不顯示）。
+
+`[mcp] confirm = true` 靠呼叫端真的把表單顯示給人。查證結果（2026-10-26）：
+
+- **Codex CLI 支援 elicitation 表單。** 官方設定參考列出 `approval_policy = { granular = { mcp_elicitations = … } }`：「`true` 時 MCP elicitation 提示會顯示，不是自動拒絕」，也就是設成 `false` 會被自動拒絕（sampan 的 `send` 等會失敗，不會繞過核准）。第三方整理的 release notes 指出 v0.119／v0.120 起支援，而且在 `danger-full-access`（`--dangerously-bypass-approvals-and-sandbox`）下 Codex 會**自動同意**所有 elicitation。本機 `codex-cli 0.164.0` 的 `codex mcp --help` 沒有 elicitation 相關選項（只有 `-c`）。
+- **所以：用 `--dangerously-bypass-approvals-and-sandbox` 開的 Codex，核准表單等於沒有。**`confirm = true` 擋不住這種呼叫端；要擋，就別用該模式，或不要在那個 agent 裝 sampan MCP。
+- **Claude Code**：官方 MCP 文件有 elicitation 對話框與 `Elicitation` hook，非互動（headless）session 會要求 server 取消需要輸入的請求；文件**沒有**說 `bypassPermissions`／`--dangerously-skip-permissions` 會不會自動回答 elicitation，也沒有驗證過，視為未確認。另外 `Elicitation` hook 可以代為回答，裝了這種 hook 的 profile 同樣會繞過人。
+
+來源：官方 [Codex 設定參考](https://developers.openai.com/codex/config-reference)（轉到 learn.chatgpt.com/docs/config-file/config-reference）；第三方 [MCP Server Elicitations in Codex CLI](https://codex.danielvaughan.com/2026/04/10/mcp-elicitation-codex-cli/)；Claude Code [MCP 文件](https://code.claude.com/docs/en/mcp)。Codex 官方 MCP 頁沒有 elicitation 的說明，版本細節只有第三方來源。
