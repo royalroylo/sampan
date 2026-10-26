@@ -17,7 +17,12 @@ class FolderItem:
     @property
     def name(self):
         """Picker key only (never shown): cannot clash with a session name."""
-        return "\x00folder:" + self.path
+        return folder_key(self.path)
+
+
+def folder_key(path):
+    """The Picker key of the folder row for path (FolderItem.name)."""
+    return "\x00folder:" + path
 
 
 def folder_of(tree, name):

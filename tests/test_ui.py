@@ -986,6 +986,27 @@ class PickerFolderTest(unittest.TestCase):
         self.assertEqual(here(p), ("session", "b1"))
         self.assertEqual(p.tree.folders, {"客戶": False, "客戶/甲": False})
 
+    def test_search_never_lands_on_a_folder_row(self):
+        p = self.picker()  # cursor on the folder 客戶
+        self.assertEqual(p.key("/"), None)
+        self.assertTrue(all(not isinstance(i, FolderItem) for i in p.visible))
+        self.assertEqual(p.key("\n"), ("attach", ["a1"]))  # the first match, never the folder
+        p = self.picker()
+        p.key("/")
+        for _ in range(6):
+            p.key("KEY_DOWN")
+            self.assertNotIsInstance(p.visible[p.cursor], FolderItem)
+        p = self.picker(current="a1")
+        p.key("/")
+        self.assertEqual(here(p), ("session", "a1"))  # a session stays under the cursor
+
+    def test_current_session_in_collapsed_folder_is_revealed(self):
+        tree = folder_tree(客戶=True, 客戶_甲=True)
+        p = self.picker(current="x", tree=tree)
+        self.assertEqual(here(p), ("session", "x"))
+        self.assertEqual(p.tree.folders, {"客戶": False, "客戶/甲": False})
+        self.assertEqual(tree.folders, {"客戶": True, "客戶/甲": True})  # the caller's tree is untouched
+
     def test_broken_folders_lists_flat(self):
         p = Picker(folder_rows(), tree=None)
         self.assertEqual([i.name for i in p.visible], ["a1", "b1", "top", "x"])

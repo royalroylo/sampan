@@ -5,7 +5,7 @@ from .. import folders as F
 from ..restart import confirm_line, plan_restart, skip_text
 from ..status import State, _fmt_tokens
 from .text import BACKSPACE, ENTER, MOVES, pad
-from .tree import FolderItem, build_items, folder_of
+from .tree import FolderItem, build_items, folder_key, folder_of
 
 
 def show_state(row):
@@ -61,6 +61,7 @@ class Picker:
         self.query = None
         self.jump = ""
         self._jump_at = None
+        self._reveal(current)
         self._filter()
         names = [r.name for r in self.visible]
         self.cursor = names.index(current) if current in names else 0
@@ -161,14 +162,28 @@ class Picker:
         self._filter()
         self._land(here)
 
+    def _reveal(self, name):
+        """Open every collapsed folder above session name in the Picker's own tree (not saved)."""
+        if self.tree is None or name is None:
+            return
+        parts = folder_of(self.tree, name).split("/")
+        for i in range(1, len(parts) + 1):
+            level = "/".join(parts[:i])
+            if self.tree.folders.get(level):
+                self.tree.folders[level] = False
+
+    def _start_search(self):
+        """Search lists sessions only: a cursor on a folder row moves to the first match."""
+        here = self._here_or_none()
+        self.query = ""
+        self._filter()
+        names = [r.name for r in self.visible]
+        self.cursor = names.index(here) if here in names else 0
+
     def _end_search(self):
         here = self._here_or_none()
-        if self.tree is not None and self.visible and not self.on_other():
-            parts = folder_of(self.tree, here).split("/")
-            for i in range(1, len(parts) + 1):  # reveal it: open every collapsed folder above it (not saved)
-                level = "/".join(parts[:i])
-                if self.tree.folders.get(level):
-                    self.tree.folders[level] = False
+        if self.visible and not self.on_other():
+            self._reveal(here)
         self.query = None
         self._filter()
         self._goto(here)
@@ -253,11 +268,11 @@ class Picker:
         """Cursor to the folder row of path (when there is one shown)."""
         if path:
             names = [r.name for r in self.visible[:self.n_rows]]
-            key = FolderItem(path, 0, False, 0, 0).name
+            key = folder_key(path)
             if key in names:
                 self.cursor = names.index(key)
 
-    def _folder_key(self, k):
+    def _on_folder_key(self, k):
         """Keys on a folder row that differ from a session row's; returns (handled, result)."""
         it = self.visible[self.cursor]
         if k in ENTER:
@@ -329,7 +344,7 @@ class Picker:
         if k == "D":
             return ("dispatches", [])
         if k == "/":
-            self.query = ""
+            self._start_search()
             return None
         if not self.visible:
             return None
@@ -353,7 +368,7 @@ class Picker:
             self._ask_restart()
             return None
         if self.on_folder():
-            handled, res = self._folder_key(k)
+            handled, res = self._on_folder_key(k)
             if handled:
                 return res
         elif k == "KEY_LEFT" and self.tree is not None:
