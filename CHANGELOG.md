@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-27
+
 ### Added
 - Session folders, several levels deep, kept in `folders.json` in the state directory (0600, atomic, written under the registry lock). They only organise the display: no folder action stops, forgets or changes a session or writes the registry, and `sampan save`, `sampan restore` and the reattach after a reboot never read or write the file. Reading corrects itself for display only (unknown sessions dropped, sessions not in the file at the top level, missing folders added); a file that cannot be read, is not JSON or has an unknown version gives the flat list with one notice (「資料夾設定讀不到：…，先照原樣列出」) and is never overwritten.
 - Folders on the `sampan` screen: subfolders then sessions at each level, both by name, sessions in no folder last; folder rows `▾ 名稱 (n)` / `▸` with 「n 忙」 when folded; sessions indented. Enter (or → / ←) folds and unfolds and the state is remembered; space checks folders too; `g` wraps the checked items (or the row under the cursor) into a new folder at their deepest common parent; `f` moves them into a folder picked from a list (「（最外層）」, 「新資料夾…」, then every folder except the moved ones and what is inside them); `e` / `X` on a folder row rename it or delete it (its contents move up one level); `n` puts the new session in the folder under the cursor. A taken name asks 「同一層已經有「X」，合併進去？(y/N)」. Search lists matching sessions only, with their folder path dim before the name. The card of a folder row shows its path, session count, the count per state and its keys. Folder actions are logged in `actions.log` (`[資料夾]`). `--plain` lists the sessions in the tree's order with the folder path before each name.
@@ -18,6 +20,9 @@ All notable changes to this project are documented here. The format follows
 - With `confirm = true`, an agent (not a person at the terminal) running `sampan send`, `sampan new … --message` or `sampan dispatches cancel` is refused with exit 2 (「agent 請改用 sampan MCP 的工具（會先問使用者）；要讓 agent 直接用指令，在 config 設 [mcp] confirm = false」). A person at a terminal is unaffected. Still not stopped: an agent typing into tmux panes itself (`tmux send-keys`); Claude Code's sandbox can, sampan does not set it up.
 - `sampan mcp install` writes `[mcp_servers.sampan.tools.<tool>] approval_mode = "prompt"` for the three tools into Codex's `config.toml` (with `confirm = false`, or on `uninstall`, it removes only the tables set to `prompt`; user-set `approve` tables are left). It backs the file up first as `config.toml.bak-sampan-<YYYYmmdd-HHMMSS>`, changes only sampan's tables (every other byte, CRLF and comments included, is kept), and reads and writes UTF-8. If the user picks "always allow" in Codex, which rewrites it to `approve`, `sampan doctor` reports it and `sampan mcp install` puts `prompt` back. Changing `[mcp] confirm` takes effect for Claude when its MCP server restarts and for Codex after `sampan mcp install`.
 - The source line of a dispatch now reads `〔sampan 轉送｜來自 <who>｜派工 <id>｜直接回覆文字即可，sampan 會帶回〕`, telling the receiving agent to answer in text; completion and failure notices are unchanged.
+
+### Fixed
+- The info card's key line on the `sampan` screen wraps between keys instead of splitting one (「s 停全部」 no longer breaks across lines).
 
 ## [0.11.1] - 2026-10-27
 
@@ -345,7 +350,8 @@ First public release. Versions up to 0.5.3 were released privately under the nam
 ### Security
 - Credentials in git URLs are no longer shown in output.
 
-[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.11.1...HEAD
+[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/royalroylo/sampan/releases/tag/v0.12.0
 [0.11.1]: https://github.com/royalroylo/sampan/releases/tag/v0.11.1
 [0.11.0]: https://github.com/royalroylo/sampan/releases/tag/v0.11.0
 [0.10.0]: https://github.com/royalroylo/sampan/releases/tag/v0.10.0
