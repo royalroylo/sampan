@@ -582,7 +582,7 @@ class PickerTest(unittest.TestCase):
     def test_other_actions(self):
         self.assertEqual(self.p.key("r"), ("retired", ["b"]))
         self.assertEqual(self.p.key("a"), ("active", ["b"]))
-        self.assertEqual(self.p.key("n"), ("new", []))
+        self.assertEqual(self.p.key("n"), ("new", [""]))
         self.assertEqual(self.p.key("m"), ("move", ["b"]))
         self.assertEqual(self.p.key("P"), ("switch", ["b"]))
         self.assertEqual(self.p.key("q"), ("quit", []))
@@ -607,7 +607,7 @@ class PickerTest(unittest.TestCase):
         p = Picker([])
         self.assertIsNone(p.key("\n"))
         self.assertIsNone(p.key("s"))
-        self.assertEqual(p.key("n"), ("new", []))
+        self.assertEqual(p.key("n"), ("new", [""]))
 
 
 class Clock:
@@ -801,6 +801,218 @@ class PickerJumpSearchTest(unittest.TestCase):
         self.assertEqual(p.visible[p.cursor].name, "d")
         p.reload([row("a")])
         self.assertEqual(p.cursor, 0)  # clamped
+
+
+from sampan.folders import Tree  # noqa: E402
+from sampan.ui.tree import FolderItem  # noqa: E402
+
+
+def folder_rows():
+    return [row("a1"), row("b1"), row("top"), row("x", state=State.STOPPED, agent_status="-")]
+
+
+def folder_tree(**collapsed):
+    folders = {"客戶": False, "客戶/甲": False}
+    folders.update({k.replace("_", "/"): v for k, v in collapsed.items()})
+    return Tree(folders, {"a1": "客戶", "b1": "客戶/甲", "x": "客戶/甲"})
+
+
+def here(p):
+    it = p.visible[p.cursor]
+    return ("folder", it.path) if isinstance(it, FolderItem) else ("session", it.name)
+
+
+class PickerFolderTest(unittest.TestCase):
+    """Visible order: 客戶, 客戶/甲, b1, x, a1, top."""
+
+    def picker(self, current=None, tree=None, rows=None, others=()):
+        return Picker(rows or folder_rows(), current, clock=Clock(), tree=tree or folder_tree(), others=others)
+
+    def press(self, p, *keys):
+        out = None
+        for k in keys:
+            out = p.key(k)
+        return out
+
+    def test_layout_and_cursor(self):
+        p = self.picker(current="a1")
+        self.assertEqual(here(p), ("session", "a1"))
+        self.assertEqual(p.n_rows, 6)
+        self.assertTrue(isinstance(p.visible[0], FolderItem))
+        self.assertTrue(p.on_folder() is False and p.here_folder() is None)
+        p.key("k")
+        p.key("k")
+        p.key("k")
+        self.assertEqual(here(p), ("folder", "客戶/甲"))
+        self.assertTrue(p.on_folder())
+        self.assertEqual(p.here_folder(), "客戶/甲")
+
+    def test_enter_on_folder_collapses(self):
+        p = self.picker()
+        self.assertEqual(p.key("\n"), ("collapse", ["客戶", "1"]))
+        self.assertEqual([here(p)], [("folder", "客戶")])
+        self.assertEqual([getattr(i, "path", i.name) for i in p.visible], ["客戶", "top"])
+        self.assertTrue(p.tree.folders["客戶"])
+        self.assertEqual(p.key("KEY_ENTER"), ("collapse", ["客戶", "0"]))
+        self.assertEqual(p.n_rows, 6)
+
+    def test_arrows_on_folder_and_session(self):
+        p = self.picker(current="b1")
+        self.assertIsNone(p.key("KEY_RIGHT"))  # nothing on a session row
+        self.assertIsNone(p.key("KEY_LEFT"))   # jumps to its folder row
+        self.assertEqual(here(p), ("folder", "客戶/甲"))
+        self.assertEqual(p.key("KEY_LEFT"), ("collapse", ["客戶/甲", "1"]))
+        self.assertIsNone(p.key("KEY_LEFT"))  # already collapsed: go to the parent folder row
+        self.assertEqual(here(p), ("folder", "客戶"))
+        p.key("j")
+        self.assertEqual(p.key("KEY_RIGHT"), ("collapse", ["客戶/甲", "0"]))
+        self.assertIsNone(p.key("KEY_RIGHT"))  # already open
+        p = self.picker(current="top")
+        self.assertIsNone(p.key("KEY_LEFT"))  # top level: no folder row to go to
+        self.assertEqual(here(p), ("session", "top"))
+
+    def test_digits_count_sessions_only(self):
+        p = self.picker()
+        p.key("1")
+        self.assertEqual(here(p), ("session", "b1"))
+        p.key("4")
+        self.assertEqual(here(p), ("session", "top"))
+        p = self.picker()
+        p.key("\n")  # collapse 客戶: the first session row is now top
+        p.key("1")
+        self.assertEqual(here(p), ("session", "top"))
+
+    def test_space_marks_folder(self):
+        p = self.picker()
+        p.key(" ")
+        self.assertEqual(p.marked_folders, {"客戶"})
+        self.assertEqual(p.marked, set())
+        self.assertEqual(p.cursor, 1)
+        p.key("k")
+        p.key(" ")
+        self.assertEqual(p.marked_folders, set())
+
+    def test_g_returns_marked_items(self):
+        p = self.picker(current="top")
+        p.key(" ")  # top
+        self.press(p, "k", "k", "k", "k", " ")  # 客戶/甲
+        self.assertEqual(p.key("g"), ("group", ["folder:客戶/甲", "session:top"]))
+        self.assertEqual((p.marked, p.marked_folders), ({"top"}, {"客戶/甲"}))  # cleared by the caller
+        p.clear_marks()
+        self.assertEqual((p.marked, p.marked_folders), (set(), set()))
+
+    def test_f_without_marks_uses_cursor_item(self):
+        p = self.picker(current="a1")
+        self.assertEqual(p.key("f"), ("file", ["session:a1"]))
+        p.key("1")
+        self.press(p, "k", "k")
+        self.assertEqual(p.key("f"), ("file", ["folder:客戶"]))
+        self.assertEqual(p.key("g"), ("group", ["folder:客戶"]))
+
+    def test_folder_row_e_x_and_inert_keys(self):
+        p = self.picker()
+        self.assertEqual(p.key("e"), ("rename_folder", ["客戶"]))
+        self.assertEqual(p.key("X"), ("rm_folder", ["客戶"]))
+        for k in "mPra":
+            self.assertIsNone(p.key(k))
+        p = self.picker(current="a1")
+        self.assertEqual(p.key("e"), ("rename", ["a1"]))
+        self.assertEqual(p.key("X"), ("forget", ["a1"]))
+
+    def test_stop_on_collapsed_folder_lists_hidden_names(self):
+        p = self.picker()
+        p.key("\n")  # collapse 客戶
+        self.assertIsNone(p.key("s"))
+        self.assertEqual(p.prompt, "將停掉：a1、b1、x　確定？(y/N)")
+        self.assertEqual(p.key("y"), ("stop!", ["a1", "b1", "x"]))
+
+    def test_stop_mixed_marks_deduplicates(self):
+        p = self.picker()
+        self.press(p, "j", " ", " ")  # 客戶/甲 and b1
+        p.key("s")
+        self.assertEqual(p.prompt, "將停掉：b1、x　確定？(y/N)")
+
+    def test_restart_on_folder_skips_stopped(self):
+        p = self.picker()
+        p.key("j")
+        self.assertIsNone(p.key("S"))
+        self.assertEqual(p.prompt, "將重開：b1　略過：x（已停止）　確定？(y/N)")
+        self.assertEqual(p.key("y"), ("restart!", ["b1"]))
+        self.assertEqual(p.restart_plan.skip, [("x", "已停止")])
+        self.assertIsNone(p.prompt)
+        p.key("S")
+        self.assertIsNone(p.key("n"))  # any other key cancels
+        self.assertIsNone(p.prompt)
+
+    def test_restart_on_stopped_session_row_resumes(self):
+        p = self.picker(current="x")
+        p.key("S")
+        self.assertEqual(p.prompt, "將重開：x（背景接回）　確定？(y/N)")
+        self.assertEqual(p.key("Y"), ("restart!", ["x"]))
+        p = self.picker(current="b1")
+        self.press(p, " ", " ", "S")  # marks b1, x: only sessions
+        self.assertEqual(p.key("y"), ("restart!", ["b1", "x"]))
+        p = self.picker(current="x")
+        self.press(p, " ", "1", "k", " ", "S")  # x and the folder 客戶/甲: a folder means stopped ones stay stopped
+        self.assertEqual(p.key("y"), ("restart!", ["b1"]))
+
+    def test_restart_nothing_to_do_shows_reason(self):
+        rows = folder_rows()
+        tree = Tree({"維運": False}, {"x": "維運"})
+        p = self.picker(rows=rows, tree=tree)
+        self.assertIsNone(p.key("S"))
+        self.assertEqual(p.prompt, "沒有可以重開的：x（已停止）")
+        self.assertIsNone(p.key("y"))  # nothing was waiting for a y
+        self.assertIsNone(p.prompt)
+
+    def test_new_targets_cursor_folder(self):
+        p = self.picker()
+        p.key("j")
+        self.assertEqual(p.key("n"), ("new", ["客戶/甲"]))
+        self.assertEqual(p.here_parent(), "客戶/甲")
+        p = self.picker(current="a1")
+        self.assertEqual(p.key("n"), ("new", ["客戶"]))
+        p = self.picker(current="top")
+        self.assertEqual(p.key("n"), ("new", [""]))
+
+    def test_end_search_reveals_session_in_collapsed_folder(self):
+        p = self.picker()
+        self.press(p, "j", "\n", "k", "\n")  # collapse 客戶/甲, then 客戶
+        self.press(p, "/", "b", "1")
+        self.assertEqual([here(p)], [("session", "b1")])
+        self.assertTrue(all(not isinstance(i, FolderItem) for i in p.visible))
+        self.assertIsNone(p.key("\x1b"))
+        self.assertIsNone(p.query)
+        self.assertEqual(here(p), ("session", "b1"))
+        self.assertEqual(p.tree.folders, {"客戶": False, "客戶/甲": False})
+
+    def test_broken_folders_lists_flat(self):
+        p = Picker(folder_rows(), tree=None)
+        self.assertEqual([i.name for i in p.visible], ["a1", "b1", "top", "x"])
+        self.assertFalse(p.on_folder())
+        self.assertIsNone(p.key("KEY_LEFT"))
+        self.assertEqual(p.cursor, 0)
+        self.assertEqual(p.key("g"), ("group", ["session:a1"]))
+        self.assertEqual(p.key("n"), ("new", [""]))
+
+    def test_set_tree_keeps_cursor_item(self):
+        p = self.picker(current="b1")
+        p.key(" ")
+        p.key("k")
+        p.set_tree(Tree({"開發": False}, {"b1": "開發"}))
+        self.assertEqual(here(p), ("session", "b1"))
+        self.assertEqual([getattr(i, "path", i.name) for i in p.visible], ["開發", "b1", "a1", "top", "x"])
+        self.assertEqual(p.marked, {"b1"})
+
+    def test_folder_rows_are_not_others(self):
+        other = type("O", (), {"name": "o1", "thread": type("T", (), {"name": "th"})()})()
+        p = self.picker(others=[other])
+        self.assertFalse(p.on_other())
+        self.assertEqual(p.n_rows, 6)
+        self.press(p, *["j"] * 6)
+        self.assertTrue(p.on_other())
+        self.assertEqual(p.key("e"), ("desktop", []))
+        self.assertIsNone(p.key("g"))
 
 
 class InteractiveUiTest(UiTest):

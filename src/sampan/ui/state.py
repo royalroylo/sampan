@@ -1,8 +1,11 @@
 """Pure state machines of the ui: Picker (arrow-key menu), Checklist (the restore/adopt checklist), and the display conversion of state labels. Never touches curses."""
 import time
 
+from .. import folders as F
+from ..restart import confirm_line, plan_restart, skip_text
 from ..status import State, _fmt_tokens
 from .text import BACKSPACE, ENTER, MOVES, pad
+from .tree import FolderItem, build_items, folder_of
 
 
 def show_state(row):
@@ -34,14 +37,27 @@ class Picker:
     query is non-empty) and cursor indexes it.
     others (the main list's「Codex 其他對話」, codex_others.OtherRow) follow the rows in visible: the cursor moves onto
     them and a search matches their thread name, but digits count only rows, a space does not mark them, and every
-    row action key there (Enter s m P e X r a) returns ("desktop", []) — they are read only."""
+    row action key there (Enter s m P e X r a) returns ("desktop", []) — they are read only.
 
-    def __init__(self, rows, current=None, *, clock=time.monotonic, others=()):
+    tree (a folders.Tree; None = no folders or folders.json unreadable) turns the list into folders: items is
+    tree.build_items' (depth, item) list and visible[:n_rows] its items, FolderItem rows included. The Picker keeps its
+    own copy of the tree: collapsing (Enter, →, ←) changes it at once and returns ("collapse", [path, "1"|"0"]) for the
+    caller to save. Folders are marked by path in marked_folders. s / S act on every session under a target folder
+    (collapsed ones too); S asks with restart.confirm_line, keeps the plan in restart_plan and on y/Y returns
+    ("restart!", names). g / f return the marked items (else the cursor item) as "folder:<path>" / "session:<name>".
+    Without a tree the list is rows in the given order, as before folders existed."""
+
+    def __init__(self, rows, current=None, *, clock=time.monotonic, others=(), tree=None):
         self.rows = rows
         self.others = list(others)
+        self.tree = _copy_tree(tree)
         self.marked = set()
+        self.marked_folders = set()
         self.clock = clock
         self._stop = None
+        self._restart = False
+        self.restart_plan = None
+        self._notice = None
         self.query = None
         self.jump = ""
         self._jump_at = None
@@ -53,6 +69,10 @@ class Picker:
     def prompt(self):
         if self._stop is not None:
             return f"將停掉：{'、'.join(self._stop)}　確定？(y/N)"
+        if self._restart:
+            return confirm_line(self.restart_plan)
+        if self._notice:
+            return self._notice
         if self.query is not None:
             return f"/{self.query}▏（{len(self.visible)} 筆，Enter 進入，Esc 取消）"
         self._expire()
@@ -65,13 +85,59 @@ class Picker:
 
     def _filter(self):
         q = (self.query or "").lower()
-        self.visible = [r for r in self.rows if q in r.name.lower()]
+        if self.tree is None:
+            self.items = [(0, r) for r in self.rows if q in r.name.lower()]
+        else:
+            self.items = build_items(self.rows, self.tree, self.query)
+        self.visible = [it for _, it in self.items]
         self.n_rows = len(self.visible)  # visible[n_rows:] are others
         self.visible += [o for o in self.others if q in o.thread.name.lower()]
 
     def on_other(self):
         """The cursor is on one of others."""
         return self.n_rows <= self.cursor < len(self.visible)
+
+    def on_folder(self):
+        """The cursor is on a folder row."""
+        return bool(self.visible) and not self.on_other() and isinstance(self.visible[self.cursor], FolderItem)
+
+    def here_folder(self):
+        """Path of the folder row under the cursor, or None."""
+        return self.visible[self.cursor].path if self.on_folder() else None
+
+    def here_parent(self):
+        """Where n puts a new session: the folder under the cursor, or the folder of the session under it ("" = top)."""
+        if not self.visible or self.on_other():
+            return ""
+        return self.here_folder() or folder_of(self.tree, self._here())
+
+    def clear_marks(self):
+        self.marked.clear()
+        self.marked_folders.clear()
+
+    def set_tree(self, tree):
+        """A new folder tree (after a folder action): rebuild the list, the cursor stays on the same item."""
+        here = self._here_or_none()
+        self.tree = _copy_tree(tree)
+        self._prune()
+        self._filter()
+        self._land(here)
+
+    def _prune(self):
+        self.marked &= {r.name for r in self.rows}
+        if self.tree is None:
+            self.marked_folders.clear()
+        else:
+            self.marked_folders &= set(F.resolve(self.tree, [r.name for r in self.rows]).folders)
+
+    def _land(self, here):
+        names = [r.name for r in self.visible]
+        if here in names:
+            self.cursor = names.index(here)
+        elif self.query is not None:
+            self.cursor = 0
+        else:
+            self.cursor = max(0, min(self.cursor, len(self.visible) - 1))
 
     def _goto(self, name):
         """Put the cursor on the row called name in visible, or on the first row when it is not there."""
@@ -91,18 +157,18 @@ class Picker:
         self.rows = rows
         if others is not None:
             self.others = list(others)
-        self.marked &= {r.name for r in rows}
+        self._prune()
         self._filter()
-        names = [r.name for r in self.visible]
-        if here in names:
-            self.cursor = names.index(here)
-        elif self.query is not None:
-            self.cursor = 0
-        else:
-            self.cursor = max(0, min(self.cursor, len(self.visible) - 1))
+        self._land(here)
 
     def _end_search(self):
         here = self._here_or_none()
+        if self.tree is not None and self.visible and not self.on_other():
+            parts = folder_of(self.tree, here).split("/")
+            for i in range(1, len(parts) + 1):  # reveal it: open every collapsed folder above it (not saved)
+                level = "/".join(parts[:i])
+                if self.tree.folders.get(level):
+                    self.tree.folders[level] = False
         self.query = None
         self._filter()
         self._goto(here)
@@ -136,19 +202,106 @@ class Picker:
         return None
 
     def _digit(self, k):
+        """Jump to the n-th session row shown (folder rows are not counted)."""
         self._jump_at = self.clock()
+        at = [i for i in range(self.n_rows) if not isinstance(self.visible[i], FolderItem)]
         for buf in (self.jump + k, k):
             n = int(buf)
-            if 1 <= n <= len(self.rows):
-                self.jump = "" if n * 10 > len(self.rows) else buf
-                self.cursor = n - 1
+            if 1 <= n <= len(at):
+                self.jump = "" if n * 10 > len(at) else buf
+                self.cursor = at[n - 1]
                 return
         self.jump = ""
+
+    def _targets(self):
+        """(session names, folder paths) a row action applies to: the marks, else the cursor item."""
+        if self.marked or self.marked_folders:
+            return set(self.marked), set(self.marked_folders)
+        if self.on_folder():
+            return set(), {self.here_folder()}
+        return {self._here()}, set()
+
+    def _names(self, sessions, paths):
+        """The sessions themselves plus every session under the folders (collapsed or not), once each, in rows order."""
+        names = set(sessions)
+        for p in paths:
+            names |= F.sessions_under(self.tree, p)
+        return [r.name for r in self.rows if r.name in names]
+
+    def _as_items(self):
+        """g / f items: the marked ones in display order (every folder open), else the cursor item."""
+        if not (self.marked or self.marked_folders):
+            return [f"folder:{self.here_folder()}" if self.on_folder() else f"session:{self._here()}"]
+        tree = None if self.tree is None else F.Tree({p: False for p in self.tree.folders}, dict(self.tree.sessions))
+        out = []
+        for _, it in build_items(self.rows, tree, None):
+            if isinstance(it, FolderItem):
+                if it.path in self.marked_folders:
+                    out.append(f"folder:{it.path}")
+            elif it.name in self.marked:
+                out.append(f"session:{it.name}")
+        return out
+
+    def _collapse(self, path, collapsed):
+        here = self._here()
+        self.tree.folders[path] = collapsed
+        self._filter()
+        self._goto(here)
+        return ("collapse", [path, "1" if collapsed else "0"])
+
+    def _goto_folder(self, path):
+        """Cursor to the folder row of path (when there is one shown)."""
+        if path:
+            names = [r.name for r in self.visible[:self.n_rows]]
+            key = FolderItem(path, 0, False, 0, 0).name
+            if key in names:
+                self.cursor = names.index(key)
+
+    def _folder_key(self, k):
+        """Keys on a folder row that differ from a session row's; returns (handled, result)."""
+        it = self.visible[self.cursor]
+        if k in ENTER:
+            return True, self._collapse(it.path, not it.collapsed)
+        if k == "KEY_RIGHT":
+            return True, (self._collapse(it.path, False) if it.collapsed else None)
+        if k == "KEY_LEFT":
+            if it.collapsed:
+                self._goto_folder(F.parent(it.path))
+                return True, None
+            return True, self._collapse(it.path, True)
+        if k == " ":
+            self.marked_folders ^= {it.path}
+            self.cursor = min(len(self.visible) - 1, self.cursor + 1)
+            return True, None
+        if k == "e":
+            return True, ("rename_folder", [it.path])
+        if k == "X":
+            return True, ("rm_folder", [it.path])
+        if len(k) == 1 and k in "mPra":
+            return True, None
+        return False, None
+
+    def _ask_restart(self):
+        sessions, paths = self._targets()
+        plan = plan_restart(self.rows, self._names(sessions, paths), resume_stopped=not paths, own_pane=None)
+        if confirm_line(plan):
+            self.restart_plan, self._restart = plan, True
+            return
+        self.restart_plan = None
+        why = skip_text(plan.skip).removeprefix("略過：") if plan.skip else ""
+        self._notice = f"沒有可以重開的：{why}" if why else "沒有可以重開的 session"
 
     def key(self, k):
         if self._stop is not None:
             names, self._stop = self._stop, None
             return ("stop!", names) if k in ("y", "Y") else None
+        if self._restart:
+            self._restart = False
+            if k in ("y", "Y"):
+                return ("restart!", self.restart_plan.restart + self.restart_plan.resume)
+            self.restart_plan = None
+            return None
+        self._notice = None
         self._expire()
         if self.query is not None:
             return self._search_key(k)
@@ -160,7 +313,7 @@ class Picker:
         if k in ("q", "\x1b"):
             return ("quit", [])
         if k == "n":
-            return ("new", [])
+            return ("new", [self.here_parent()])
         if k == "R":
             return ("restore", [])
         if k == "A":
@@ -185,15 +338,33 @@ class Picker:
             return None
         if self.on_other():  # row-targeted actions on a read-only other row only say where to go
             return ("desktop", []) if k in ENTER or (len(k) == 1 and k in "smPeXra") else None
+        if k == "g":
+            return ("group", self._as_items())
+        if k == "f":
+            return ("file", self._as_items())
+        if k == "s":
+            names = self._names(*self._targets())
+            if names:
+                self._stop = names
+            else:
+                self._notice = "資料夾裡沒有 session"
+            return None
+        if k == "S":
+            self._ask_restart()
+            return None
+        if self.on_folder():
+            handled, res = self._folder_key(k)
+            if handled:
+                return res
+        elif k == "KEY_LEFT" and self.tree is not None:
+            self._goto_folder(folder_of(self.tree, self._here()))
+            return None
         if k == " ":
             self.marked ^= {self._here()}
             self.cursor = min(len(self.visible) - 1, self.cursor + 1)
             return None
         if k in ENTER:
             return ("attach", [self._here()])
-        if k == "s":
-            self._stop = [r.name for r in self.rows if r.name in self.marked] or [self._here()]
-            return None
         if k == "m":
             return ("move", [self._here()])
         if k == "P":
@@ -205,6 +376,10 @@ class Picker:
         if k in ("r", "a"):
             return ("retired" if k == "r" else "active", [self._here()])
         return None
+
+
+def _copy_tree(tree):
+    return None if tree is None else F.Tree(dict(tree.folders), dict(tree.sessions))
 
 
 PROFILE_KEYS = {"r": "rename", "d": "toggle", "f": "forget", "i": "statusline"}

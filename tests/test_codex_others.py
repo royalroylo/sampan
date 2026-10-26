@@ -149,7 +149,7 @@ class OtherRowKeysTest(unittest.TestCase):
             with self.subTest(key=key):
                 p = self.picker()
                 self.assertTrue(p.on_other())
-                self.assertEqual(p.key(key), (action, []))
+                self.assertEqual(p.key(key), (action, [""] if key == "n" else []))  # n: the top level
 
     def test_row_actions_on_the_block_are_refused(self):
         for key in ("\n", "s", "m", "P", "e", "X", "r", "a"):
