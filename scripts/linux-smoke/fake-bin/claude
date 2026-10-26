@@ -1,7 +1,10 @@
 #!/bin/bash
 # Fake `claude` for scripts/linux-smoke: just enough for sampan to see a live Claude Code in a tmux pane.
 # Uses #!/bin/bash (not env) so the process name (comm) is "claude", which is how sampan finds agents.
-# Does NOT exercise: real startup prompts (trust folder), the SessionStart hook, busy/waiting states, worktrees.
+# Draws a Claude-style prompt box (rules, "❯" + NBSP, a dim placeholder) and takes typed keys and bracketed pastes the way
+# `sampan send` needs: Enter submits, a submitted text is saved under $FAKE_CLAUDE_RECEIVED (default ~/.fake-claude-received)
+# and recorded in the transcript with a short "OK" reply, with the session file busy for a second in between.
+# Does NOT exercise: real startup prompts (trust folder), the SessionStart hook, waiting states, worktrees.
 if [ "${1:-}" = auth ]; then
     [ "${2:-}" = status ] && echo '{"loggedIn": true, "email": "fake@example.com"}'
     exit 0
@@ -33,11 +36,58 @@ sfile="$cfg/sessions/$$.json"
 printf '{"pid":%d,"sessionId":"%s","cwd":"%s","status":"idle","tmux":"%s"}\n' "$$" "$sid" "$PWD" "${TMUX_PANE:-}" > "$sfile"
 trap 'rm -f "$sfile"' EXIT
 trap 'exit 0' TERM HUP INT
-echo "Fake Claude Code  session=$sid${resumed:+  (resumed)}"
-echo "╭──────────────────────────────────────────╮"
-echo "│ >                                        │"
-echo "╰──────────────────────────────────────────╯"
-echo "  ? for shortcuts"
-while IFS= read -r line; do
-    [ "$line" = "/exit" ] && exit 0
+recv="${FAKE_CLAUDE_RECEIVED:-$HOME/.fake-claude-received}"
+mkdir -p "$recv"
+buf=""
+n=0
+rule="────────────────────────────────────────────────────────"
+setstatus() { printf '{"pid":%d,"sessionId":"%s","cwd":"%s","status":"%s","tmux":"%s"}\n' "$$" "$sid" "$PWD" "$1" "${TMUX_PANE:-}" > "$sfile"; }
+jstr() {  # JSON string body of $1 (quotes, backslashes, newlines, tabs; other text stays as it is)
+    local s="$1"
+    s=${s//\\/\\\\}; s=${s//\"/\\\"}; s=${s//$'\n'/\\n}; s=${s//$'\t'/\\t}
+    printf %s "$s"
+}
+draw() {
+    printf '\033[2J\033[H'
+    echo "Fake Claude Code  session=$sid${resumed:+  (resumed)}"
+    echo "$rule"
+    if [ -z "$buf" ]; then
+        printf '❯\xc2\xa0\033[2mTry "write a test for <filepath>"\033[0m\n'
+    else
+        printf '❯\xc2\xa0%s\n' "$buf"
+    fi
+    echo "$rule"
+    echo "  ? for shortcuts"
+}
+submit() {
+    local text="$1" now
+    [ "$text" = "/exit" ] && exit 0
+    n=$((n + 1))
+    printf %s "$text" > "$recv/$sid.$n"
+    setstatus busy
+    now=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
+    printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"$now\",\"message\":{\"role\":\"user\",\"content\":\"$(jstr "$text")\"}}" >> "$transcript"
+    sleep 1
+    now=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
+    printf '%s\n' "{\"type\":\"assistant\",\"timestamp\":\"$now\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"OK $n\"}],\"usage\":{\"input_tokens\":1300,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}}}" >> "$transcript"
+    setstatus idle
+}
+stty raw -echo 2>/dev/null
+draw
+inpaste=""
+while IFS= read -rsN1 ch; do
+    if [ -n "$inpaste" ]; then
+        [ "$ch" = $'\r' ] && ch=$'\n'  # tmux turns the newlines of a paste into CR
+        buf+="$ch"
+        if [[ "$buf" == *$'\033[201~' ]]; then buf=${buf%$'\033[201~'}; inpaste=""; draw; fi
+        continue
+    fi
+    case "$ch" in
+        $'\033') IFS= read -rsN5 -t 1 rest
+            if [ "$rest" = "[200~" ]; then inpaste=1; fi ;;
+        $'\r'|$'\n') t="$buf"; buf=""; submit "$t"; draw ;;
+        $'\025') buf=""; draw ;;
+        $'\177') buf=${buf%?}; draw ;;
+        *) buf+="$ch"; draw ;;
+    esac
 done

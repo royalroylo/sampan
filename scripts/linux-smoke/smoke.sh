@@ -83,6 +83,60 @@ tmux send-keys -t zz-sampan-ui q
 sleep 1
 expect "q leaves the ui" bash -c '! tmux has-session -t zz-sampan-ui 2>/dev/null'
 
+step "sampan send to a Claude session (fake claude draws the prompt box and records what it receives)"
+recv=~/.fake-claude-received
+received() { find "$recv" -type f 2>/dev/null | wc -l; }
+wait_for() {  # wait_for <seconds> <command...>
+    local t="$1"; shift
+    for _ in $(seq $((t * 4))); do "$@" && return 0; sleep 0.25; done
+    return 1
+}
+IFS= read -r -d '' msg <<'EOT'
+第一行：你好，世界「引號」 "double" 'single'
+second line with $HOME and `echo hi` and a backslash \n and $(whoami)
+
+  indented 日本語のテキスト 한국어
+last line
+EOT
+tmux ls
+expect "nothing received yet" test "$(received)" = 0
+out=$(printf %s "$msg" | sampan send c1 - 2>&1); rc=$?; echo "$out"
+expect "send exits 0" test "$rc" = 0
+expect "send says sent" has "已送出" "$out"
+expect "the fake received exactly one prompt" wait_for 10 test "$(received)" = 1
+got=$(cat "$recv"/*; printf x); got=${got%x}
+first=${got%%$'\n'*}; body=${got#*$'\n'}
+expect "source line first (from the terminal)" bash -c '[[ "$0" =~ ^〔sampan\ 轉送｜來自\ 終端機｜派工\ [^〕]+〕$ ]]' "$first"
+expect "message arrives byte for byte (multi-line, CJK, quotes, \$HOME, backticks)" test "$body" = "$msg"
+out=$(sampan dispatches); echo "$out"
+expect "dispatches lists it" has "c1" "$out"
+
+step "sampan send --wait: waits for the idle box, prints the reply"
+out=$(sampan send c1 "say OK" --wait --timeout 60 2>&1); rc=$?; echo "$out"
+expect "wait exits 0" test "$rc" = 0
+expect "the reply is printed" has "OK 2" "$out"
+expect "second prompt received" test "$(received)" = 2
+out=$(sampan dispatches --all); echo "$out"
+expect "both dispatches listed, the last one answered" test "$(grep -c '已回覆' <<<"$out")" -ge 1
+
+step "sampan send into a box with a draft: queued, nothing pasted, draft kept"
+tmux send-keys -t c1 -l 'half typed'
+expect "the draft shows in the box" wait_for 10 bash -c 'tmux capture-pane -p -t c1 | grep -q "half typed"'
+out=$(sampan send c1 "must wait" 2>&1); rc=$?; echo "$out"
+expect "send exits 0" test "$rc" = 0
+expect "dispatch stays queued" has "排隊中" "$out"
+did=$(sed -En 's/^派工 ([^：]+)：.*/\1/p' <<<"$out" | head -1)
+sleep 2
+expect "nothing new received" test "$(received)" = 2
+expect "the draft is untouched" bash -c 'tmux capture-pane -p -t c1 | grep -q "❯.half typed$"'
+expect "the queued text never reached the box" bash -c '! tmux capture-pane -p -t c1 | grep -q "must wait"'
+out=$(sampan dispatches cancel "$did" 2>&1); rc=$?; echo "$out"
+expect "cancel exits 0" test "$rc" = 0
+tmux send-keys -t c1 C-u
+expect "draft cleared" wait_for 10 bash -c 'tmux capture-pane -p -t c1 | grep -q "write a test"'
+out=$(sampan send c1 "after the draft" 2>&1); echo "$out"
+expect "an empty box takes the next message" wait_for 10 test "$(received)" = 3
+
 step "cleanup (sessions of this container only)"
 sampan stop --timeout 30 >/dev/null
 

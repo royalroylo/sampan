@@ -15,6 +15,7 @@ All notable changes to this project are documented here. The format follows
 - The `sampan` screen watches dispatches: while it is open a background thread advances every pending dispatch every 3 seconds (never on the ui thread; its commands run with stdin closed), and a line `派工：N 排隊、M 等回覆（D 看清單）` shows under the list when some are queued or waiting. `D` opens the dispatch list (id, from, to, state, created, reason); `x` on a queued one asks, then cancels it, any other state says why it cannot. `D` with no dispatches says 「沒有派工」.
 
 ### Changed
+- The Docker live smoke (`scripts/linux-smoke`) covers `sampan send`: the fake claude draws a Claude-style prompt box, takes a bracketed paste plus Enter, records what it receives and answers in its transcript. It checks that one multi-line CJK prompt with quotes, `$HOME` and backticks arrives byte for byte, that `--wait` prints the reply, and that a draft in the box keeps the dispatch queued with nothing pasted.
 - The launchd auto-save now runs every 5 minutes (minute 0, 5, ... 55) instead of every hour. An hourly plist counts as an old schedule: `sampan doctor` warns and `sampan init` offers to reinstall it.
 - A `history/` snapshot of the registry is kept only when a session really changed; a save that differs only in `seen_at`, `pid` or `server` no longer adds one (the registry itself is still written every time), so the newest 20 snapshots span much more than 20 saves.
 
