@@ -64,8 +64,8 @@ from .state import Checklist, Picker, ProfilePicker, _row_key
 from .text import BACKSPACE, ENTER, MOVES, clean_capture, text_width
 from .tree import FolderItem, folder_key, folder_of
 
-# one line at 120 columns: digits (row numbers are on every row), w (save now), Enter (on every row's card) and A
-# still work, they are only left out here
+# one line at 120 columns: digits (row numbers are on every row), the arrows, w (save now), Enter (on every row's
+# card), R and A still work, they are only left out here
 KEYS_HELP = "/ 搜尋　Tab 篩選　* 全選　空白 勾選　s 停　S 重開　g 包資料夾　f 搬進資料夾　n 開新　D 派工　p plugin　o 帳號　q 離開"
 RESTORE_HELP = "↑↓ 移動　空白 勾選　Enter 確認接回　q 取消"
 ADOPT_HELP = "↑↓ 移動　空白 勾選　Enter 確認接手　q 取消"
@@ -123,6 +123,7 @@ class CursesScreen:
         self.view = dict(title=self.title, left=[], cursor=0, card=[], preview=None, help=KEYS_HELP, cols=LIST_COLS,
                          empty=None, notice=None)
         self.last_name = None  # session the cursor was last on: after an action returns to the list the cursor stays there
+        self.last_filter = 0  # the state filter, kept the same way across actions (not across runs)
         self._folders = None  # (stat of folders.json or None, Tree or None, error or None): read again only when it changes
         self._folders_said = None  # the folders.json error last shown: the same one is not shown again
         try:
@@ -461,7 +462,7 @@ class CursesScreen:
         if tree is not None:
             names += [folder_key(p) for p in F.resolve(tree, [r.name for r in rows]).folders]
         picker = Picker(rows, self.last_name if self.last_name in names else current, clock=self.clock,
-                        others=others, tree=tree, own_pane=self.own_pane)
+                        others=others, tree=tree, own_pane=self.own_pane, filter=self.last_filter)
         shot, tick, refreshed = (None, None), False, self.clock()
         self._timeout(TICK_MS)
         try:
@@ -517,6 +518,7 @@ class CursesScreen:
                             picker.set_tree(self._picker_tree(raw, rows))
                     continue
                 action = picker.key(k)
+                self.last_filter = picker.filter
                 if action is not None and action[0] == "collapse":  # memory only: saved here, the list stays as it is
                     save_collapsed(self.cfg, action[1][0], action[1][1] == "1")
                     raw = self._load_folders()[0]  # our own write: not a change to apply

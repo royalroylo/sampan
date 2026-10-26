@@ -135,6 +135,48 @@ class PickerFilterTest(unittest.TestCase):
         self.assertEqual(p.key("y"), ("stop!", ["b1"]))
 
 
+class FilterRefreshTest(unittest.TestCase):
+    def test_marks_lost_on_refresh_refuse_instead_of_using_the_cursor(self):
+        rows = [row("a"), row("b"), row("c")]
+        p = Picker(rows, "a")
+        p.key("\t")  # 閒置
+        p.key(" ")  # mark a; cursor on b
+        p.reload([row("a", agent_status="busy"), row("b"), row("c")])
+        self.assertEqual(p.marked, set())
+        self.assertIsNone(p.key("S"))
+        self.assertIn("請重新勾選", p.prompt)
+        self.assertIsNone(p.restart_plan)
+        p.key("S")  # said once: now the cursor row
+        self.assertEqual(p.key("y"), ("restart!", [p.visible[p.cursor].name]))
+
+    def test_marking_again_clears_the_refusal(self):
+        p = Picker([row("a"), row("b")], "a")
+        p.key(" ")
+        p.key("\t")
+        p.key("\t")  # 忙碌: a is hidden, mark dropped
+        p.key("\t")
+        p.key("\t")
+        p.key("\t")  # back to 全部
+        p.key("*")
+        p.key("s")
+        self.assertEqual(p.key("y"), ("stop!", ["a", "b"]))
+
+    def test_filter_survives_a_new_picker_and_reload_keeps_it(self):
+        p = Picker(frows(), None, filter=1)
+        self.assertEqual(names(p), ["a1", "top"])
+        p.reload(frows() + [row("new")])
+        self.assertEqual(names(p), ["a1", "top", "new"])
+
+    def test_collapse_and_set_tree_under_a_filter(self):
+        p = Picker(frows(), None, tree=tree(), filter=3)  # 已停止: 客戶, 客戶/甲, s1
+        self.assertEqual(p.key("\n"), ("collapse", ["客戶", "1"]))
+        self.assertEqual(names(p), ["客戶"])
+        t = tree()
+        t.sessions["s1"] = "空"
+        p.set_tree(t)
+        self.assertEqual(names(p), ["空", "s1"])
+
+
 class SelectAllTest(unittest.TestCase):
     def test_star_marks_visible_sessions_then_clears(self):
         p = Picker(frows(), None, tree=tree())
@@ -202,6 +244,20 @@ class ScreenTest(unittest.TestCase):
         self.assertIn("沒有異常的 session", "\n".join(scr.screens[4]))
         self.assertIn("Tab 篩選　* 全選", KEYS_HELP)
         self.assertTrue(scr.screens[2][1].lstrip().startswith("1   b1"), scr.screens[2][1])  # numbered within the filter
+
+    def test_filter_stays_after_an_action(self):
+        from sampan.ui.screen import CursesScreen
+        from tests.fakes import FakeRunner, cp
+        from tests.helpers import make_env
+        from tests.test_ui_screen import NOW, FakeScr
+        cfg = make_env(Path(tempfile.mkdtemp()))
+        r = FakeRunner(strict=True).on(["tmux", "-u", "list-panes"], cp()).on(["tmux", "-u", "list-windows"], cp())
+        scr = FakeScr(["KEY_BTAB", "w", "q"])
+        s = CursesScreen(scr, cfg, r, now_fn=lambda: NOW, rows_fn=lambda cfg, run: [])
+        rows = [row("a1"), row("odd", State.UNKNOWN, "-")]
+        self.assertEqual(s.pick(rows, None), ("save", []))
+        self.assertEqual(s.pick(rows, None), ("quit", []))
+        self.assertIn("› 異常（1）", scr.screens[-1][0])
 
 
 if __name__ == "__main__":

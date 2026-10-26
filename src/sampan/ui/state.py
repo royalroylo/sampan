@@ -50,11 +50,13 @@ class Picker:
     Tab / Shift+Tab (KEY_BTAB) step the state filter through tree.FILTERS (filter indexes it, 0 = 全部): only the
     matching rows are listed (a search narrows them further), folders with none are left out, others only show under
     全部, and marks (and what a folder row targets) never reach a session the filter hides. * marks every session row
-    shown (not those in collapsed folders); when they all are already marked it clears every mark instead.
+    shown (not those in collapsed folders); when they all are already marked it clears every mark instead. When marks
+    disappear because their sessions left the filter (a refresh, a filter change), the next s / S / g / f does nothing
+    but say so, rather than fall back to the cursor row.
     width (None = unlimited) is how many cells the prompt row has: the s / S questions shorten their name lists to fit
     it, so 確定？(y/N) always shows; what y returns always carries every name."""
 
-    def __init__(self, rows, current=None, *, clock=time.monotonic, others=(), tree=None, own_pane=None):
+    def __init__(self, rows, current=None, *, clock=time.monotonic, others=(), tree=None, own_pane=None, filter=0):
         self.rows = rows
         self.own_pane = own_pane  # sampan's own pane id: S lists that session as skipped
         self.others = list(others)
@@ -70,7 +72,8 @@ class Picker:
         self.query = None
         self.jump = ""
         self._jump_at = None
-        self.filter = 0
+        self.filter = filter % len(FILTERS)
+        self._lost = False  # marks were dropped by the filter: the next row action refuses instead of using the cursor
         self._reveal(current)
         self._filter()
         names = [r.name for r in self.visible]
@@ -145,6 +148,7 @@ class Picker:
     def clear_marks(self):
         self.marked.clear()
         self.marked_folders.clear()
+        self._lost = False
 
     def set_tree(self, tree):
         """A new folder tree (after a folder action): rebuild the list, the cursor stays on the same item."""
@@ -155,6 +159,7 @@ class Picker:
         self._land(here)
 
     def _prune(self):
+        had = bool(self.marked or self.marked_folders)
         shown = {r.name for r in self.shown()}
         self.marked &= shown
         if self.tree is None:
@@ -163,6 +168,8 @@ class Picker:
             self.marked_folders &= set(F.resolve(self.tree, [r.name for r in self.rows]).folders)
             if self.filter:
                 self.marked_folders = {p for p in self.marked_folders if F.sessions_under(self.tree, p) & shown}
+        if had and not (self.marked or self.marked_folders):
+            self._lost = True
 
     def _land(self, here):
         names = [r.name for r in self.visible]
@@ -340,6 +347,7 @@ class Picker:
         rows = [it.name for it in self.visible[:self.n_rows] if not isinstance(it, FolderItem)]
         if rows and not set(rows) <= self.marked:
             self.marked |= set(rows)
+            self._lost = False
         else:
             self.clear_marks()
 
@@ -404,6 +412,12 @@ class Picker:
             return None
         if k in MOVES:
             self.cursor = max(0, min(len(self.visible) - 1, self.cursor + MOVES[k]))
+            return None
+        if k == " ":
+            self._lost = False
+        if self._lost and len(k) == 1 and k in "sSgf":
+            self._lost = False
+            self._notice = "勾選的 session 已不在畫面上（狀態變了或被篩掉），沒有動作；請重新勾選"
             return None
         if self.on_other():  # row-targeted actions on a read-only other row only say where to go
             return ("desktop", []) if k in ENTER or (len(k) == 1 and k in "smPeXra") else None
