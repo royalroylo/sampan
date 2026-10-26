@@ -91,13 +91,14 @@ wait_for() {  # wait_for <seconds> <command...>
     for _ in $(seq $((t * 4))); do "$@" && return 0; sleep 0.25; done
     return 1
 }
-IFS= read -r -d '' msg <<'EOT'
+msg=$(cat <<'EOT'
 第一行：你好，世界「引號」 "double" 'single'
 second line with $HOME and `echo hi` and a backslash \n and $(whoami)
 
   indented 日本語のテキスト 한국어
 last line
 EOT
+)
 tmux ls
 expect "nothing received yet" test "$(received)" = 0
 out=$(printf %s "$msg" | sampan send c1 - 2>&1); rc=$?; echo "$out"

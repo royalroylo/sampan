@@ -73,6 +73,7 @@ submit() {
     setstatus idle
 }
 stty -icanon -echo -icrnl -inlcr -isig 2>/dev/null  # not "raw": that drops the CR of each output newline
+printf '\033[?2004h'  # bracketed paste on: tmux only wraps a paste for an app that asks for it
 draw
 inpaste=""
 while IFS= read -rsN1 ch; do
