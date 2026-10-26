@@ -62,11 +62,11 @@ from .render import (
 )
 from .state import Checklist, Picker, ProfilePicker, _row_key
 from .text import BACKSPACE, ENTER, MOVES, clean_capture, text_width
-from .tree import FolderItem, build_items, folder_key, folder_of
+from .tree import FolderItem, folder_key, folder_of
 
 # one line at 120 columns: digits (row numbers are on every row), w (save now), Enter (on every row's card) and A
 # still work, they are only left out here
-KEYS_HELP = "↑↓ 移動　/ 搜尋　空白 勾選　s 停　S 重開　R 接回　g 包資料夾　f 搬進資料夾　n 開新　D 派工　p plugin　o 帳號　q 離開"
+KEYS_HELP = "/ 搜尋　Tab 篩選　* 全選　空白 勾選　s 停　S 重開　g 包資料夾　f 搬進資料夾　n 開新　D 派工　p plugin　o 帳號　q 離開"
 RESTORE_HELP = "↑↓ 移動　空白 勾選　Enter 確認接回　q 取消"
 ADOPT_HELP = "↑↓ 移動　空白 勾選　Enter 確認接手　q 取消"
 PLUGINS_HELP = "↑↓ 移動　1-9 跳列　/ 搜尋　Enter 選 profile　u 更新這個　U 全部更新　a 新增　r 檢查新版　q 返回　Tab 切到來源"
@@ -364,7 +364,7 @@ class CursesScreen:
         get no number); block lines are never numbered or landed on. While searching each hit inside a folder shows
         its folder path, dim, before the name."""
         total = len(rows)
-        base = build_items(rows, picker.tree, None) if picker.tree is not None else [(0, r) for r in rows]
+        base = picker.base_items()
         nums = {}
         for _, it in base:
             if not isinstance(it, FolderItem):
@@ -381,10 +381,11 @@ class CursesScreen:
         name_w = max((text_width(_cell_text(c[0])) for c in full + left), default=None)
         lead = " " * (len(str(len(rows))) + 3 if rows else 2)  # under the number and the mark of a tmux row
         starting, failed = self._start_note(rows)
-        block = block_left([OwnCols(other_cells(o, now, lead)) for o in picker.visible[picker.n_rows:]], extra,
-                           down=down, starting=starting, failed=failed)
+        block = [] if picker.filter else block_left(  # 「Codex 其他對話」 only under 全部
+            [OwnCols(other_cells(o, now, lead)) for o in picker.visible[picker.n_rows:]], extra,
+            down=down, starting=starting, failed=failed)
         if block and not left:
-            left = [ListNote(list_empty(rows, picker.query), "")]
+            left = [ListNote(list_empty(rows, picker.query, picker.filter_name), "")]
         cursor = len(left) - picker.n_rows + picker.cursor + (1 if picker.on_other() else 0)
         return left + block, cursor, name_w
 
@@ -491,8 +492,10 @@ class CursesScreen:
                             built[name] = card_lines(self.cfg, r, info, now)
                         card = built[name]
                 left, cursor, name_w = self._left(picker, rows, current, now, extra, down)
-                self.view = dict(title=self.title, left=left, cursor=cursor, card=card, preview=preview,
-                                 help=KEYS_HELP, cols=list_cols(rows), empty=list_empty(rows, picker.query),
+                title = self.title if not picker.filter else f"{self.title} › {picker.filter_name}（{picker.filter_count}）"
+                self.view = dict(title=title, left=left, cursor=cursor, card=card, preview=preview,
+                                 help=KEYS_HELP, cols=list_cols(rows),
+                                 empty=list_empty(rows, picker.query, picker.filter_name),
                                  name_w=name_w, accounts=self._account_lines(rows), dispatch=self._dispatch_line(),
                                  notice=self.warning or fnote or (self.updater.hint() if self.updater is not None else None))
                 picker.width = self.scr.getmaxyx()[1] - 2  # draw()'s width less the prompt row's leading space

@@ -273,9 +273,14 @@ def _profile_cell(r):
     return "-" if r.agent == "codex" else (r.profile or "-")
 
 
-def list_empty(rows, query):
-    """Message for an empty session list: no sessions at all, or no name matching the search."""
-    return f"沒有名稱含「{query}」的 session" if rows and query else "目前沒有任何 session（n 開新的）"
+def list_empty(rows, query, kind="全部"):
+    """Message for an empty session list: no sessions at all, none under the state filter kind, or no name matching
+    the search (within that filter)."""
+    if not rows:
+        return "目前沒有任何 session（n 開新的）"
+    if kind != "全部":
+        return f"{kind}的 session 裡沒有名稱含「{query}」的" if query else f"沒有{kind}的 session"
+    return f"沒有名稱含「{query}」的 session" if query else "目前沒有任何 session（n 開新的）"
 
 
 def list_cols(rows):

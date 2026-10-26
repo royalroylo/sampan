@@ -502,7 +502,7 @@ class ListSearchScreenTest(unittest.TestCase):
     def test_help_mentions_jump_and_search(self):
         s = self.screen(["q"])
         s.pick([row("a")], None)
-        self.assertIn("↑↓ 移動　/ 搜尋　空白 勾選", self.scr.screens[0][-1])
+        self.assertIn("/ 搜尋　Tab 篩選　* 全選　空白 勾選", self.scr.screens[0][-1])
 
 
 class CursesUiTest(unittest.TestCase):
@@ -653,6 +653,13 @@ class CodexOthersScreenTest(unittest.TestCase):
             self.assertIn("等你核准", lines[at["desk-ask"]])
             self.assertIn("Desktop", lines[at["desk-ask"]])
             self.assertIn("desk-idle", "\n".join(lines))
+
+    def test_section_only_under_the_all_filter(self):
+        from sampan.ui.codex_others import SECTION_TITLE
+        self.pick(["\t", "q"])
+        self.assertIn(SECTION_TITLE, "\n".join(self.scr.screens[0]))
+        self.assertNotIn(SECTION_TITLE, "\n".join(self.scr.screens[1]))
+        self.assertNotIn("desk-ask", "\n".join(self.scr.screens[1]))
 
     def test_cursor_skips_section_title(self):
         from sampan.ui.codex_others import GO_DESKTOP
@@ -1044,7 +1051,7 @@ class FolderScreenTest(unittest.TestCase):
     def test_help_and_row_keys_mention_S(self):
         s = self.screen(["q"])
         s.pick(self.rows, None)
-        self.assertIn("S 重開　R 接回　g 包資料夾　f 搬進資料夾", self.shown()[-1])
+        self.assertIn("S 重開　g 包資料夾　f 搬進資料夾", self.shown()[-1])
         self.assertIn("S 重開", row_keys(row("x"), {"panes": 1}))
         self.assertIn("S 背景接回", row_keys(row("x", state=State.STOPPED), {"panes": 0}))
 

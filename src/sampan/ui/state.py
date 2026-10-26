@@ -5,7 +5,7 @@ from .. import folders as F
 from ..restart import confirm_line, plan_restart, skip_text, stop_line
 from ..status import State, _fmt_tokens
 from .text import BACKSPACE, ENTER, MOVES, pad
-from .tree import FolderItem, build_items, folder_key, folder_of
+from .tree import FILTERS, FolderItem, build_items, folder_key, folder_of, matches
 
 
 def show_state(row):
@@ -47,6 +47,10 @@ class Picker:
     target), keeps the plan in restart_plan and on y/Y returns
     ("restart!", names). g / f return the marked items (else the cursor item) as "folder:<path>" / "session:<name>".
     Without a tree the list is rows in the given order, as before folders existed.
+    Tab / Shift+Tab (KEY_BTAB) step the state filter through tree.FILTERS (filter indexes it, 0 = 全部): only the
+    matching rows are listed (a search narrows them further), folders with none are left out, others only show under
+    全部, and marks (and what a folder row targets) never reach a session the filter hides. * marks every session row
+    shown (not those in collapsed folders); when they all are already marked it clears every mark instead.
     width (None = unlimited) is how many cells the prompt row has: the s / S questions shorten their name lists to fit
     it, so 確定？(y/N) always shows; what y returns always carries every name."""
 
@@ -66,6 +70,7 @@ class Picker:
         self.query = None
         self.jump = ""
         self._jump_at = None
+        self.filter = 0
         self._reveal(current)
         self._filter()
         names = [r.name for r in self.visible]
@@ -89,15 +94,35 @@ class Picker:
         if self.jump and (self._jump_at is None or self.clock() - self._jump_at > JUMP_S):
             self.jump = ""
 
+    @property
+    def filter_name(self):
+        return FILTERS[self.filter]
+
+    def shown(self):
+        """The rows the state filter lets through, in rows order."""
+        return [r for r in self.rows if matches(r, self.filter_name)]
+
+    @property
+    def filter_count(self):
+        return len(self.shown())
+
+    def base_items(self):
+        """items as they are without a search (row numbers follow these)."""
+        rows = self.shown()
+        return [(0, r) for r in rows] if self.tree is None else build_items(rows, self.tree, None,
+                                                                             hide_empty=self.filter != 0)
+
     def _filter(self):
         q = (self.query or "").lower()
+        rows = self.shown()
         if self.tree is None:
-            self.items = [(0, r) for r in self.rows if q in r.name.lower()]
+            self.items = [(0, r) for r in rows if q in r.name.lower()]
         else:
-            self.items = build_items(self.rows, self.tree, self.query)
+            self.items = build_items(rows, self.tree, self.query, hide_empty=self.filter != 0)
         self.visible = [it for _, it in self.items]
         self.n_rows = len(self.visible)  # visible[n_rows:] are others
-        self.visible += [o for o in self.others if q in o.thread.name.lower()]
+        if self.filter == 0:
+            self.visible += [o for o in self.others if q in o.thread.name.lower()]
 
     def on_other(self):
         """The cursor is on one of others."""
@@ -130,11 +155,14 @@ class Picker:
         self._land(here)
 
     def _prune(self):
-        self.marked &= {r.name for r in self.rows}
+        shown = {r.name for r in self.shown()}
+        self.marked &= shown
         if self.tree is None:
             self.marked_folders.clear()
         else:
             self.marked_folders &= set(F.resolve(self.tree, [r.name for r in self.rows]).folders)
+            if self.filter:
+                self.marked_folders = {p for p in self.marked_folders if F.sessions_under(self.tree, p) & shown}
 
     def _land(self, here):
         names = [r.name for r in self.visible]
@@ -246,7 +274,7 @@ class Picker:
         names = set(sessions)
         for p in paths:
             names |= F.sessions_under(self.tree, p)
-        return [r.name for r in self.rows if r.name in names]
+        return [r.name for r in self.shown() if r.name in names]
 
     def _as_items(self):
         """g / f items: the marked ones in display order (every folder open), else the cursor item."""
@@ -301,6 +329,20 @@ class Picker:
             return True, None
         return False, None
 
+    def _step_filter(self, d):
+        here = self._here_or_none()
+        self.filter = (self.filter + d) % len(FILTERS)
+        self._prune()
+        self._filter()
+        self._land(here)
+
+    def _select_all(self):
+        rows = [it.name for it in self.visible[:self.n_rows] if not isinstance(it, FolderItem)]
+        if rows and not set(rows) <= self.marked:
+            self.marked |= set(rows)
+        else:
+            self.clear_marks()
+
     def _ask_restart(self):
         sessions, paths = self._targets()
         # a stopped session is reattached only when its own row was targeted, never when reached through a folder
@@ -351,6 +393,12 @@ class Picker:
             return ("dispatches", [])
         if k == "/":
             self._start_search()
+            return None
+        if k in ("\t", "KEY_BTAB"):
+            self._step_filter(-1 if k == "KEY_BTAB" else 1)
+            return None
+        if k == "*":
+            self._select_all()
             return None
         if not self.visible:
             return None
