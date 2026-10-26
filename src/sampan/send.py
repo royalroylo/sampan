@@ -57,6 +57,8 @@ class Caller:
 
 TERMINAL = Caller(None, "", "", None)
 
+AGENT_REFUSED = "agent 請改用 sampan MCP 的工具（會先問使用者）；要讓 agent 直接用指令，在 config 設 [mcp] confirm = false"
+
 
 def caller_label(caller):
     """The from_name recorded for a caller: its session name, 「未登記的 session（<agent>）」 for an agent that is not a

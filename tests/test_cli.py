@@ -332,8 +332,10 @@ class CliTest(unittest.TestCase):
         self.assertEqual(cs.call_args.kwargs, {"wait": False, "timeout": 600, "caller": TERMINAL})
 
     def test_send_run_by_an_agent_is_labelled_as_that_session(self):  # final review 9
+        import dataclasses
         agent = Caller("a", "alice", "claude", "%1")
-        with mock.patch("sampan.send.cmd_send", return_value=0) as cs, \
+        with mock.patch("sampan.cli.load_config", return_value=dataclasses.replace(self.cfg, mcp_confirm=False)), \
+                mock.patch("sampan.send.cmd_send", return_value=0) as cs, \
                 mock.patch("sampan.send.command_caller", return_value=agent) as cc:
             cli.main(["send", "api", "hi"])
         self.assertEqual(cc.call_args.args[2], os.getpid())  # looked up from this process, like the MCP server
@@ -360,11 +362,13 @@ class CliTest(unittest.TestCase):
             self.assertEqual(cli.main(["dispatches"]), 0)
             self.assertEqual(cli.main(["dispatches", "--all"]), 0)
         self.assertEqual([c.kwargs["all_"] for c in cd.call_args_list], [False, True])
-        with mock.patch("sampan.send.cmd_cancel", return_value=2) as cc:
+        with mock.patch("sampan.send.cmd_cancel", return_value=2) as cc, \
+                mock.patch("sampan.send.command_caller", return_value=TERMINAL):
             self.assertEqual(cli.main(["dispatches", "cancel", "ab12"]), 2)
         self.assertEqual(cc.call_args.args[2], "ab12")
         buf = io.StringIO()
-        with mock.patch("sampan.send.cmd_cancel") as cc, redirect_stdout(buf):
+        with mock.patch("sampan.send.cmd_cancel") as cc, redirect_stdout(buf), \
+                mock.patch("sampan.send.command_caller", return_value=TERMINAL):
             self.assertEqual(cli.main(["dispatches", "cancel"]), 2)
         self.assertEqual(cc.call_count, 0)
         self.assertIn("用法", buf.getvalue())
@@ -407,10 +411,95 @@ class CliTest(unittest.TestCase):
             items.append(dispatch.Dispatch("ab12", "終端機", "", "", "b", "claude", "alice", "x", "queued",
                                            "2026-10-26T12:00:00+00:00"))
         buf = io.StringIO()
-        with redirect_stdout(buf):
+        with redirect_stdout(buf), mock.patch("sampan.runner.run", FakeRunner(strict=True)), \
+                mock.patch("sampan.send.command_caller", return_value=TERMINAL):
             self.assertEqual(cli.main(["dispatches", "cancel", "ab12"]), 0)
             self.assertEqual(cli.main(["dispatches", "cancel", "ab12"]), 2)  # already cancelled
         self.assertEqual(dispatch.load(self.cfg.state_dir)[0].state, "cancelled")
+
+
+class AgentRefusedTest(unittest.TestCase):
+    """While [mcp] confirm is on, an agent running the acting commands through its shell is refused."""
+    SESSION = Caller("a", "alice", "claude", "%1")
+    UNREG = Caller(None, "", "claude", None, kind="unregistered")
+
+    def setUp(self):
+        self.cfg = make_env(Path(tempfile.mkdtemp()))
+        self.set_confirm(True)
+        p = mock.patch.dict("os.environ")
+        p.start()
+        self.addCleanup(p.stop)
+        os.environ.pop("TMUX", None)
+        os.environ.pop("TMUX_PANE", None)
+
+    def set_confirm(self, on):
+        import dataclasses
+        p = mock.patch("sampan.cli.load_config", return_value=dataclasses.replace(self.cfg, mcp_confirm=on))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def run_cli(self, argv, caller, **patches):
+        buf = io.StringIO()
+        with redirect_stdout(buf), mock.patch("sampan.runner.run", FakeRunner(strict=True)), \
+                mock.patch("sampan.send.command_caller", return_value=caller) as cc:
+            rc = cli.main(argv)
+        return rc, buf.getvalue(), cc
+
+    def test_agent_send_refused_when_confirm(self):
+        from sampan.send import AGENT_REFUSED
+        with mock.patch("sampan.send.cmd_send") as cs:
+            rc, text, _ = self.run_cli(["send", "api", "hi"], self.SESSION)
+        self.assertEqual((rc, cs.call_count), (2, 0))
+        self.assertIn(AGENT_REFUSED, text)
+
+    def test_unregistered_agent_send_refused_when_confirm(self):
+        from sampan.send import AGENT_REFUSED
+        with mock.patch("sampan.send.cmd_send") as cs:
+            rc, text, _ = self.run_cli(["send", "api", "hi"], self.UNREG)
+        self.assertEqual((rc, cs.call_count), (2, 0))
+        self.assertIn(AGENT_REFUSED, text)
+
+    def test_agent_new_with_message_refused(self):
+        from sampan.send import AGENT_REFUSED
+        with mock.patch("sampan.session_run.cmd_new") as cn:
+            rc, text, _ = self.run_cli(["new", "x", "claude:work", "/tmp", "--message", "hi"], self.SESSION)
+        self.assertEqual((rc, cn.call_count), (2, 0))
+        self.assertIn(AGENT_REFUSED, text)
+
+    def test_agent_cancel_refused(self):
+        from sampan.send import AGENT_REFUSED
+        with mock.patch("sampan.send.cmd_cancel") as cc:
+            rc, text, _ = self.run_cli(["dispatches", "cancel", "ab12"], self.SESSION)
+        self.assertEqual((rc, cc.call_count), (2, 0))
+        self.assertIn(AGENT_REFUSED, text)
+
+    def test_terminal_caller_still_sends(self):
+        with mock.patch("sampan.send.cmd_send", return_value=0) as cs:
+            rc, _, _ = self.run_cli(["send", "api", "hi"], TERMINAL)
+        self.assertEqual((rc, cs.call_count), (0, 1))
+        with mock.patch("sampan.send.cmd_cancel", return_value=0) as cc:
+            self.assertEqual(self.run_cli(["dispatches", "cancel", "ab12"], TERMINAL)[0], 0)
+        self.assertEqual(cc.call_count, 1)
+
+    def test_agent_allowed_when_confirm_false(self):
+        self.set_confirm(False)
+        with mock.patch("sampan.send.cmd_send", return_value=0) as cs:
+            rc, _, cc = self.run_cli(["send", "api", "hi"], self.SESSION)
+        self.assertEqual((rc, cs.call_count), (0, 1))
+        with mock.patch("sampan.send.cmd_cancel", return_value=0) as cx:
+            self.assertEqual(self.run_cli(["dispatches", "cancel", "ab12"], self.SESSION)[0], 0)
+        self.assertEqual(cx.call_count, 1)
+
+    def test_agent_new_without_message_not_refused(self):
+        with mock.patch("sampan.session_run.cmd_new", return_value=0) as cn:
+            rc, _, cc = self.run_cli(["new", "x", "claude:work", "/tmp"], self.SESSION)
+        self.assertEqual((rc, cn.call_count, cc.call_count), (0, 1, 0))
+
+    def test_agent_dispatches_show_not_refused(self):
+        with mock.patch("sampan.send.cmd_show", return_value=0) as sh, mock.patch("sampan.send.cmd_dispatches", return_value=0) as dl:
+            rc, _, cc = self.run_cli(["dispatches", "show", "ab12"], self.SESSION)
+            rc2, _, cc2 = self.run_cli(["dispatches"], self.SESSION)
+        self.assertEqual((rc, rc2, sh.call_count, dl.call_count, cc.call_count, cc2.call_count), (0, 0, 1, 1, 0, 0))
 
 
 class EntryPointTest(unittest.TestCase):

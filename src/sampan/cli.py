@@ -331,6 +331,16 @@ def _prompt_fn(isatty=None):
     return recording(plain_prompt(out, input))
 
 
+def _agent_refused(cfg, caller, out):
+    """While [mcp] confirm is on, an agent (not a person at the terminal) may not run an acting command through its
+    shell: print why and return True. caller None = not looked up (confirm off)."""
+    from .send import AGENT_REFUSED, caller_kind
+    if not cfg.mcp_confirm or caller is None or caller_kind(caller) == "terminal":
+        return False
+    out("❌ " + AGENT_REFUSED)
+    return True
+
+
 def _go_in(run, want, rc):
     """"Go in and handle it myself" was chosen: attach to that session (switch-client inside tmux, exec tmux attach outside)."""
     if not want:
@@ -399,10 +409,12 @@ def _dispatch(cfg, args):
                          picker_fn=curses_adopt_checklist if interactive else None)
     if cmd == "send":
         from .send import cmd_send, command_caller
-        message = sys.stdin.read() if args.message == "-" else args.message
         # an agent running this through its shell tool is that session (or unregistered), not a person at the terminal
-        return cmd_send(cfg, run, out, args.name, message, wait=args.wait, timeout=args.timeout,
-                        caller=command_caller(cfg, run, os.getpid()))
+        caller = command_caller(cfg, run, os.getpid())
+        if _agent_refused(cfg, caller, out):
+            return 2
+        message = sys.stdin.read() if args.message == "-" else args.message
+        return cmd_send(cfg, run, out, args.name, message, wait=args.wait, timeout=args.timeout, caller=caller)
     if cmd == "dispatches":
         from .send import cmd_cancel, cmd_dispatches, cmd_show
         if args.action in ("cancel", "show"):
@@ -411,6 +423,9 @@ def _dispatch(cfg, args):
                 return 2
             if args.action == "show":
                 return cmd_show(cfg, run, out, args.id, wait=args.wait)
+            from .send import command_caller
+            if _agent_refused(cfg, command_caller(cfg, run, os.getpid()) if cfg.mcp_confirm else None, out):
+                return 2
             return cmd_cancel(cfg, out, args.id)
         return cmd_dispatches(cfg, out, all_=args.all)
     if cmd == "folder":
@@ -457,8 +472,11 @@ def _dispatch(cfg, args):
                 extra["folder"] = args.folder
             if args.message is not None:
                 from .send import command_caller
+                caller = command_caller(cfg, run, os.getpid())
+                if _agent_refused(cfg, caller, out):
+                    return 2
                 extra["message"] = sys.stdin.read() if args.message == "-" else args.message
-                extra.update(caller=command_caller(cfg, run, os.getpid()), notify=False)
+                extra.update(caller=caller, notify=False)
             rc = session_run.cmd_new(cfg, run, out, args.name, args.target, args.cwd, dry_run=args.dry_run,
                                      on_prompt=on_prompt, **extra)
             return _go_in(run, want, rc)
