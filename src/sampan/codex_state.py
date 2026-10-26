@@ -346,7 +346,7 @@ def _reply_from(turn, events):
     finals, others, complete, done = [], [], None, False
     for kind, payload in events:
         text, uturn = _user_event(kind, payload)
-        if text is not None and uturn != turn:  # the next message starts another turn
+        if text is not None and (turn is None or uturn != turn):  # the next message starts another turn (legacy: no turn ids)
             break
         if turn is not None and payload.get("turn_id") not in (None, turn):
             continue

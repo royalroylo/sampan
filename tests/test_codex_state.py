@@ -521,5 +521,11 @@ class ReplyToTest(unittest.TestCase):
                  {"type": "event_msg", "payload": {"type": "task_complete"}}])
         self.assertEqual(reply_to(f, "hi"), Reply(True, True, "yo"))
 
+    def test_legacy_later_user_message_ends_the_window(self):
+        ev = lambda t, m: {"type": "event_msg", "payload": {"type": t, "message": m}}  # noqa: E731
+        f = _jl([ev("user_message", "hi"), ev("agent_message", "a"), ev("user_message", "next"),
+                 ev("agent_message", "b")])
+        self.assertEqual(reply_to(f, "hi").text, "a")
+
     def test_missing_file(self):
         self.assertEqual(reply_to(Path(tempfile.mkdtemp()) / "x.jsonl", "hi"), Reply(False, False, ""))
