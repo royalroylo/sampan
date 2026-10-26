@@ -396,11 +396,13 @@ def _dispatch(cfg, args):
         return cmd_dispatches(cfg, out, all_=args.all)
     if cmd == "mcp":
         from . import mcp_server
-        caller = mcp_server.identify_caller(cfg, run, os.getppid())
+        ppid = os.getppid()
+        caller = mcp_server.identify_caller(cfg, run, ppid)
         proto = sys.stdout
         sys.stdout = sys.stderr  # stdout carries only protocol messages: anything printed by accident goes to stderr
         try:
-            return mcp_server.serve(cfg, run, sys.stdin.buffer, proto, caller=caller)
+            return mcp_server.serve(cfg, run, sys.stdin.buffer, proto, caller=caller,
+                                    resolve=lambda: mcp_server.identify_caller(cfg, run, ppid))
         finally:
             sys.stdout = proto
     if cmd == "status":

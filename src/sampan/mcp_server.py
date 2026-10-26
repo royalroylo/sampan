@@ -25,7 +25,7 @@ PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26")  # the first is answered when t
 WATCH_S = 3
 WAIT_MAX_S = 60  # a tool call may not block longer than this (MCP clients time tool calls out themselves)
 ELICIT_TIMEOUT_S = 600
-UNREGISTERED = "未登記的 session"
+SEPARATOR = "──── 訊息內容（由 agent 提供）────"  # everything below it in a form is the agent's text
 NOTICE = "完成後會在你的 session 送出一則通知"
 NO_ELICITATION = "這個 client 不支援核准表單；要用請在 config 設 [mcp] confirm = false"
 DECLINED = "使用者拒絕"
@@ -117,9 +117,13 @@ def identify_caller(cfg, run, pid):
 
 
 def _who(caller):
-    if caller.name is None:
-        return UNREGISTERED
-    return f"{caller.name}（{caller.profile}）" if caller.profile else caller.name
+    label = send.caller_label(caller)
+    return f"{label}（{caller.profile}）" if caller.name is not None and caller.profile else label
+
+
+def _form(header_lines, body):
+    """An approval form: fixed header lines from sampan, then the separator, then the agent's text verbatim."""
+    return "\n".join(header_lines) + "\n" + SEPARATOR + "\n" + body
 
 
 def _ok(obj):
@@ -139,8 +143,9 @@ def _arg_str(args, key):
 
 class Server:
     def __init__(self, cfg, run, stdin, stdout, *, caller, sleep=time.sleep, clock=time.monotonic, status_fn=None,
-                 snapshot_fn=None, now_fn=_utcnow):
+                 snapshot_fn=None, now_fn=_utcnow, resolve=None):
         self.cfg, self.run, self.stdin, self.stdout, self.caller = cfg, run, stdin, stdout, caller
+        self.resolve = resolve  # () -> Caller, asked again before every tool that acts or reads a dispatch
         self.sleep, self.clock, self.now_fn = sleep, clock, now_fn
         self.status_fn, self.snapshot_fn = status_fn or status_rows, snapshot_fn
         self.elicitation = False
@@ -314,6 +319,33 @@ class Server:
             result = _err(f"{name} 失敗：{e}")
         self._result(rid, result)
 
+    def _refresh_caller(self):
+        """Look the caller up again (a Codex row is registered only once its thread exists, a session may be adopted
+        or renamed). A lookup that finds no session keeps a name already known: a passing tmux or ps hiccup must not
+        turn a registered caller into an unregistered one."""
+        if self.resolve is None:
+            return self.caller
+        try:
+            fresh = self.resolve()
+        except Exception as e:
+            _log(f"認不出呼叫者：{e!r}")
+            return self.caller
+        if fresh.name is not None or self.caller.name is None:
+            self.caller = fresh
+        return self.caller
+
+    def _own(self, did):
+        """The record of a dispatch this caller may see or cancel (sent by this server, or from this caller's
+        session); ToolError otherwise, with the same text whether it exists or not."""
+        caller = self._refresh_caller()
+        try:
+            d = next((x for x in dispatch.load(self.cfg.state_dir) if x.id == did), None)
+        except dispatch.DispatchError as e:
+            raise ToolError(str(e)) from e
+        if d is None or not (did in self.mine or (caller.name is not None and d.from_name == caller.name)):
+            raise ToolError(f"沒有派工 {did}（或不是這個 session 發出的）")
+        return d
+
     def _rows(self):
         try:
             return self.status_fn(self.cfg, self.run, snapshot_fn=self.snapshot_fn)
@@ -356,19 +388,21 @@ class Server:
         wait = args.get("wait", False)
         if not isinstance(wait, bool):
             raise ToolError("參數 wait 要是 true 或 false")
-        if self.caller.name is not None and self.caller.name == to:
+        if session_run.has_control(to):
+            raise ToolError(f"session 名稱不能含換行或控制字元：{to!r}")
+        caller = self._refresh_caller()
+        if caller.name is not None and caller.name == to:
             raise ToolError(f"不能送給自己（{to}）")
         row = next((r for r in self._rows() if r.name == to), None)
         problem = send.target_problem(row, to)
         if problem:
             raise ToolError(problem)
-        notice = ""
-        if self.caller.name is not None:
-            notice = f"\n\n（60 秒內沒回完的話）{NOTICE}" if wait else f"\n\n{NOTICE}"
-        text = (f"送給 {to}（{row.profile}，{AGENT_LABELS.get(row.agent, row.agent)}）／從 {_who(self.caller)}\n\n"
-                f"{message}{notice}")
-        message = self._approve_message(text, message)
-        d = send.submit(self.cfg, self.run, self.caller, to, message, notify=not wait, now=self.now_fn(),
+        header = [f"送給 {to}（{row.profile}，{AGENT_LABELS.get(row.agent, row.agent)}）／從 {_who(caller)}"]
+        if caller.name is not None:
+            header.append(f"（60 秒內沒回完的話）{NOTICE}" if wait else NOTICE)
+        message = self._approve_message(_form(header, message), message)
+        # submit checks the target again: it may have stopped while the form was open
+        d = send.submit(self.cfg, self.run, caller, to, message, notify=not wait, now=self.now_fn(),
                         snapshot_fn=self.snapshot_fn, status_fn=self.status_fn)
         if isinstance(d, str):
             raise ToolError(d)
@@ -379,7 +413,7 @@ class Server:
             out["reply"] = d.reply or ""
         elif d.reason:
             out["reason"] = d.reason
-        if wait and d.state not in dispatch.FINISHED and self.caller.name is not None:
+        if wait and d.state not in dispatch.FINISHED and caller.name is not None:
             send.set_notify(self.cfg, d.id, True)  # nobody has the reply yet: tell the caller when it comes
         if d.state == "failed":
             raise ToolError(f"派工 {d.id} 失敗：{d.reason}")
@@ -388,25 +422,23 @@ class Server:
     def tool_new_session(self, args):
         name, target = _arg_str(args, "name"), _arg_str(args, "target")
         cwd, message = _arg_str(args, "cwd"), _arg_str(args, "message")
-        if target == "codex":
-            agent, profile = "codex", self.cfg.codex.profile
-        else:
-            agent, _, profile = target.rpartition(":") if ":" in target else ("claude", "", target)
-            if agent != "claude":
-                raise ToolError(f"未知的 agent：{agent}（用 claude:<profile> 或 codex）")
-            if profile not in self.cfg.profiles:
-                raise ToolError(f"未知的 profile：{profile}（可用：{', '.join(self.cfg.profiles)}）")
-        notice = f"\n\n{NOTICE}" if self.caller.name is not None else ""
-        text = (f"開新 session 並送給 {name}（{profile}，{AGENT_LABELS[agent]}）／從 {_who(self.caller)}\n"
-                f"目錄：{cwd}\n\n{message}{notice}")
-        message = self._approve_message(text, message)
+        checked = session_run.check_new(self.cfg, self.run, name, target, cwd)
+        if isinstance(checked, str):
+            raise ToolError(checked)
+        agent, profile, cwd = checked
+        caller = self._refresh_caller()
+        header = [f"開新 session 並送給 {name}（{profile or self.cfg.codex.profile}，{AGENT_LABELS[agent]}）／從 {_who(caller)}",
+                  f"目錄：{cwd}"]
+        if caller.name is not None:
+            header.append(NOTICE)
+        message = self._approve_message(_form(header, message), message)
         try:
             before = {d.id for d in dispatch.load(self.cfg.state_dir)}
         except dispatch.DispatchError as e:
             raise ToolError(str(e)) from e
         lines = []
         rc = session_run.cmd_new(self.cfg, self.run, lines.append, name, target, cwd, message=message,
-                                 caller=self.caller, sleep=self.sleep)
+                                 caller=caller, sleep=self.sleep)  # checks everything again before creating
         said = "\n".join(str(x).removeprefix("❌ ") for x in lines).strip()
         new = [d for d in dispatch.load(self.cfg.state_dir) if d.id not in before and d.to_name == name]
         if not new or rc not in (0, 1):
@@ -425,25 +457,21 @@ class Server:
         wait = args.get("wait", 0)
         if isinstance(wait, bool) or not isinstance(wait, (int, float)) or not 0 <= wait <= WAIT_MAX_S:
             raise ToolError(f"參數 wait 要是 0 到 {WAIT_MAX_S} 的秒數")
+        self._own(did)  # before advancing anything
         d = self._wait(did, wait)
         out = {"dispatch": d.id, "state": d.state, "label": send.STATE_LABELS[d.state], "to": d.to_name,
                "reply": d.reply, "reason": d.reason}
-        if d.state == "done" and self.caller.name is not None and d.from_name == self.caller.name and d.notify:
+        if d.state == "done" and d.notify and d.from_name == self.caller.name:
             send.set_notify(self.cfg, d.id, False)  # the caller has the reply now: no notice needed
         return out
 
     def tool_cancel_dispatch(self, args):
         did = _arg_str(args, "id")
-        try:
-            d = next((x for x in dispatch.load(self.cfg.state_dir) if x.id == did), None)
-        except dispatch.DispatchError as e:
-            raise ToolError(str(e)) from e
-        if d is None:
-            raise ToolError(f"沒有派工 {did}")
+        d = self._own(did)
         if d.state != "queued":
             raise ToolError(f"派工 {did} 是「{send.STATE_LABELS[d.state]}」，只能取消還沒送出的（排隊中）")
         if self.cfg.mcp_confirm:
-            self._elicit(f"取消派工 {did}（給 {d.to_name}）／從 {_who(self.caller)}\n\n{d.text}", {})
+            self._elicit(_form([f"取消派工 {did}（給 {d.to_name}）／從 {_who(self.caller)}"], d.text), {})
         r = send.cancel(self.cfg, did, now=self.now_fn())
         if isinstance(r, str):
             raise ToolError(r)
@@ -474,7 +502,8 @@ class Server:
 
 
 def serve(cfg, run, stdin, stdout, *, caller, sleep=time.sleep, clock=time.monotonic, status_fn=None,
-          snapshot_fn=None, now_fn=_utcnow, watch_interval=WATCH_S):
-    """Serve MCP on stdin/stdout until stdin closes. Returns 0."""
+          snapshot_fn=None, now_fn=_utcnow, watch_interval=WATCH_S, resolve=None):
+    """Serve MCP on stdin/stdout until stdin closes. Returns 0. resolve: () -> Caller, to look the caller up again
+    before each tool that acts or reads a dispatch (`caller` is the identity found at start)."""
     return Server(cfg, run, stdin, stdout, caller=caller, sleep=sleep, clock=clock, status_fn=status_fn,
-                  snapshot_fn=snapshot_fn, now_fn=now_fn).serve(watch_interval)
+                  snapshot_fn=snapshot_fn, now_fn=now_fn, resolve=resolve).serve(watch_interval)

@@ -2,6 +2,7 @@ import os
 import re
 import signal
 import time
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -79,6 +80,42 @@ def _relay_stop(out, name, res):
     return False
 
 
+def has_control(text):
+    """Whether text has a control, format or line/paragraph separator character (newline, ESC, U+2028, RLO…)."""
+    return any(unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp") for c in text)
+
+
+def check_new(cfg, run, name, target, cwd):
+    """The checks `sampan new` (and the MCP new_session tool, before it asks) runs before creating anything.
+    (agent, profile, resolved cwd) — profile "" for Codex — or why not (str, without ❌)."""
+    if not name or has_control(name):
+        return f"名稱不能是空的，也不能含換行或控制字元：{name!r}"
+    if "." in name or ":" in name:
+        return f"名稱不能含 . 或 :（tmux 會當成 window／pane 分隔）：{name}"
+    if has_control(target):
+        return f"target 不能含換行或控制字元：{target!r}"
+    if target == "codex":
+        agent, profile = "codex", ""
+        if not cfg.codex.enabled:
+            return "設定檔停用了 Codex（[codex] enabled = false）"
+    else:
+        agent, _, profile = target.rpartition(":") if ":" in target else ("claude", "", target)
+        if agent != "claude":
+            return f"未知的 agent：{agent}（用 claude:<profile> 或 codex）"
+        if disabled_problem(cfg, profile):
+            return disabled_problem(cfg, profile).removeprefix("❌ ")
+        if profile not in cfg.profiles:
+            return f"未知的 profile：{profile}（可用：{', '.join(cfg.profiles)}）"
+    if has_control(cwd):
+        return f"目錄不能含換行或控制字元：{cwd!r}"
+    if Tmux(run).has_session(name):
+        return f"tmux session {name} 已存在"
+    resolved = str(Path(cwd).expanduser().resolve())
+    if not Path(resolved).is_dir():
+        return f"目錄不存在：{resolved}"
+    return agent, profile, resolved
+
+
 def cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.sleep, timeout=15, uuid4=uuid.uuid4,
             on_prompt=None, wait=True, message=None, caller=None):
     """target: claude:<profile>, <profile> (taken as claude) or codex.
@@ -94,33 +131,12 @@ def cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.sleep
     if message is not None and not message.strip():
         out("❌ 訊息是空的")
         return 2
-    if "." in name or ":" in name:
-        out(f"❌ 名稱不能含 . 或 :（tmux 會當成 window／pane 分隔）：{name}")
+    checked = check_new(cfg, run, name, target, cwd)
+    if isinstance(checked, str):
+        out(f"❌ {checked}")
         return 2
-    if target == "codex":
-        agent, profile = "codex", ""
-        if not cfg.codex.enabled:
-            out("❌ 設定檔停用了 Codex（[codex] enabled = false）")
-            return 2
-    else:
-        agent, _, profile = target.rpartition(":") if ":" in target else ("claude", "", target)
-        if agent != "claude":
-            out(f"❌ 未知的 agent：{agent}（用 claude:<profile> 或 codex）")
-            return 2
-        if disabled_problem(cfg, profile):
-            out(disabled_problem(cfg, profile))
-            return 2
-        if profile not in cfg.profiles:
-            out(f"❌ 未知的 profile：{profile}（可用：{', '.join(cfg.profiles)}）")
-            return 2
+    agent, profile, cwd = checked
     tmux = Tmux(run)
-    if tmux.has_session(name):
-        out(f"❌ tmux session {name} 已存在")
-        return 2
-    cwd = str(Path(cwd).expanduser().resolve())
-    if not Path(cwd).is_dir():
-        out(f"❌ 目錄不存在：{cwd}")
-        return 2
     if _load(cfg, out) is None:  # registry broken: stop first, so no unregistered empty session is left behind
         return 2
     session_id = str(uuid4()) if agent == "claude" else None

@@ -39,6 +39,10 @@ class SourceLineTest(unittest.TestCase):
         self.assertEqual(source_line("x", "codex", "ab12"), "〔sampan 轉送｜來自 x（codex）｜派工 ab12〕")
         self.assertEqual(compose(None, "", "ab12", "hi"), "〔sampan 轉送｜來自 終端機｜派工 ab12〕\nhi")
 
+    def test_a_label_without_profile_has_no_empty_brackets(self):
+        self.assertEqual(source_line("未登記的 session（claude）", "", "ab12"),
+                         "〔sampan 轉送｜來自 未登記的 session（claude）｜派工 ab12〕")
+
 
 class ToClaudeTest(unittest.TestCase):
     def setUp(self):

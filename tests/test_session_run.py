@@ -8,7 +8,7 @@ from unittest import mock
 from sampan import actionlog, deliver, dispatch
 from sampan.registry import Row, load_rows, write_rows
 from sampan.send import Caller
-from sampan.session_run import cmd_forget, cmd_new, cmd_rename, cmd_set_state
+from sampan.session_run import check_new, cmd_forget, cmd_new, cmd_rename, cmd_set_state
 from tests.fakes import FakeRunner, cp, pane_line, ps_line
 from tests.helpers import make_env
 from tests.test_claude_state import write_session
@@ -116,6 +116,31 @@ class NewAndStateTest(Base):
         [d] = dispatch.load(self.cfg.state_dir)
         self.assertEqual(d.state, "failed")
         self.assertIn("沒開起來", d.reason)
+
+    def test_check_new_resolves_or_says_why(self):
+        r = self.runner()
+        self.assertEqual(check_new(self.cfg, r, "new-x", "work", str(self.cwd)),
+                         ("claude", "work", str(self.cwd.resolve())))
+        self.assertEqual(check_new(self.cfg, r, "new-x", "codex", str(self.cwd))[:2], ("codex", ""))
+        for name in ("a.b", "a:b", "a\nb", "a\x1bb", "", "a\u2028b"):
+            with self.subTest(name=name):
+                self.assertIsInstance(check_new(self.cfg, r, name, "work", str(self.cwd)), str)
+        self.assertIn("未知的 profile", check_new(self.cfg, r, "x", "nope", str(self.cwd)))
+        self.assertIn("未知的 agent", check_new(self.cfg, r, "x", "gpt:work", str(self.cwd)))
+        self.assertIn("目錄不存在", check_new(self.cfg, r, "x", "work", str(self.tmp / "missing")))
+        self.assertIsInstance(check_new(self.cfg, r, "x", "work", str(self.cwd) + "\n"), str)
+        r.on(["tmux", "-u", "has-session"], cp())
+        self.assertIn("已存在", check_new(self.cfg, r, "x", "work", str(self.cwd)))
+
+    def test_check_new_refuses_disabled_profile_and_disabled_codex(self):
+        from sampan.config import load_config
+        from sampan.config_edit import set_profile_flag
+        from tests.helpers import TOML
+        self.cfg.path.write_text(set_profile_flag(TOML, "work", "disabled", True) + "\n[codex]\nenabled = false\n")
+        cfg = load_config(self.cfg.path, home=self.cfg.home, state_dir=self.cfg.state_dir)
+        r = self.runner()
+        self.assertEqual(check_new(cfg, r, "x", "work", str(self.cwd)), "profile work 已停用（sampan profile enable work）")
+        self.assertIn("停用了 Codex", check_new(cfg, r, "x", "codex", str(self.cwd)))
 
     def test_new_with_blank_message_is_refused(self):
         r = self.runner()

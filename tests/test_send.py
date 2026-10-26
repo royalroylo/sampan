@@ -134,6 +134,20 @@ class SubmitTest(Base):
         self.assertEqual(d.from_name, "終端機")
         self.assertFalse(d.notify)
 
+    def test_unregistered_agent_caller_is_not_the_terminal(self):
+        d = self.submit(caller=Caller(None, "", "codex", None), notify=True)
+        self.assertEqual(d.text.splitlines()[0], f"〔sampan 轉送｜來自 未登記的 session（codex）｜派工 {d.id}〕")
+        self.assertEqual(d.from_name, "未登記的 session（codex）")
+        self.assertFalse(d.notify)
+        self.assertIn("未登記的 session（codex） → b", (self.cfg.state_dir / "actions.log").read_text())
+        send.set_notify(self.cfg, d.id, True)  # never turned on for a caller that is not a session
+        self.assertFalse(self.stored(d.id).notify)
+
+    def test_caller_label(self):
+        self.assertEqual(send.caller_label(send.TERMINAL), "終端機")
+        self.assertEqual(send.caller_label(Caller(None, "", "claude", None)), "未登記的 session（claude）")
+        self.assertEqual(send.caller_label(CALLER_A), "a")
+
     def test_codex_target_caches_its_thread(self):
         d = self.submit(to="c")
         self.assertEqual((d.to_agent, d.thread_id), ("codex", TID_C))

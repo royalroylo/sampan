@@ -20,7 +20,8 @@ from .tmux import Tmux
 
 POLL_S = 2
 NOT_SEEN_GRACE_S = 15  # right after delivery the transcript may not have the message yet
-TERMINAL_NAME = "終端機"
+TERMINAL_NAME = "終端機"  # only a person at the terminal
+UNREGISTERED_NAME = "未登記的 session"  # an agent that is not a sampan session (e.g. an MCP caller outside tmux)
 GONE = (State.STOPPED, State.RETIRED, State.UNREGISTERED, State.NO_AGENT)  # the session is not there to answer
 REASON_STOPPED = "對方 session 已停止"
 REASON_NOT_RUNNING = "對方 session 沒在執行"
@@ -44,6 +45,19 @@ class Caller:
 
 
 TERMINAL = Caller(None, "", "", None)
+
+
+def caller_label(caller):
+    """The from_name recorded for a caller: its session name, 「未登記的 session（<agent>）」 for an agent that is not a
+    sampan session, or 「終端機」 for a person at the terminal."""
+    if caller.name is not None:
+        return caller.name
+    return f"{UNREGISTERED_NAME}（{caller.agent}）" if caller.agent else TERMINAL_NAME
+
+
+def _is_session(from_name):
+    """Whether a dispatch's from_name is a sampan session (only those can get a completion notice)."""
+    return from_name != TERMINAL_NAME and not from_name.startswith(UNREGISTERED_NAME)
 
 
 def notice_text(d):
@@ -107,12 +121,12 @@ def _create(cfg, caller, to, to_agent, to_profile, message, state, now, *, notif
     try:
         with dispatch.transaction(cfg.state_dir) as items:
             did = dispatch.new_id({d.id for d in items})
-            text = deliver.compose(caller.name, caller.profile, did, message)
+            text = deliver.compose(caller_label(caller), caller.profile, did, message)
             if strip:
                 text = text.rstrip("\n")
             dispatch.write_outbox(cfg.state_dir, did, text)
             d = dispatch.Dispatch(
-                did, caller.name if caller.name is not None else TERMINAL_NAME, caller.profile, caller.agent,
+                did, caller_label(caller), caller.profile, caller.agent,
                 to, to_agent, to_profile, text, state, _iso(now),
                 sent_at=_iso(now) if state == "sent" else None,
                 notify=bool(notify and caller.name is not None), thread_id=thread_id)
@@ -271,6 +285,9 @@ def notify_caller(cfg, run, d, sleep, *, rows=None, snapshot_fn=None, status_fn=
     Changes d (notified; notified plus a reason when the notice was pasted but Enter failed, never pasted twice; notify=False when the caller is gone); call it inside dispatch.transaction. True if sent."""
     if not _owes_notice(d):
         return False
+    if not _is_session(d.from_name):
+        d.notify = False  # the terminal or an unregistered agent: there is no session to tell
+        return False
     rows = rows if rows is not None else _rows(cfg, run, snapshot_fn, status_fn)
     row = rows.get(d.from_name)
     if row is None or row.state in (State.RETIRED, State.UNREGISTERED, State.NO_AGENT):
@@ -304,7 +321,7 @@ def set_notify(cfg, did, on):
     try:
         with dispatch.transaction(cfg.state_dir) as items:
             d = next((x for x in items if x.id == did), None)
-            if d is not None and not d.notified and d.from_name != TERMINAL_NAME:
+            if d is not None and not d.notified and _is_session(d.from_name):
                 d.notify = bool(on)
     except (dispatch.DispatchError, OSError):
         pass

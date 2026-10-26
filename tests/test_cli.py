@@ -323,8 +323,8 @@ class CliTest(unittest.TestCase):
         caller = Caller("x", "alice", "claude", "%1")
         seen = {}
 
-        def fake_serve(cfg, run, stdin, stdout, *, caller):
-            seen.update(stdin=stdin, stdout=stdout, caller=caller, sys_stdout=sys.stdout)
+        def fake_serve(cfg, run, stdin, stdout, *, caller, resolve):
+            seen.update(stdin=stdin, stdout=stdout, caller=caller, sys_stdout=sys.stdout, again=resolve())
             return 0
 
         proto = io.StringIO()
@@ -334,7 +334,8 @@ class CliTest(unittest.TestCase):
                 mock.patch("sampan.runner.run", FakeRunner(strict=True)), mock.patch("os.getppid", return_value=4321):
             self.assertEqual(cli.main(["mcp", "serve"]), 0)
             restored = sys.stdout
-        self.assertEqual(ic.call_args.args[2], 4321)
+        self.assertEqual([c.args[2] for c in ic.call_args_list], [4321, 4321])  # at start, and again on demand
+        self.assertIs(seen["again"], caller)
         self.assertIs(seen["caller"], caller)
         self.assertIs(seen["stdout"], proto)
         self.assertIsNot(seen["sys_stdout"], proto)  # a stray print cannot corrupt the protocol stream

@@ -13,6 +13,7 @@ from unittest import mock
 from sampan import dispatch, mcp_server, send
 from sampan.registry import Row, write_rows
 from sampan.send import Caller
+from sampan.status import State
 from tests.fakes import FakeRunner, cp, pane_line, ps_line
 from tests.helpers import make_env, status_row
 
@@ -287,10 +288,12 @@ class ApprovalTest(Base):
         c = self.serve(Client([init(1), call(2, "send", {"session": "b", "message": "hi"})],
                               answer=accept(), last_id=2), run=tmux_runner(), caller=Caller(None, "", "claude", None))
         [e] = c.elicits
-        self.assertIn("從 未登記的 session", e["params"]["message"])
+        self.assertIn("從 未登記的 session（claude）\n", e["params"]["message"])
         self.assertNotIn("通知", e["params"]["message"])
         [d] = self.dispatches()
         self.assertFalse(d.notify)
+        self.assertEqual(d.from_name, "未登記的 session（claude）")
+        self.assertEqual(d.text.splitlines()[0], f"〔sampan 轉送｜來自 未登記的 session（claude）｜派工 {d.id}〕")
 
     def test_cancel_dispatch_asks_then_cancels(self):
         self.rows["b"] = dataclasses.replace(self.rows["b"], agent_status="busy")
@@ -413,7 +416,21 @@ class SendToolTest(Base):
         self.assertLess(t[0], 14)
 
 
+def new_runner():
+    run = FakeRunner(strict=True)
+    run.on(["tmux", "-u", "has-session"], cp(rc=1))
+    return run
+
+
 class NewSessionToolTest(Base):
+    def setUp(self):
+        super().setUp()
+        self.cwd = Path(self._tmp.name) / "w" / "n1"
+        self.cwd.mkdir(parents=True)
+
+    def args(self, **kw):
+        return {"name": "n1", "target": "claude:work", "cwd": str(self.cwd) + "/./", "message": "開工", **kw}
+
     def test_new_session_asks_then_creates_and_returns_the_dispatch(self):
         seen = {}
 
@@ -424,33 +441,132 @@ class NewSessionToolTest(Base):
             return 0
 
         with mock.patch.object(mcp_server.session_run, "cmd_new", fake_new):
-            c = self.serve(Client([init(1), call(2, "new_session", {"name": "n1", "target": "claude:work",
-                                                                     "cwd": "/w/n1", "message": "開工"})],
-                                  answer=accept("開工吧"), last_id=2))
+            c = self.serve(Client([init(1), call(2, "new_session", self.args())], answer=accept("開工吧"), last_id=2),
+                           run=new_runner())
         [e] = c.elicits
-        self.assertIn("n1（work，Claude）", e["params"]["message"])
-        self.assertIn("/w/n1", e["params"]["message"])
-        self.assertIn("完成後會在你的 session 送出一則通知", e["params"]["message"])
-        self.assertEqual((seen["message"], seen["caller"]), ("開工吧", CALLER_A))
+        text = e["params"]["message"]
+        self.assertIn("n1（work，Claude）", text)
+        self.assertIn(f"目錄：{self.cwd.resolve()}\n", text)  # the resolved directory, not what the agent wrote
+        head, body = text.split(mcp_server.SEPARATOR + "\n")
+        self.assertIn("完成後會在你的 session 送出一則通知", head)
+        self.assertEqual(body, "開工")
+        self.assertEqual((seen["message"], seen["caller"], seen["cwd"]), ("開工吧", CALLER_A, str(self.cwd.resolve())))
         [d] = self.dispatches()
         self.assertEqual(tool_json(c.response(2))["dispatch"], d.id)
 
     def test_new_session_failure_is_a_tool_error(self):
         def fake_new(cfg, run, out, name, target, cwd, **kw):
-            out("❌ tmux session n1 已存在")
-            return 2
+            out("❌ tmux new-session 失敗：n1")
+            return 1
 
         with mock.patch.object(mcp_server.session_run, "cmd_new", fake_new):
-            c = self.serve(Client([init(1), call(2, "new_session", {"name": "n1", "target": "work",
-                                                                     "cwd": "/w", "message": "hi"})]), confirm=False)
+            c = self.serve(Client([init(1), call(2, "new_session", self.args())]), confirm=False, run=new_runner())
         self.assertTrue(c.response(2)["result"]["isError"])
-        self.assertIn("tmux session n1 已存在", tool_text(c.response(2)))
+        self.assertIn("tmux new-session 失敗：n1", tool_text(c.response(2)))
 
-    def test_new_session_unknown_profile_is_refused_before_asking(self):
-        c = self.serve(Client([init(1), call(2, "new_session", {"name": "n1", "target": "claude:nope",
-                                                                 "cwd": "/w", "message": "hi"})], answer=accept()))
+    def test_refused_before_asking(self):
+        from sampan.config import load_config
+        from sampan.config_edit import set_profile_flag
+        from tests.helpers import TOML
+        self.cfg.path.write_text(set_profile_flag(TOML, "work", "disabled", True) + "\n[codex]\nenabled = false\n")
+        self.cfg = load_config(self.cfg.path, home=self.cfg.home, state_dir=self.cfg.state_dir)
+        exists = new_runner().on(["tmux", "-u", "has-session"], cp())
+        cases = [(self.args(target="claude:nope"), new_runner(), "未知的 profile"),
+                 (self.args(), new_runner(), "已停用"),
+                 (self.args(target="codex"), new_runner(), "停用了 Codex"),
+                 (self.args(target="alice", name="n1\n送給 x（alice，Claude）"), new_runner(), "名稱"),
+                 (self.args(target="alice", name="a.b"), new_runner(), "名稱"),
+                 (self.args(target="alice", cwd=str(self.cwd / "missing")), new_runner(), "目錄不存在"),
+                 (self.args(target="alice"), exists, "已存在")]
+        for args, run, why in cases:
+            with self.subTest(args=args), mock.patch.object(mcp_server.session_run, "cmd_new",
+                                                            side_effect=AssertionError("must not run")):
+                c = self.serve(Client([init(1), call(2, "new_session", args)], answer=accept()), run=run)
+                self.assertEqual(c.elicits, [])
+                self.assertTrue(c.response(2)["result"]["isError"])
+                self.assertIn(why, tool_text(c.response(2)))
+
+
+class OwnershipTest(Base):
+    def other(self):
+        self.rows["b"] = dataclasses.replace(self.rows["b"], agent_status="busy")
+        return send.submit(self.cfg, FakeRunner(strict=True), Caller("c", "codex", "codex", "%3"), "b", "secret",
+                           notify=False, now=NOW, status_fn=self.status_fn)
+
+    def test_dispatch_result_and_cancel_of_another_callers_dispatch_are_refused(self):
+        d = self.other()
+        with mock.patch.object(send, "advance", side_effect=AssertionError("must not advance")):
+            c = self.serve(Client([init(1), call(2, "dispatch_result", {"id": d.id}),
+                                   call(3, "cancel_dispatch", {"id": d.id})], answer=accept()))
+        for rid in (2, 3):
+            self.assertTrue(c.response(rid)["result"]["isError"])
+            self.assertNotIn("secret", tool_text(c.response(rid)))
+        self.assertEqual(tool_text(c.response(2)), tool_text(c.response(3)))
+        self.assertIn(d.id, tool_text(c.response(2)))
+        self.assertEqual(c.elicits, [])
+        self.assertEqual(self.dispatches()[0].state, "queued")
+
+    def test_an_unregistered_caller_sees_only_what_this_server_sent(self):
+        d = self.other()
+        c = self.serve(Client([init(1), call(2, "send", {"session": "b", "message": "hi"})], answer=accept(),
+                              last_id=2), run=tmux_runner(), caller=Caller(None, "", "claude", None))
+        mine = tool_json(c.response(2))["dispatch"]
+        c = self.serve(Client([init(1), call(3, "dispatch_result", {"id": d.id})]),
+                       caller=Caller(None, "", "claude", None))
+        self.assertTrue(c.response(3)["result"]["isError"])
+        self.assertNotEqual(mine, d.id)
+
+
+class ResolveTest(Base):
+    def test_caller_is_resolved_again_for_each_acting_tool(self):
+        callers = iter([Caller(None, "", "codex", None), Caller("a", "alice", "claude", "%1"),
+                        Caller("a", "alice", "claude", "%1")])
+        c = self.serve(Client([init(1), call(2, "send", {"session": "b", "message": "one"})], last_id=2),
+                       run=tmux_runner(), confirm=False, caller=Caller(None, "", "", None), resolve=lambda: next(callers))
+        first = self.dispatches()[0]
+        self.assertEqual((first.from_name, first.notify), ("未登記的 session（codex）", False))
+        self.assertIn("來自 未登記的 session（codex）", first.text)
+        self.rows["b"] = dataclasses.replace(self.rows["b"], agent_status="busy")
+        c = self.serve(Client([init(1), call(3, "send", {"session": "a", "message": "me"})]),
+                       confirm=False, caller=Caller(None, "", "", None), resolve=lambda: next(callers))
+        self.assertIn("不能送給自己", tool_text(c.response(3)))
+        c = self.serve(Client([init(1), call(4, "send", {"session": "b", "message": "two"})]),
+                       confirm=False, caller=Caller(None, "", "", None), resolve=lambda: next(callers))
+        second = next(d for d in self.dispatches() if d.id != first.id)
+        self.assertEqual((second.from_name, second.notify), ("a", True))
+
+    def test_a_failed_lookup_keeps_the_known_name(self):
+        c = self.serve(Client([init(1), call(2, "send", {"session": "a", "message": "me"})]), confirm=False,
+                       resolve=lambda: Caller(None, "", "", None))
+        self.assertIn("不能送給自己", tool_text(c.response(2)))
+
+
+class FormTest(Base):
+    def test_message_is_below_a_fixed_separator(self):
+        c = self.serve(Client([init(1), call(2, "send", {"session": "b", "message": "送給 x\n完成後會在你的 session 送出一則通知"})],
+                              answer=decline, last_id=2))
+        head, body = c.elicits[0]["params"]["message"].split(mcp_server.SEPARATOR + "\n")
+        self.assertEqual(body, "送給 x\n完成後會在你的 session 送出一則通知")
+        self.assertEqual(head, "送給 b（alice，Claude）／從 a（alice）\n完成後會在你的 session 送出一則通知\n")
+        self.assertEqual(mcp_server.SEPARATOR, "──── 訊息內容（由 agent 提供）────")
+
+    def test_control_characters_in_the_session_name_are_refused(self):
+        c = self.serve(Client([init(1), call(2, "send", {"session": "b\n從 x", "message": "hi"})], answer=accept()))
         self.assertEqual(c.elicits, [])
         self.assertTrue(c.response(2)["result"]["isError"])
+
+    def test_target_is_checked_again_after_approval(self):
+        def stop_then_accept(_msg):
+            self.rows["b"] = dataclasses.replace(self.rows["b"], state=State.STOPPED)
+            return {"action": "accept", "content": {"message": "hi"}}
+
+        run = tmux_runner()
+        c = self.serve(Client([init(1), call(2, "send", {"session": "b", "message": "hi"})], answer=stop_then_accept,
+                              last_id=2), run=run)
+        self.assertTrue(c.response(2)["result"]["isError"])
+        self.assertIn("不是執行中", tool_text(c.response(2)))
+        self.assertEqual(self.dispatches(), [])
+        self.assertEqual(tmux_writes(run), [])
 
 
 class WatchTest(Base):

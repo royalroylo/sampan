@@ -63,7 +63,7 @@ Dispatch records: one message sent from a caller session (or the terminal) to a 
 | Field | Meaning |
 |---|---|
 | `id` | four lowercase hex digits |
-| `from_name`, `from_profile`, `from_agent` | the caller (for a person at the terminal, `from_name` is "終端機") |
+| `from_name`, `from_profile`, `from_agent` | the caller (for a person at the terminal, `from_name` is "終端機"; for an agent that is not a sampan session, sending through MCP, it is like "未登記的 session（claude）", and it gets no completion notice) |
 | `to_name`, `to_agent`, `to_profile` | the target session |
 | `text` | the full text sent, including the source line |
 | `state` | one of `queued`, `sent`, `done`, `failed`, `cancelled` |
@@ -80,7 +80,7 @@ A file that cannot be read is never overwritten. Finished entries (`done`, `fail
 
 ## The tools of `sampan mcp serve`
 
-A stdio MCP server (one JSON-RPC 2.0 message per line; protocol version `2025-06-18`, or `2025-03-26` when the client asks for it). Claude Code or Codex starts it; the caller is found from the server's parent processes: the tmux pane of the nearest claude / codex process, then the registry row of that tmux session with the same agent. When that does not match, the caller is an "unregistered session": the tools still work, it only gets no completion notice. Tool results are JSON text; a refusal (unknown target, declined by the user, a client without approval forms) is a result with `isError: true`.
+A stdio MCP server (one JSON-RPC 2.0 message per line; protocol version `2025-06-18`, or `2025-03-26` when the client asks for it). Claude Code or Codex starts it; the caller is found from the server's parent processes: the tmux pane of the nearest claude / codex process, then the registry row of that tmux session with the same agent. When that does not match, the caller is an "unregistered session" (the source line and the dispatch record say for example 「未登記的 session（claude）」, never 「終端機」): the tools still work, it only gets no completion notice. The caller is looked up again before every tool that acts or reads a dispatch (a Codex session is registered only once its conversation exists, a session may be adopted or renamed); a lookup that finds nothing keeps a name already known. `dispatch_result` and `cancel_dispatch` only accept this caller's own dispatches (created by this server, or whose `from_name` is the caller's session); any other id gets 「沒有派工 <id>（或不是這個 session 發出的）」. Tool results are JSON text; a refusal (unknown target, declined by the user, a client without approval forms) is a result with `isError: true`.
 
 | Tool | Arguments | Returns | Approval |
 |---|---|---|---|
@@ -90,4 +90,4 @@ A stdio MCP server (one JSON-RPC 2.0 message per line; protocol version `2025-06
 | `dispatch_result` | `id`, `wait` (0–60 seconds, default 0) | `dispatch`, `state`, `label`, `to`, `reply`, `reason` | never asks |
 | `cancel_dispatch` | `id` | `dispatch`, `state` (only a queued one can be cancelled) | asks |
 
-The approval form shows who it goes to (name, profile, Claude / Codex), which session it comes from and the whole message, plus 「完成後會在你的 session 送出一則通知」 (a notice will be sent to your session when it is done) when the caller is a sampan session; its one field `message` defaults to the original message, and an edited one is what gets sent. Approving a dispatch approves its completion notice; there is no second question. While the server runs it advances this caller's dispatches every 3 seconds.
+The approval form shows who it goes to (name, profile, Claude / Codex), which session it comes from and the whole message, plus 「完成後會在你的 session 送出一則通知」 (a notice will be sent to your session when it is done) when the caller is a sampan session; the agent's message always sits below the fixed separator 「──── 訊息內容（由 agent 提供）────」, and everything above it is written by sampan; a name, target or directory with a newline or control character is refused before asking, and the directory shown is the resolved path. Its one field `message` defaults to the original message, and an edited one is what gets sent; after approval the target is checked again (it may have stopped while the form was open). `new_session` runs the same checks as `sampan new` (name, disabled profile, Codex turned off, tmux session exists, missing directory), all before asking. Approving a dispatch approves its completion notice; there is no second question. While the server runs it advances this caller's dispatches every 3 seconds.
