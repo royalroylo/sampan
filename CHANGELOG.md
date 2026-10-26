@@ -5,6 +5,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- A stopped (or retired) Codex session on the `sampan` screen showed the Codex daemon's `idle` for a thread it had loaded before exiting; it now shows `-`, like `sampan status`.
+
 ## [0.13.0] - 2026-10-27
 
 ### Added

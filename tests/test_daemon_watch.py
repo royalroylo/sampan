@@ -185,6 +185,12 @@ class ApplyStatusTest(unittest.TestCase):
         apply_codex_status(rows, s)  # idempotent
         self.assertEqual(rows[0].agent_status, "waiting")
 
+    def test_stopped_and_retired_rows_keep_their_status(self):
+        rows = [status_row("st", State.STOPPED, agent="codex", sid="t-a", agent_status="-"),
+                status_row("rt", State.RETIRED, agent="codex", sid="t-b", agent_status="-")]
+        apply_codex_status(rows, snap("/h", threads=[thread("t-a", "idle")], loaded={"t-b"}))
+        self.assertEqual([r.agent_status for r in rows], ["-", "-"])  # no agent runs in tmux: the daemon's view is not theirs
+
     def test_apply_none_or_empty_sid_is_a_no_op(self):
         rows = [status_row("a", agent="codex", sid="", agent_status="idle")]
         apply_codex_status(rows, None)

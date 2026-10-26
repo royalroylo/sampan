@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timezone
 
 from .. import codex_daemon
+from ..status import State
 from ..usage import record_codex
 
 DAEMON_S = 30  # seconds between two reads of the daemon
@@ -35,12 +36,14 @@ def thread_state(t):
 
 def apply_codex_status(rows, snap):
     """Overwrite agent_status of the codex rows whose sid the daemon knows (a thread only in `loaded` counts as idle);
-    notloaded / unknown / not found leave the row alone, and state is never touched. Idempotent; snap None = no-op."""
+    notloaded / unknown / not found leave the row alone, and state is never touched. Stopped and retired rows are
+    skipped: no agent of theirs runs in tmux, and the daemon still lists a thread it loaded before it exited.
+    Idempotent; snap None = no-op."""
     if snap is None:
         return
     by_id = {t.id: t for t in snap.threads}
     for r in rows:
-        if r.agent != "codex" or not r.sid:
+        if r.agent != "codex" or not r.sid or r.state in (State.STOPPED, State.RETIRED):
             continue
         t = by_id.get(r.sid)
         st = thread_state(t) if t is not None else ("idle" if r.sid in snap.loaded else None)
