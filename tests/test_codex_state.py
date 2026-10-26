@@ -7,12 +7,14 @@ from pathlib import Path
 from unittest import mock
 
 from sampan import codex_state
+from sampan.claude_state import Reply
 from sampan.codex_state import (
     AMBIGUOUS,
     LiveCodex,
     codex_pid_in_pane,
     find_rollout,
     live_codex,
+    reply_to,
     rollout_context,
     rollout_from_lsof,
     threads_fallback,
@@ -457,3 +459,67 @@ class LiveCodexTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _jl(recs):
+    f = Path(tempfile.mkdtemp()) / "rollout.jsonl"
+    f.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in recs))
+    return f
+
+
+def _item(turn, kind, text, phase=None):
+    item = {"type": kind, "content": [{"type": "text" if kind == "UserMessage" else "Text", "text": text}]}
+    if phase:
+        item["phase"] = phase
+    return {"type": "event_msg", "payload": {"type": "item_completed", "turn_id": turn, "item": item}}
+
+
+def _done(turn, last):
+    return {"type": "event_msg", "payload": {"type": "task_complete", "turn_id": turn, "last_agent_message": last}}
+
+
+class ReplyToTest(unittest.TestCase):
+    def test_real_rollout_0164(self):
+        f = FIXTURES / "codex_rollout_0164.jsonl"
+        self.assertEqual(reply_to(f, "ok"), Reply(True, True, "Ready\u2014what would you like to work on?"))
+        self.assertEqual(reply_to(f, "只回覆 queue-ok，不要執行任何指令"), Reply(True, True, "queue-ok"))
+
+    def test_no_match(self):
+        self.assertEqual(reply_to(FIXTURES / "codex_rollout_0164.jsonl", "nope"), Reply(False, False, ""))
+
+    def test_not_done_without_task_complete(self):
+        f = _jl([_item("t1", "UserMessage", "hi"), _item("t1", "AgentMessage", "partial", "commentary")])
+        self.assertEqual(reply_to(f, "hi"), Reply(True, False, "partial"))
+
+    def test_prefers_final_answer(self):
+        f = _jl([_item("t1", "UserMessage", "hi"), _item("t1", "AgentMessage", "final", "final_answer"),
+                 _item("t1", "AgentMessage", "late comment", "commentary"), _done("t1", "final")])
+        self.assertEqual(reply_to(f, "hi"), Reply(True, True, "final"))
+
+    def test_task_complete_last_agent_message_when_no_item(self):
+        f = _jl([_item("t1", "UserMessage", "hi"), _done("t1", "from complete")])
+        self.assertEqual(reply_to(f, "hi"), Reply(True, True, "from complete"))
+
+    def test_other_turn_ignored(self):
+        f = _jl([_item("t0", "UserMessage", "old"), _item("t0", "AgentMessage", "old reply", "final_answer"),
+                 _item("t1", "UserMessage", "hi"), _done("t0", "stale")])
+        self.assertEqual(reply_to(f, "hi"), Reply(True, False, ""))
+
+    def test_later_turn_not_taken(self):
+        f = _jl([_item("t1", "UserMessage", "hi"), _item("t2", "UserMessage", "next"),
+                 _item("t2", "AgentMessage", "for next", "final_answer"), _done("t2", "for next")])
+        self.assertEqual(reply_to(f, "hi"), Reply(True, False, ""))
+
+    def test_duplicate_sent_takes_last(self):
+        f = _jl([_item("t1", "UserMessage", "hi"), _item("t1", "AgentMessage", "one", "final_answer"),
+                 _item("t2", "UserMessage", "hi"), _item("t2", "AgentMessage", "two", "final_answer")])
+        self.assertEqual(reply_to(f, "hi").text, "two")
+
+    def test_legacy_user_message_shape(self):
+        f = _jl([{"type": "event_msg", "payload": {"type": "user_message", "message": "hi"}},
+                 {"type": "event_msg", "payload": {"type": "agent_message", "message": "yo"}},
+                 {"type": "event_msg", "payload": {"type": "task_complete"}}])
+        self.assertEqual(reply_to(f, "hi"), Reply(True, True, "yo"))
+
+    def test_missing_file(self):
+        self.assertEqual(reply_to(Path(tempfile.mkdtemp()) / "x.jsonl", "hi"), Reply(False, False, ""))

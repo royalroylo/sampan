@@ -126,6 +126,25 @@ def last_user_text(path):
         return ""
 
 
+def _user_content(rec, join=False):
+    """Text of a record the user typed (str, or a list of text parts: the first part alone, or all joined when join);
+    None for anything else: not a user record, meta/skill injections, compaction summaries, tool results, injected text."""
+    if not isinstance(rec, dict) or rec.get("type") != "user" or rec.get("isMeta"):
+        return None
+    if rec.get("isCompactSummary") or rec.get("isVisibleInTranscriptOnly"):  # the compaction summary is not typed text
+        return None
+    msg = rec.get("message")
+    content = msg.get("content") if isinstance(msg, dict) else None
+    if isinstance(content, list):
+        texts = [c.get("text") for c in content if isinstance(c, dict) and c.get("type") == "text"]
+        ok = texts and len(texts) == len(content) and all(isinstance(t, str) for t in texts)
+        content = ("".join(texts) if join else texts[0]) if ok else None
+    if (isinstance(content, str) and content.strip() and not content.lstrip().startswith(NOT_TYPED)
+            and not INJECTED_TAG.match(content)):
+        return content
+    return None
+
+
 @cache_by_stat
 def _last_user_text(path):
     for line in reverse_lines(path):
@@ -135,19 +154,63 @@ def _last_user_text(path):
             rec = json.loads(line)
         except ValueError:
             continue
-        if not isinstance(rec, dict) or rec.get("type") != "user" or rec.get("isMeta"):
-            continue
-        if rec.get("isCompactSummary") or rec.get("isVisibleInTranscriptOnly"):  # the compaction summary is not typed text
-            continue
-        msg = rec.get("message")
-        content = msg.get("content") if isinstance(msg, dict) else None
-        if isinstance(content, list):
-            texts = [c.get("text") for c in content if isinstance(c, dict) and c.get("type") == "text"]
-            content = texts[0] if texts and len(texts) == len(content) else None
-        if (isinstance(content, str) and content.strip() and not content.lstrip().startswith(NOT_TYPED)
-                and not INJECTED_TAG.match(content)):
+        content = _user_content(rec)
+        if content is not None:
             return content
     return ""
+
+
+@dataclass(frozen=True)
+class Reply:
+    """found: the sent message is in the transcript; done: text is the reply (an assistant text exists after it)."""
+    found: bool
+    done: bool
+    text: str
+
+
+def _assistant_text(rec):
+    if not isinstance(rec, dict) or rec.get("type") != "assistant" or rec.get("isSidechain"):
+        return ""
+    msg = rec.get("message")
+    content = msg.get("content") if isinstance(msg, dict) else None
+    if isinstance(content, str):
+        return content.strip() and content or ""
+    if not isinstance(content, list):
+        return ""
+    texts = [c.get("text") for c in content if isinstance(c, dict) and c.get("type") == "text"
+             and isinstance(c.get("text"), str)]
+    return "".join(texts) if "".join(texts).strip() else ""  # a record with only thinking / tool_use has no text
+
+
+def reply_to(path, sent):
+    """The reply to the last user record whose text equals sent: the last assistant text after it and before the next
+    message the user typed. Skill injections, compaction summaries, tool results and thinking-only records are never
+    the reply, and never the bound message. Reply(False, False, "") when sent is not in the transcript (/clear, a new file)."""
+    try:
+        return _reply_to(path, sent)
+    except OSError:
+        return Reply(False, False, "")
+
+
+def _reply_to(path, sent):
+    after = []  # records after the candidate, newest first
+    for line in reverse_lines(path):
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        if _user_content(rec, join=True) == sent:
+            window = []
+            for later in reversed(after):  # oldest first, up to the next typed message
+                if _user_content(later, join=True) is not None:
+                    break
+                window.append(later)
+            texts = [t for t in map(_assistant_text, window) if t]
+            return Reply(True, True, texts[-1]) if texts else Reply(True, False, "")
+        after.append(rec)
+    return Reply(False, False, "")
 
 
 def transcript_carry(profiles, old, new, session_id):

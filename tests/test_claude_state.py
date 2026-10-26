@@ -4,9 +4,11 @@ import unittest
 from pathlib import Path
 
 from sampan.claude_state import (
+    Reply,
     find_transcript,
     last_user_text,
     read_session_files,
+    reply_to,
     stale_session_files,
     transcript_owners,
     transcript_stats,
@@ -187,3 +189,105 @@ class TranscriptTest(unittest.TestCase):
         p = self.cfg.default_profile.projects_dir / "e.jsonl"
         p.write_text("")
         self.assertEqual(transcript_stats(p), (None, None))
+
+
+FIX = Path(__file__).resolve().parent / "fixtures"
+
+
+def u(content, **extra):
+    return {"type": "user", "message": {"role": "user", "content": content}, **extra}
+
+
+def a(*parts):
+    return {"type": "assistant", "message": {"role": "assistant", "content": list(parts)}}
+
+
+def text(t):
+    return {"type": "text", "text": t}
+
+
+def write_jsonl(recs):
+    f = Path(tempfile.mkdtemp()) / "t.jsonl"
+    f.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in recs))
+    return f
+
+
+SKILL = u([text("Base directory for this skill: /tmp/skills/x\n\n# X\nsteps")], isMeta=True, sourceToolUseID="toolu_1")
+
+
+class ReplyToTest(unittest.TestCase):
+    def test_real_transcript_multiline_paste(self):
+        sent = json.loads((FIX / "claude_transcript_paste.jsonl").read_text().splitlines()[0])["message"]["content"]
+        self.assertEqual(reply_to(FIX / "claude_transcript_paste.jsonl", sent), Reply(True, True, "OK"))
+
+    def test_question_and_answer(self):
+        f = write_jsonl([u("old"), a(text("old reply")), u("hi"), a(text("hello"))])
+        self.assertEqual(reply_to(f, "hi"), Reply(True, True, "hello"))
+
+    def test_skill_injection_is_not_the_reply(self):
+        f = write_jsonl([u("hi"), a({"type": "tool_use", "id": "toolu_1", "name": "Skill", "input": {}}),
+                         u([{"type": "tool_result", "tool_use_id": "toolu_1", "content": "ok"}]), SKILL,
+                         a(text("done it"))])
+        self.assertEqual(reply_to(f, "hi"), Reply(True, True, "done it"))
+
+    def test_skill_injection_only_is_no_reply_yet(self):
+        f = write_jsonl([u("hi"), SKILL])
+        self.assertEqual(reply_to(f, "hi"), Reply(True, False, ""))
+
+    def test_injected_tag_and_non_text_user_records_skipped(self):
+        f = write_jsonl([u("hi"), u("<system-reminder>x</system-reminder>"), u("<ide_opened_file>y</ide_opened_file>"),
+                         u([text("a"), {"type": "image"}]), a(text("fine"))])
+        self.assertEqual(reply_to(f, "hi"), Reply(True, True, "fine"))
+
+    def test_skill_text_never_bound_as_sent(self):
+        f = write_jsonl([SKILL, a(text("x"))])
+        self.assertEqual(reply_to(f, "Base directory for this skill: /tmp/skills/x\n\n# X\nsteps"),
+                         Reply(False, False, ""))
+
+    def test_compaction_summary_skipped(self):
+        f = write_jsonl([u("hi"), u("This session is being continued...", isCompactSummary=True),
+                         u("summary", isVisibleInTranscriptOnly=True), a(text("after compact"))])
+        self.assertEqual(reply_to(f, "hi"), Reply(True, True, "after compact"))
+
+    def test_compaction_summary_equal_to_sent_not_bound(self):
+        f = write_jsonl([u("hi", isCompactSummary=True), a(text("x"))])
+        self.assertEqual(reply_to(f, "hi"), Reply(False, False, ""))
+
+    def test_no_assistant_yet(self):
+        f = write_jsonl([u("hi")])
+        self.assertEqual(reply_to(f, "hi"), Reply(True, False, ""))
+
+    def test_thinking_only_is_not_text(self):
+        f = write_jsonl([u("hi"), a({"type": "thinking", "thinking": "", "signature": "x"})])
+        self.assertEqual(reply_to(f, "hi"), Reply(True, False, ""))
+
+    def test_last_assistant_text_wins_and_tool_use_between(self):
+        f = write_jsonl([u("hi"), a(text("working")), a({"type": "tool_use", "id": "t", "name": "Bash", "input": {}}),
+                         u([{"type": "tool_result", "tool_use_id": "t", "content": "o"}]), a(text("final"))])
+        self.assertEqual(reply_to(f, "hi"), Reply(True, True, "final"))
+
+    def test_cleared_conversation_has_no_match(self):
+        f = write_jsonl([u("something else"), a(text("not for you"))])
+        self.assertEqual(reply_to(f, "hi"), Reply(False, False, ""))
+
+    def test_duplicate_sent_takes_last(self):
+        f = write_jsonl([u("hi"), a(text("first")), u("hi")])
+        self.assertEqual(reply_to(f, "hi"), Reply(True, False, ""))
+        f = write_jsonl([u("hi"), a(text("first")), u("hi"), a(text("second"))])
+        self.assertEqual(reply_to(f, "hi").text, "second")
+
+    def test_later_user_message_ends_the_window(self):
+        f = write_jsonl([u("hi"), a(text("mine")), u("next question"), a(text("answer to next"))])
+        self.assertEqual(reply_to(f, "hi"), Reply(True, True, "mine"))
+
+    def test_text_list_content_matches(self):
+        f = write_jsonl([u([text("multi\nline")]), a(text("ok"))])
+        self.assertEqual(reply_to(f, "multi\nline"), Reply(True, True, "ok"))
+
+    def test_unreadable_or_missing_file(self):
+        self.assertEqual(reply_to(Path(tempfile.mkdtemp()) / "none.jsonl", "hi"), Reply(False, False, ""))
+
+    def test_garbage_lines_skipped(self):
+        f = Path(tempfile.mkdtemp()) / "t.jsonl"
+        f.write_text("not json\n" + json.dumps(u("hi")) + "\n[1]\n" + json.dumps(a(text("ok"))) + "\n")
+        self.assertEqual(reply_to(f, "hi"), Reply(True, True, "ok"))

@@ -12,6 +12,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from . import codex_daemon
+from .claude_state import Reply
 from .fsutil import cache_by_stat, reverse_lines
 from .procs import UUID_RE, is_uuid
 
@@ -288,3 +289,77 @@ def _last_user_text(path):
             if isinstance(msg, str) and msg.strip():
                 return msg
     return ""
+
+
+def _item_text(item):
+    parts = item.get("content")
+    if not isinstance(parts, list):
+        return ""
+    return "".join(c["text"] for c in parts if isinstance(c, dict) and isinstance(c.get("text"), str))
+
+
+def _event(line):
+    """(payload type, payload) of an event_msg line; (None, None) for anything else."""
+    try:
+        rec = json.loads(line)
+    except ValueError:
+        return None, None
+    payload = rec.get("payload") if isinstance(rec, dict) and rec.get("type") == "event_msg" else None
+    if not isinstance(payload, dict):
+        return None, None
+    return payload.get("type"), payload
+
+
+def _user_event(kind, payload):
+    """(text, turn_id) of a user message event: Codex 0.164 item_completed/UserMessage, or the older user_message."""
+    if kind == "item_completed" and isinstance(payload.get("item"), dict) and payload["item"].get("type") == "UserMessage":
+        return _item_text(payload["item"]), payload.get("turn_id")
+    if kind == "user_message" and isinstance(payload.get("message"), str):
+        return payload["message"], None
+    return None, None
+
+
+def reply_to(path, sent):
+    """The reply to the last user message of a rollout whose text equals sent: the last AgentMessage of that turn
+    (final_answer preferred), else task_complete.last_agent_message; done once that turn's task_complete is seen.
+    Also reads the older user_message / agent_message events. Reply(False, False, "") when sent is not in the rollout."""
+    try:
+        return _reply_to(path, sent)
+    except OSError:
+        return Reply(False, False, "")
+
+
+def _reply_to(path, sent):
+    after = []  # (kind, payload) after the candidate, newest first
+    for line in reverse_lines(path):
+        kind, payload = _event(line)
+        if kind is None:
+            continue
+        text, turn = _user_event(kind, payload)
+        if text is not None and text == sent:
+            return _reply_from(turn, list(reversed(after)))
+        after.append((kind, payload))
+    return Reply(False, False, "")
+
+
+def _reply_from(turn, events):
+    finals, others, complete, done = [], [], None, False
+    for kind, payload in events:
+        text, uturn = _user_event(kind, payload)
+        if text is not None and uturn != turn:  # the next message starts another turn
+            break
+        if turn is not None and payload.get("turn_id") not in (None, turn):
+            continue
+        if kind == "item_completed" and isinstance(payload.get("item"), dict) and payload["item"].get("type") == "AgentMessage":
+            msg = _item_text(payload["item"])
+            if msg.strip():
+                (finals if payload["item"].get("phase") == "final_answer" else others).append(msg)
+        elif kind == "agent_message" and isinstance(payload.get("message"), str) and payload["message"].strip():
+            others.append(payload["message"])
+        elif kind == "task_complete":
+            done = True
+            last = payload.get("last_agent_message")
+            if isinstance(last, str) and last.strip():
+                complete = last
+    text = (finals or others)[-1] if (finals or others) else (complete or "")
+    return Reply(True, done, text)
