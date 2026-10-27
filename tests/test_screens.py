@@ -92,6 +92,19 @@ class ClaudeInputStateTest(unittest.TestCase):
             with self.subTest(name):
                 self.assertEqual(claude_input_state(fixture(name)), want)
 
+    def test_dim_slash_command_suggestion_is_empty(self):
+        # Claude suggests the last slash command again as dim text in an empty box: nobody typed it
+        screen = fixture("claude_slash_suggestion.ansi")
+        self.assertIn("\x1b[2m/context-tools:summary\x1b[0m", screen)
+        self.assertEqual(claude_input_state(screen), "empty")
+        self.assertEqual(claude_input_state(screen.replace("\x1b[2m", "")), "blocked")  # typed: a slash menu
+        typed = screen.replace("summary\x1b[0m", "summary\x1b[0m x")
+        self.assertNotEqual(claude_input_state(typed), "empty")  # suggestion plus typed text: never pasted into
+
+    def test_dim_numbered_option_is_still_blocked(self):
+        rule = "─" * 40
+        self.assertEqual(claude_input_state(f"{rule}\n❯\xa0\x1b[2m1. Yes\x1b[0m\n{rule}\n  footer"), "blocked")
+
     def test_placeholder_text_in_normal_intensity_is_a_draft(self):
         screen = fixture("claude_empty_placeholder.ansi").replace("\x1b[2m", "")
         self.assertIn("Try", screen)

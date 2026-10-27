@@ -5,6 +5,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- `sampan send` (and the MCP `send`) no longer waits forever with 「對方畫面停在選單或提示」 when an idle Claude shows its dim suggestion of the last slash command (e.g. `❯ /context-tools:summary` in grey) in an empty prompt box: a dim suggestion counts as empty, a typed slash command still counts as its menu.
+
 ## [0.13.1] - 2026-10-27
 
 ### Fixed

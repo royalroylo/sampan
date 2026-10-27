@@ -355,15 +355,18 @@ def claude_input_state(screen):
     if prompt is None or not plain[prompt].startswith(PROMPT_PREFIX):
         return "blocked"
     text = plain[prompt][len(PROMPT_PREFIX):].strip()
-    if re.match(r"\d+\.\s", text) or text.startswith("/"):
-        return "blocked"  # a numbered option of a dialog, or a slash-command menu
+    after = lines[prompt].split(PROMPT_PREFIX, 1)[1] if PROMPT_PREFIX in lines[prompt] else ""
+    dim = after.startswith("\x1b[2m")
+    # a dim run that ends (reset or normal intensity) and is followed by more text is a placeholder plus a draft
+    tail = re.split(r"\x1b\[(?:0|22)m", after[len("\x1b[2m"):], maxsplit=1) if dim else []
+    only_dim = dim and (len(tail) == 1 or not ANSI_RE.sub("", tail[1]).strip())
+    if re.match(r"\d+\.\s", text) or (text.startswith("/") and not only_dim):
+        return "blocked"  # a numbered option of a dialog, or a typed slash command with its menu (a dim one is
+        # Claude suggesting the last command again in an empty box)
     if any(plain[i].strip() for i in range(top + 1, bottom) if i != prompt):
         return "draft"  # another line inside the box (e.g. a draft that starts with a blank line) is not empty
     if not text:
         return "empty"
-    after = lines[prompt].split(PROMPT_PREFIX, 1)[1] if PROMPT_PREFIX in lines[prompt] else ""
-    if not after.startswith("\x1b[2m"):
+    if not dim:
         return "draft"  # normal-intensity text: the user typed it
-    # a dim run that ends (reset or normal intensity) and is followed by more text is a placeholder plus a draft
-    tail = re.split(r"\x1b\[(?:0|22)m", after[len("\x1b[2m"):], maxsplit=1)
-    return "empty" if len(tail) == 1 or not ANSI_RE.sub("", tail[1]).strip() else "draft"
+    return "empty" if only_dim else "draft"
