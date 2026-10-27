@@ -74,7 +74,7 @@ def build_parser():
     ds.add_argument("action", nargs="?", choices=["cancel", "show"], help=argparse.SUPPRESS)
     ds.add_argument("id", nargs="?", help=argparse.SUPPRESS)
     ds.add_argument("--all", action="store_true", help="也列已完成、失敗、取消的")
-    ds.add_argument("--wait", type=int, default=0, metavar="秒", help="show：最多等幾秒等它做完（逾時結束碼 124）")
+    ds.add_argument("--wait", type=int, default=None, metavar="秒", help="show：最多等幾秒等它做完（逾時結束碼 124）")
     fd = sub.add_parser("folder", usage="sampan folder list | add <路徑> | rename <路徑> <新名稱> | rm <路徑> | move <名稱或路徑>... <目的|/>",
                         help="session 資料夾：list 看樹、add 建、rename 改名、rm 刪（裡面的搬上一層）、move 搬（/ 是最外層）；只動 folders.json，不動任何 session")
     fd.add_argument("action", choices=["list", "add", "rename", "rm", "move"])
@@ -420,7 +420,7 @@ def _dispatch(cfg, args):
         return cmd_send(cfg, run, out, args.name, message, wait=args.wait, timeout=args.timeout, caller=caller)
     if cmd == "dispatches":
         from .send import cmd_cancel, cmd_dispatches, cmd_show
-        if args.wait and args.action != "show":
+        if args.wait is not None and args.action != "show":
             out("❌ --wait 只能跟 show 一起用：sampan dispatches show <編號> --wait 秒")
             return 2
         if args.action in ("cancel", "show"):
@@ -428,7 +428,7 @@ def _dispatch(cfg, args):
                 out(f"❌ 用法：sampan dispatches {args.action} <編號>")
                 return 2
             if args.action == "show":
-                return cmd_show(cfg, run, out, args.id, wait=args.wait)
+                return cmd_show(cfg, run, out, args.id, wait=args.wait or 0)
             from .send import command_caller
             if _agent_refused(cfg, command_caller(cfg, run, os.getpid()) if cfg.mcp_confirm else None, out):
                 return 2

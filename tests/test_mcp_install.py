@@ -231,6 +231,21 @@ class McpInstallTest(unittest.TestCase):
         self.assertEqual(self.out, ["❌ 沒有這個使用中的 profile：nope（可用：alice, work, cx）"])
         self.assertFalse(actionlog.log_path(self.cfg).exists())
 
+    def test_install_profile_refuses_unknown_and_leaves_codex_alone(self):
+        self.write_codex(INSTALLED)
+        r = self.runner()
+        self.assertEqual(mcp_install.install(self.cfg, r, self.o, sampan_path=SP, profiles=["nope"]), 2)
+        self.assertEqual(r.calls, [])
+        self.assertEqual(mcp_install.install(self.cfg, r, self.o, sampan_path=SP, profiles=["alice"]), 0)
+        self.assertEqual(self.codex_file().read_text(), INSTALLED)
+        self.assertEqual(self.backups(), [])
+
+    def test_profile_with_dry_run_shows_only_that_profile(self):
+        r = self.runner(installed={"default", self.work_dir(), "codex"})
+        self.assertEqual(mcp_install.uninstall(self.cfg, r, self.o, profiles=["work"], dry_run=True), 0)
+        self.assertEqual(self.calls(r, "remove"), [])
+        self.assertEqual([s for s in self.out if "試跑" in s], ["work：（試跑）會執行 claude mcp remove --scope user sampan"])
+
     def test_cli_wires_install_and_uninstall(self):
         with mock.patch("sampan.cli.load_config", return_value=self.cfg), \
                 mock.patch("sampan.mcp_install.install", return_value=0) as i, \

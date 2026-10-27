@@ -120,7 +120,7 @@ The source line says who the dispatch comes from, its id, and tells the receiver
 
 ### Installing, and how approval works
 
-`sampan mcp install` runs `claude mcp add --scope user sampan -- <sampan path> mcp serve` for every enabled Claude profile (with that profile's `CLAUDE_CONFIG_DIR`), and `codex mcp add sampan -- <sampan path> mcp serve` when Codex is enabled (with `CODEX_HOME` when the Codex home is not `~/.codex`); where it is already installed it is skipped. `sampan mcp uninstall` does the matching `remove`. Both take `--dry-run`, and each result line is logged in `actions.log` (label `mcp`). Restart the profile's sessions to see the tools. `sampan doctor` shows one line with where it is installed (nothing when it is installed nowhere).
+`sampan mcp install` runs `claude mcp add --scope user sampan -- <sampan path> mcp serve` for every enabled Claude profile (with that profile's `CLAUDE_CONFIG_DIR`), and `codex mcp add sampan -- <sampan path> mcp serve` when Codex is enabled (with `CODEX_HOME` when the Codex home is not `~/.codex`); where it is already installed it is skipped. `sampan mcp uninstall` does the matching `remove`. Both take `--dry-run`, and `--profile <name>` (repeatable, Codex by its profile name) to handle only those profiles; an unknown name does nothing and exits 2. Each result line is logged in `actions.log` (label `mcp`). Restart the profile's sessions to see the tools. `sampan doctor` shows one line with where it is installed (nothing when it is installed nowhere).
 
 How `[mcp] confirm = true` works (fail closed):
 

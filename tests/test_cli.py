@@ -363,7 +363,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(sh.call_count, 0)
 
     def test_dispatches_wait_without_show_is_refused(self):
-        for argv in (["dispatches", "--wait", "5"], ["dispatches", "cancel", "ab12", "--wait", "5"]):
+        for argv in (["dispatches", "--wait", "5"], ["dispatches", "--wait", "0"], ["dispatches", "cancel", "ab12", "--wait", "5"]):
             buf = io.StringIO()
             with mock.patch("sampan.send.cmd_dispatches") as cd, mock.patch("sampan.send.cmd_cancel") as cc, \
                     mock.patch("sampan.send.command_caller", return_value=TERMINAL), redirect_stdout(buf):
