@@ -231,7 +231,7 @@ class InitFirstRunTests(Base):
         self.assertFalse(any(str(launchd.plist_path(self.home)) in x for x in self.lines))
         self.assertTrue(self.cfg_path.exists())
         note = "\n".join(self.lines)
-        self.assertIn("*/5 * * * * $HOME/.local/bin/sampan save --quiet", note)  # a line to paste, not just "use cron"
+        self.assertIn(f"*/5 * * * * {self.sampan} save --quiet", note)  # a line to paste for this sampan, not just "use cron"
         self.assertIn("docs/install.md#linux", note)
 
     def test_sampan_env_overrides_go_into_plist(self):

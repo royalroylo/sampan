@@ -87,7 +87,7 @@ session 資料夾，只給畫面和 `sampan folder` 用；`save`、`restore`、�
 | `thread_id` | 對話識別，或 `null` |
 | `startup` | `sampan new --message` 的開場訊息（新 session 可能還沒登記）；沒有這欄的舊紀錄視為 `false` |
 
-`sampan new --message` 建的派工一開始就是 `sent`（`sent_at` 是開新 session 的時間；`text` 與 `outbox/<id>.txt` 都不以換行結尾，因為 `$(cat …)` 會去掉結尾換行，不然回覆對不上）；`thread_id` 由之後的推進從狀態列補。新 session 還沒被認出來時不判失敗，`reason` 寫「對方 session 還在啟動」：Codex 還沒有對話（未登記）時只要那個 Codex 還在跑就一直等；tmux 在、agent 還沒看到（Claude 已登記但「該跑沒跑」、或沒有 agent）時最多等 120 秒；停在信任資料夾等提示時一直等。
+`sampan new --message` 建的派工一開始就是 `sent`（`sent_at` 是開新 session 的時間；`text` 與 `outbox/<id>.txt` 都不以換行結尾，因為 `$(cat …)` 會去掉結尾換行，不然回覆對不上）；`thread_id` 由之後的推進從狀態列補。新 session 還沒被認出來時不判失敗，`reason` 寫「對方 session 還在啟動」：Codex 還沒有對話（未登記）時只要那個 Codex 還在跑就一直等；tmux 在、agent 還沒看到（Claude 已登記但「已停止」、或沒有 agent）時最多等 120 秒；停在信任資料夾等提示時一直等。
 
 狀態怎麼走：`queued`（排隊）→ `sent`（已送出，`sent_at`）→ `done`（`reply` 是這則訊息的回覆）或 `failed`（`reason` 寫原因）；`cancelled` 從 `queued` 來（還沒送出，`reason`「已取消」），或從 `sent` 來（不再等回覆，訊息已在對方那裡，`reason`「不再等回覆」，不發通知）。`done_at` 是結束的時間。推進只在鎖裡做（先讀最新的再判斷再寫），所以同一筆不會被送兩次。按任何鍵或跑 `codex queue` 之前，先把紀錄寫成 `sent`（`reason`「送出中」）：sampan 在送到一半被砍掉，這筆也不會再送一次（之後變「找不到回覆」），也就是最多送一次；只有確定什麼都沒送出（對方輸入框有字、讀不到畫面、tmux 載入失敗…）才退回 `queued`。貼上後按 Enter 失敗（文字已在對方輸入框）或 `codex queue` 逾時（Codex 可能已收下）直接算 `failed`（「可能已送出，請確認」），不會再送一次（完成通知同理：算已通知，`reason` 寫明）。對方畫面在 tmux 捲動模式（copy mode）時不貼，繼續排隊。
 

@@ -24,10 +24,14 @@ from .observe import PROC_ROOT
 from .plugins import read_state
 from .procs import claude_pids, list_procs, proc_env
 
-NO_SCHEDULE_NOTE = ("ℹ 這台不是 macOS，沒有自動存檔排程；沒存到的 session 重開機後接不回來。要自動存檔請自己排，例如 crontab -e 加一行：\n"
-                    "   */5 * * * * $HOME/.local/bin/sampan save --quiet\n"
-                    "   systemd user timer 的範例見 https://github.com/royalroylo/sampan/blob/main/docs/install.md#linux")
 NAME_RULE = "名稱只能用英數字、- 和 _"
+
+
+def no_schedule_note(sampan_path):
+    """Said on a machine without launchd: a cron line for this sampan, and where the systemd example is."""
+    return ("ℹ 這台不是 macOS，沒有自動存檔排程；沒存到的 session 重開機後接不回來。要自動存檔請自己排，例如 crontab -e 加一行：\n"
+            f"   */5 * * * * {shlex.quote(str(sampan_path))} save --quiet\n"
+            "   systemd user timer 的範例見 https://github.com/royalroylo/sampan/blob/main/docs/install.md#linux")
 
 
 @dataclass(frozen=True)
@@ -424,7 +428,7 @@ def cmd_init(cfg_path, state_dir, run, out, ask, *, home, sampan_path, env=None,
         return 2
     _offer_hooks(cfg, ask, out, sampan_path, offer_install=hook)
     if platform != "darwin":
-        out(NO_SCHEDULE_NOTE)
+        out(no_schedule_note(sampan_path))
     elif no_launchd:
         out("略過自動存檔排程（--no-launchd）")
     else:

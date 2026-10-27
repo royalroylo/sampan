@@ -93,6 +93,14 @@ class DoctorTest(unittest.TestCase):
         self.assertFalse(any("claude-plugins-official" in t for t in titles), titles)
         self.assertFalse(any("marketplace remove" in c.detail for c in self.checks()))
 
+    def test_official_marketplace_in_use_still_says_keep_it(self):
+        self.cfg = make_env(self.cfg.path.parent, NO_OFFICIAL)
+        write_plugins(self.cfg, "work", installed={"superpowers@claude-plugins-official": [("user", "1", None)]},
+                      known=GOOD_KNOWN)
+        checks = [c for c in self.checks() if "claude-plugins-official" in c.title]
+        self.assertEqual([c.level for c in checks], ["warn"])
+        self.assertFalse(any("marketplace remove" in c.detail for c in checks))
+
     def test_official_name_with_another_source_is_still_reported(self):
         self.cfg = make_env(self.cfg.path.parent, NO_OFFICIAL)
         write_plugins(self.cfg, "work", known={**GOOD_KNOWN, "claude-plugins-official": "someone/else"})

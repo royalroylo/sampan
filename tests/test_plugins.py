@@ -28,6 +28,7 @@ GOOD_KNOWN = {"claude-plugins-official": "anthropics/claude-plugins-official",
 # a config that lists no official marketplace (and so no plugin from it)
 NO_OFFICIAL = TOML.replace('claude-plugins-official = "anthropics/claude-plugins-official"\n', "") \
     .replace(', "superpowers@claude-plugins-official"', "")
+assert "claude-plugins-official" not in NO_OFFICIAL, "the TOML fixture changed: update NO_OFFICIAL"
 
 
 class OfficialMarketplaceTest(unittest.TestCase):

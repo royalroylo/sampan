@@ -136,6 +136,12 @@ class CliTest(unittest.TestCase):
                 self.assertEqual(cli.main(["new", "wsl-test", "claude:alice", "/tmp", *argv]), rc)
             line = "✔ wsl-test 在背景執行；要進去：sampan 畫面選它，或 tmux attach -t wsl-test"
             self.assertEqual(line in buf.getvalue(), said, (rc, argv, buf.getvalue()))
+        buf = io.StringIO()  # "go in" was chosen at a prompt: it attaches, so no line about the background
+        with mock.patch("sampan.cli._prompt_fn", return_value=(None, ["wsl-test"])), \
+                mock.patch("sampan.session_run.cmd_new", return_value=0), mock.patch("sampan.cli._go_in", return_value=0), \
+                redirect_stdout(buf):
+            cli.main(["new", "wsl-test", "claude:alice", "/tmp"])
+        self.assertNotIn("在背景執行", buf.getvalue())
 
     def test_going_in_from_a_cli_prompt_attaches(self):
         from sampan.prompts import ATTACH
