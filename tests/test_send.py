@@ -908,6 +908,29 @@ class FailureNoticeTest(Base):
         self.assertEqual(send.notice_text(d), f"〔sampan：給 b 的派工 {d.id} 失敗：a b〕")
 
 
+class QueueLimitTest(Base):
+    def test_queued_too_long_fails_with_its_last_reason_and_tells_the_caller(self):
+        d = self.submit(notify=True)
+        run = tmux_runner(DRAFT)
+        self.assertEqual(self.advance(run, d.id, later(60)).state, "queued")
+        d = self.advance(tmux_runner(DRAFT), d.id, later(send.QUEUE_LIMIT_S + 1))
+        self.assertEqual(d.state, "failed")
+        self.assertEqual(d.reason, "排隊 30 分鐘還送不出去（最後一次：對方輸入框有未送出的字）")
+        self.assertIn(d.id, send.pending(self.cfg))  # the caller is owed the failure notice
+
+    def test_ready_at_the_limit_is_still_sent(self):
+        d = self.submit()
+        d = self.advance(tmux_runner(), d.id, later(send.QUEUE_LIMIT_S + 1))
+        self.assertEqual(d.state, "sent")
+
+    def test_a_sent_dispatch_waiting_for_its_reply_has_no_limit(self):
+        d = self.submit()
+        self.advance(tmux_runner(), d.id)
+        self.set_row("b", agent_status="busy")
+        d = self.advance(FakeRunner(strict=True), d.id, later(send.QUEUE_LIMIT_S * 4))
+        self.assertEqual(d.state, "sent")
+
+
 class CopyModeTest(Base):
     def test_target_in_copy_mode_stays_queued_and_gets_nothing(self):  # final review 8
         d = self.submit()

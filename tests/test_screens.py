@@ -2,7 +2,14 @@
 import unittest
 from pathlib import Path
 
-from sampan.screens import at_trust_prompt, bottom_trust_path, claude_input_state, codex_activity, trust_path
+from sampan.screens import (
+    at_trust_prompt,
+    bottom_trust_path,
+    claude_box_text,
+    claude_input_state,
+    codex_activity,
+    trust_path,
+)
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -100,6 +107,31 @@ class ClaudeInputStateTest(unittest.TestCase):
         self.assertEqual(claude_input_state(screen.replace("\x1b[2m", "")), "blocked")  # typed: a slash menu
         typed = screen.replace("summary\x1b[0m", "summary\x1b[0m x")
         self.assertNotEqual(claude_input_state(typed), "empty")  # suggestion plus typed text: never pasted into
+
+    def test_other_placeholder_styles_are_empty(self):
+        rule = "─" * 40
+        for body in ("\x1b[7m/\x1b[27m\x1b[2mcontext-tools:summary\x1b[0m",  # Claude's cursor cell, then dim
+                     "\x1b[7mT\x1b[27m\x1b[2mry \"fix lint\"\x1b[0m",
+                     "\x1b[90m/context-tools:summary\x1b[39m",  # grey foreground
+                     "\x1b[38;5;8mTry \"fix lint\"\x1b[39m"):
+            with self.subTest(body=body):
+                self.assertEqual(claude_input_state(f"{rule}\n❯\xa0{body}\n{rule}\n  footer"), "empty")
+
+    def test_typed_text_with_a_cursor_or_completion_is_not_empty(self):
+        rule = "─" * 40
+        for body, want in (("/\x1b[2mcontext-tools:summary\x1b[0m", "blocked"),  # typed "/", dim completion
+                           ("\x1b[7mh\x1b[27mello", "draft"),  # cursor on a typed draft
+                           ("\x1b[7mh\x1b[27m", "draft"),  # one typed character under the cursor
+                           ("\x1b[90mTry\x1b[39m typed", "draft"),
+                           ("\x1b[38;5;246mgrey-ish\x1b[39m", "draft")):  # only 90 and 38;5;8 count as grey
+            with self.subTest(body=body):
+                self.assertEqual(claude_input_state(f"{rule}\n❯\xa0{body}\n{rule}\n  footer"), want)
+
+    def test_box_text(self):
+        rule = "─" * 40
+        screen = f"❯ 〔sampan 轉送〕 echoed above\n{rule}\n❯\xa0〔sampan 轉送｜派工 ab12〕\n{rule}\n  footer"
+        self.assertEqual(claude_box_text(screen), "❯\xa0〔sampan 轉送｜派工 ab12〕")
+        self.assertIsNone(claude_box_text("no box"))
 
     def test_dim_numbered_option_is_still_blocked(self):
         rule = "─" * 40

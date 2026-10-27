@@ -33,6 +33,20 @@ def writes(run):
     return [c["args"] for c in run.calls if not {"capture-pane", "display-message"} & set(c["args"])]
 
 
+RULE = "─" * 40
+OURS = f"{RULE}\n❯\xa0〔sampan 轉送｜來自 終端機｜派工 ab12〕\n{RULE}\n  footer"
+PASTED = f"{RULE}\n❯\xa0[Pasted text #1 +3 lines]\n{RULE}\n  footer"
+
+
+def screens_then(first, after):
+    """capture-pane answers first, then each of after in turn (the last one repeats)."""
+    seq = [first, *after]
+
+    def answer(args):
+        return cp(0, seq.pop(0) if len(seq) > 1 else seq[0])
+    return answer
+
+
 class SourceLineTest(unittest.TestCase):
     def test_formats(self):
         self.assertEqual(source_line(None, "", "ab12"), "〔sampan 轉送｜來自 終端機｜派工 ab12｜直接回覆文字即可，sampan 會帶回〕")
@@ -64,7 +78,7 @@ class ToClaudeTest(unittest.TestCase):
             ["tmux", "-u", "paste-buffer", "-p", "-d", "-b", "sampan-ab12", "-t", "%3"],
             ["tmux", "-u", "send-keys", "-t", "%3", "Enter"],
         ])
-        self.assertEqual(self.sleeps, [0.5])
+        self.assertEqual(self.sleeps, [0.5, 0.3])  # one look after Enter: the box no longer holds the message
 
     def test_draft_blocked_and_unknown_send_nothing(self):
         for name, reason in (("claude_draft.ansi", "對方輸入框有未送出的字"),
@@ -87,6 +101,33 @@ class ToClaudeTest(unittest.TestCase):
         reason = to_claude(Tmux(run), "%3", self.outbox, "ab12", self.sleeps.append)
         self.assertIn("no such file", reason)
         self.assertEqual(len(writes(run)), 1)
+
+    def test_message_still_in_the_box_gets_one_more_enter(self):
+        for still in (OURS, PASTED):
+            with self.subTest(still=still[45:70]):
+                run, tmux = tmux_with("")
+                empty = screen("claude_empty_placeholder.ansi")
+                run.on(["tmux", "-u", "capture-pane"], screens_then(empty, [still] * 5 + [empty]))
+                self.sleeps = []
+                self.assertIsNone(self.deliver(tmux))
+                self.assertEqual(len(run.called(["tmux", "-u", "send-keys"])), 2)
+                self.assertEqual(run.called(["tmux", "-u", "paste-buffer"]).__len__(), 1)  # never pasted again
+
+    def test_message_that_never_leaves_the_box_is_pasted_not_sent(self):
+        run, tmux = tmux_with("")
+        run.on(["tmux", "-u", "capture-pane"], screens_then(screen("claude_empty_placeholder.ansi"), [OURS]))
+        r = self.deliver(tmux)
+        self.assertIsInstance(r, Pasted)
+        self.assertIn("還留在輸入框", r)
+        self.assertEqual(len(run.called(["tmux", "-u", "send-keys"])), 2)  # one nudge, no more
+        self.assertEqual(self.sleeps, [0.5] + [0.3] * 10)
+
+    def test_someone_elses_text_in_the_box_is_not_nudged(self):
+        run, tmux = tmux_with("")
+        run.on(["tmux", "-u", "capture-pane"],
+               screens_then(screen("claude_empty_placeholder.ansi"), [screen("claude_draft.ansi")]))
+        self.assertIsNone(self.deliver(tmux))  # our text left the box; what is there now is not ours to press
+        self.assertEqual(len(run.called(["tmux", "-u", "send-keys"])), 1)
 
     def test_failed_enter_is_reported(self):
         run = FakeRunner(strict=True)

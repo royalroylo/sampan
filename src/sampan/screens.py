@@ -339,34 +339,106 @@ PROMPT_PREFIX = "❯\xa0"  # Claude draws the prompt as ❯ + NBSP
 BOX_BOTTOM_LINES = 5  # non-blank lines allowed under the box (status line, hints); more means it scrolled away
 
 
-def claude_input_state(screen):
-    """"empty" only for an input box whose prompt is empty or shows a dim placeholder; "draft" when the user typed
-    something; "blocked" for everything else (menus, trust and permission prompts, no recognisable box).
-    A whitelist: a screen this does not recognise is never "empty"."""
-    lines = screen.rstrip("\n").split("\n")
+SGR_RE = re.compile(r"\x1b\[([0-9;]*)m")
+
+
+def _cells(text):
+    """(char, faint, inverse) for each visible character of one line; faint = dim (SGR 2) or the grey foregrounds
+    Claude draws suggestions in (90, 38;5;8). Other escape sequences are skipped."""
+    out, dim, grey, inv, i = [], False, False, False, 0
+    while i < len(text):
+        m = SGR_RE.match(text, i)
+        if m:
+            ps = [int(p) if p else 0 for p in m.group(1).split(";")]
+            j = 0
+            while j < len(ps):
+                p = ps[j]
+                if p == 0:
+                    dim = grey = inv = False
+                elif p == 2:
+                    dim = True
+                elif p == 22:
+                    dim = False
+                elif p == 7:
+                    inv = True
+                elif p == 27:
+                    inv = False
+                elif p == 90:
+                    grey = True
+                elif p in (38, 48):
+                    if p == 38:
+                        grey = ps[j + 1:j + 3] == [5, 8]
+                    j += 2 if ps[j + 1:j + 2] == [5] else 4 if ps[j + 1:j + 2] == [2] else 0
+                elif 30 <= p <= 39 or 91 <= p <= 97:
+                    grey = False
+                j += 1
+            i = m.end()
+            continue
+        m = ANSI_RE.match(text, i)
+        if m:
+            i = m.end()
+            continue
+        out.append((text[i], dim or grey, inv))
+        i += 1
+    return out
+
+
+def _is_placeholder(after):
+    """The prompt line's text (after ❯ NBSP, with escapes) is only Claude's suggestion: every visible cell faint, or
+    the first one inverse (Claude's cursor) and every other one faint. Trailing blanks do not count."""
+    cells = _cells(after)
+    while cells and not cells[-1][0].strip():
+        cells.pop()
+    if not cells:
+        return False
+    if cells[0][2] and len(cells) > 1:
+        cells = cells[1:]
+    return all(faint for _, faint, _ in cells)
+
+
+def _box(lines):
+    """(top, bottom) line numbers of the input box's rules, or None when there is no box near the bottom."""
     plain = [ANSI_RE.sub("", ln).rstrip(" ") for ln in lines]
     rules = [i for i, ln in enumerate(plain) if RULE_RE.match(ln)]
     if len(rules) < 2:
-        return "blocked"
+        return None
     top, bottom = rules[-2], rules[-1]
     if sum(1 for ln in plain[bottom + 1:] if ln.strip()) > BOX_BOTTOM_LINES:
+        return None
+    return top, bottom
+
+
+def claude_box_text(screen):
+    """The plain text inside Claude's input box (between its two rules), or None when there is no box."""
+    lines = screen.rstrip("\n").split("\n")
+    box = _box(lines)
+    if box is None:
+        return None
+    return "\n".join(ANSI_RE.sub("", ln).rstrip(" ") for ln in lines[box[0] + 1:box[1]]).strip("\n")
+
+
+def claude_input_state(screen):
+    """"empty" only for an input box whose prompt is empty or shows Claude's placeholder or suggestion (dim or grey,
+    possibly with its cursor cell first); "draft" when the user typed something; "blocked" for everything else
+    (menus, trust and permission prompts, no recognisable box). A whitelist: a screen this does not recognise is
+    never "empty"."""
+    lines = screen.rstrip("\n").split("\n")
+    plain = [ANSI_RE.sub("", ln).rstrip(" ") for ln in lines]
+    box = _box(lines)
+    if box is None:
         return "blocked"
+    top, bottom = box
     prompt = next((i for i in range(bottom - 1, top, -1) if plain[i].startswith("❯")), None)
     if prompt is None or not plain[prompt].startswith(PROMPT_PREFIX):
         return "blocked"
     text = plain[prompt][len(PROMPT_PREFIX):].strip()
     after = lines[prompt].split(PROMPT_PREFIX, 1)[1] if PROMPT_PREFIX in lines[prompt] else ""
-    dim = after.startswith("\x1b[2m")
-    # a dim run that ends (reset or normal intensity) and is followed by more text is a placeholder plus a draft
-    tail = re.split(r"\x1b\[(?:0|22)m", after[len("\x1b[2m"):], maxsplit=1) if dim else []
-    only_dim = dim and (len(tail) == 1 or not ANSI_RE.sub("", tail[1]).strip())
-    if re.match(r"\d+\.\s", text) or (text.startswith("/") and not only_dim):
-        return "blocked"  # a numbered option of a dialog, or a typed slash command with its menu (a dim one is
+    suggestion = _is_placeholder(after)
+    if re.match(r"\d+\.\s", text) or (text.startswith("/") and not suggestion):
+        return "blocked"  # a numbered option of a dialog, or a typed slash command with its menu (a faint one is
         # Claude suggesting the last command again in an empty box)
     if any(plain[i].strip() for i in range(top + 1, bottom) if i != prompt):
         return "draft"  # another line inside the box (e.g. a draft that starts with a blank line) is not empty
     if not text:
         return "empty"
-    if not dim:
-        return "draft"  # normal-intensity text: the user typed it
-    return "empty" if only_dim else "draft"
+    return "empty" if suggestion else "draft"

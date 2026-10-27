@@ -6,7 +6,11 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Fixed
-- `sampan send` (and the MCP `send`) no longer waits forever with 「對方畫面停在選單或提示」 when an idle Claude shows its dim suggestion of the last slash command (e.g. `❯ /context-tools:summary` in grey) in an empty prompt box: a dim suggestion counts as empty, a typed slash command still counts as its menu.
+- `sampan send` (and the MCP `send`) no longer waits forever with 「對方畫面停在選單或提示」 when an idle Claude shows its suggestion of what to type next (e.g. `❯ /context-tools:summary` in grey) in an empty prompt box: Claude's suggestion counts as empty in all the ways it draws one (dim, grey foreground, or its cursor cell then dim), while a typed slash command still counts as its menu and typed text as a draft.
+
+### Changed
+- After pasting a dispatch (or a completion notice) into Claude and pressing Enter, sampan looks at the prompt box again for about 3 seconds: if the text sampan pasted is still there it presses Enter once more (never pastes again), and if it still did not go the dispatch fails as 「已貼進輸入框但沒按到 Enter（…）：按了兩次 Enter，訊息還留在輸入框」.
+- A dispatch still queued 30 minutes after it was made fails with its last reason (「排隊 30 分鐘還送不出去（最後一次：…）」) instead of waiting forever; the sender is notified like any failure. Dispatches already sent and waiting for a reply have no such limit.
 
 ## [0.13.1] - 2026-10-27
 

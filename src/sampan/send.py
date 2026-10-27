@@ -22,6 +22,7 @@ from .tmux import Tmux
 
 POLL_S = 2
 NOT_SEEN_GRACE_S = 15  # right after delivery the transcript may not have the message yet
+QUEUE_LIMIT_S = 30 * 60  # a dispatch that still cannot be delivered after this long fails (with its last reason)
 STARTUP_GRACE_S = 120  # `sampan new --message`: how long a session that is not seen yet may take to come up
 TERMINAL_NAME = dispatch.TERMINAL_NAME  # only a person at the terminal
 UNREGISTERED_NAME = "未登記的 session"  # an agent that is not a sampan session (e.g. an MCP caller outside tmux)
@@ -285,6 +286,7 @@ def advance(cfg, run, did, *, sleep, snapshot_fn=None, status_fn=None, now=None,
                 dispatch.checkpoint(cfg.state_dir, items)
             if d.state == "queued":
                 _deliver(cfg, run, d, rows.get(d.to_name), sleep, now, save)
+                _expire(cfg, d, now)
             elif d.state == "sent":
                 _check(cfg, d, rows.get(d.to_name), now)
             if report and d.state in dispatch.FINISHED:
@@ -336,6 +338,17 @@ def _deliver(cfg, run, d, row, sleep, now, save):
         return
     d.reason = ""
     actionlog.append(cfg, "send", [f"派工 {d.id}：已送到 {d.to_name}"])
+
+
+def _expire(cfg, d, now):
+    """A dispatch still queued QUEUE_LIMIT_S after it was created fails, so a target that never becomes ready (or a
+    screen sampan cannot read) does not keep it waiting forever; the caller is told like any failure."""
+    created = parse_iso(d.created)
+    if d.state != "queued" or created is None or (now - created).total_seconds() <= QUEUE_LIMIT_S:
+        return
+    last = f"（最後一次：{d.reason}）" if d.reason else ""
+    _finish(d, "failed", now, f"排隊 {QUEUE_LIMIT_S // 60} 分鐘還送不出去{last}")
+    actionlog.append(cfg, "send", [f"派工 {d.id}：{d.reason}"])
 
 
 def _sending(d, now, save):

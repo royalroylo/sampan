@@ -8,9 +8,14 @@ import subprocess
 
 from .codex_daemon import CODEX_NOT_FOUND, first_line
 from .launch import codex_env
-from .screens import claude_input_state
+from .screens import claude_box_text, claude_input_state
 
 PASTE_SETTLE_S = 0.5  # let the agent take the bracketed paste before Enter
+VERIFY_S = 0.3  # after Enter: how often the box is looked at again
+VERIFY_LOOKS = 10  # how many looks before giving up (about 3 seconds)
+NUDGE_AFTER = 5  # still in the box after this many looks: press Enter once more (never paste again)
+OUR_MARKS = ("〔sampan", "[Pasted text")  # what a box holding our own paste shows (dispatch and notice texts start with 〔sampan)
+REASON_STUCK = "按了兩次 Enter，訊息還留在輸入框"
 CODEX_QUEUE_TIMEOUT_S = 30
 REASON_DRAFT = "對方輸入框有未送出的字"
 REASON_BLOCKED = "對方畫面停在選單或提示"
@@ -38,8 +43,10 @@ def compose(from_name, from_profile, did, message):
 
 
 def to_claude(tmux, pane_id, outbox, did, sleep):
-    """Paste the outbox file into an empty prompt and press Enter. None on success; else the reason, as a plain str when
-    nothing was pasted, or as Pasted when the text is in the box but Enter failed."""
+    """Paste the outbox file into an empty prompt and press Enter, then look again until the box no longer holds our
+    text (Enter can be lost while the paste settles): one more Enter if it is still there after NUDGE_AFTER looks,
+    never a second paste. None on success; else the reason, as a plain str when nothing was pasted, or as Pasted
+    when the text is in the box but Enter failed or did not send it."""
     state = claude_input_state(tmux.capture(pane_id, escapes=True))
     if state == "draft":
         return REASON_DRAFT
@@ -60,7 +67,20 @@ def to_claude(tmux, pane_id, outbox, did, sleep):
     r = tmux.send_keys(pane_id, "Enter")
     if r.returncode != 0:
         return Pasted(first_line(r.stderr) or f"tmux 結束碼 {r.returncode}")  # the text is already in the box
-    return None
+    for look in range(1, VERIFY_LOOKS + 1):
+        sleep(VERIFY_S)
+        if not _ours_in_box(tmux.capture(pane_id, escapes=True)):
+            return None  # sent (or someone else's text is there now: not ours to press Enter on)
+        if look == NUDGE_AFTER:
+            r = tmux.send_keys(pane_id, "Enter")
+            if r.returncode != 0:
+                return Pasted(first_line(r.stderr) or f"tmux 結束碼 {r.returncode}")
+    return Pasted(REASON_STUCK)
+
+
+def _ours_in_box(screen):
+    box = claude_box_text(screen)
+    return box is not None and any(m in box for m in OUR_MARKS)
 
 
 def to_codex(cfg, run, thread_id, text):
