@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.13.2] - 2026-10-27
+
 ### Fixed
 - `sampan send` (and the MCP `send`) no longer waits forever with 「對方畫面停在選單或提示」 when an idle Claude shows its suggestion of what to type next (e.g. the slash command just run, in grey) in an empty prompt box: a prompt line drawn only dim, grey (SGR 90 or 38;5;8), or with Claude's cursor cell first and the rest dim or grey, counts as empty; a typed slash command still counts as its menu and typed text as a draft. Extended colour parameters (38, 48, 58) are no longer read as attributes.
 
@@ -372,7 +374,8 @@ First public release. Versions up to 0.5.3 were released privately under the nam
 ### Security
 - Credentials in git URLs are no longer shown in output.
 
-[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.13.1...HEAD
+[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.13.2...HEAD
+[0.13.2]: https://github.com/royalroylo/sampan/releases/tag/v0.13.2
 [0.13.1]: https://github.com/royalroylo/sampan/releases/tag/v0.13.1
 [0.13.0]: https://github.com/royalroylo/sampan/releases/tag/v0.13.0
 [0.12.0]: https://github.com/royalroylo/sampan/releases/tag/v0.12.0
