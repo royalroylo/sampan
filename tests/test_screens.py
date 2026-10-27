@@ -102,17 +102,18 @@ class ClaudeInputStateTest(unittest.TestCase):
     def test_dim_slash_command_suggestion_is_empty(self):
         # Claude suggests the last slash command again as dim text in an empty box: nobody typed it
         screen = fixture("claude_slash_suggestion.ansi")
-        self.assertIn("\x1b[2m/context-tools:summary\x1b[0m", screen)
+        self.assertIn("\x1b[2m/compact\x1b[0m", screen)
         self.assertEqual(claude_input_state(screen), "empty")
         self.assertEqual(claude_input_state(screen.replace("\x1b[2m", "")), "blocked")  # typed: a slash menu
-        typed = screen.replace("summary\x1b[0m", "summary\x1b[0m x")
+        typed = screen.replace("compact\x1b[0m", "compact\x1b[0m x")
         self.assertNotEqual(claude_input_state(typed), "empty")  # suggestion plus typed text: never pasted into
 
     def test_other_placeholder_styles_are_empty(self):
         rule = "─" * 40
         for body in ("\x1b[7m/\x1b[27m\x1b[2mcontext-tools:summary\x1b[0m",  # Claude's cursor cell, then dim
                      "\x1b[7mT\x1b[27m\x1b[2mry \"fix lint\"\x1b[0m",
-                     "\x1b[90m/context-tools:summary\x1b[39m",  # grey foreground
+                     "\x1b[7mR\x1b[0;2mun the tests\x1b[0m",  # how tmux re-encodes the cursor form
+                     "\x1b[90m/compact\x1b[39m",  # grey foreground
                      "\x1b[38;5;8mTry \"fix lint\"\x1b[39m"):
             with self.subTest(body=body):
                 self.assertEqual(claude_input_state(f"{rule}\n❯\xa0{body}\n{rule}\n  footer"), "empty")
@@ -126,6 +127,12 @@ class ClaudeInputStateTest(unittest.TestCase):
                            ("\x1b[38;5;246mgrey-ish\x1b[39m", "draft")):  # only 90 and 38;5;8 count as grey
             with self.subTest(body=body):
                 self.assertEqual(claude_input_state(f"{rule}\n❯\xa0{body}\n{rule}\n  footer"), want)
+
+    def test_extended_colour_values_are_not_attributes(self):
+        rule = "─" * 40
+        for body in ("\x1b[58;2;90;90;90mhello", "\x1b[48;5;2mhello", "\x1b[38;2;2;2;2mhello"):
+            with self.subTest(body=body):
+                self.assertEqual(claude_input_state(f"{rule}\n❯\xa0{body}\n{rule}\n  footer"), "draft")
 
     def test_box_text(self):
         rule = "─" * 40

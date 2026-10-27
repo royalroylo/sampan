@@ -34,7 +34,7 @@ def writes(run):
 
 
 RULE = "─" * 40
-OURS = f"{RULE}\n❯\xa0〔sampan 轉送｜來自 終端機｜派工 ab12〕\n{RULE}\n  footer"
+OURS = f"{RULE}\n❯\xa0{source_line(None, '', 'ab12')[:30]}\n  {source_line(None, '', 'ab12')[30:]}\n{RULE}\n  footer"  # wrapped
 PASTED = f"{RULE}\n❯\xa0[Pasted text #1 +3 lines]\n{RULE}\n  footer"
 
 
@@ -62,7 +62,7 @@ class SourceLineTest(unittest.TestCase):
 class ToClaudeTest(unittest.TestCase):
     def setUp(self):
         self.state = Path(tempfile.mkdtemp())
-        self.outbox = write_outbox(self.state, "ab12", "hello")
+        self.outbox = write_outbox(self.state, "ab12", compose(None, "", "ab12", "hello"))
         self.sleeps = []
 
     def deliver(self, tmux):
@@ -121,6 +121,30 @@ class ToClaudeTest(unittest.TestCase):
         self.assertIn("還留在輸入框", r)
         self.assertEqual(len(run.called(["tmux", "-u", "send-keys"])), 2)  # one nudge, no more
         self.assertEqual(self.sleeps, [0.5] + [0.3] * 10)
+
+    def test_our_text_echoed_as_a_suggestion_is_never_nudged(self):
+        dim = f"{RULE}\n❯\xa0\x1b[2m{source_line(None, '', 'ab12')}\x1b[0m\n{RULE}\n  footer"
+        run, tmux = tmux_with("")
+        run.on(["tmux", "-u", "capture-pane"], screens_then(screen("claude_empty_placeholder.ansi"), [dim]))
+        self.assertIsNone(self.deliver(tmux))
+        self.assertEqual(len(run.called(["tmux", "-u", "send-keys"])), 1)
+
+    def test_our_marker_elsewhere_than_the_start_of_the_prompt_line_is_not_ours(self):
+        other = f"{RULE}\n❯\xa0see {source_line(None, '', 'ab12')}\n{RULE}\n  footer"
+        run, tmux = tmux_with("")
+        run.on(["tmux", "-u", "capture-pane"], screens_then(screen("claude_empty_placeholder.ansi"), [other]))
+        self.assertIsNone(self.deliver(tmux))
+        self.assertEqual(len(run.called(["tmux", "-u", "send-keys"])), 1)
+
+    def test_copy_mode_before_the_nudge_presses_nothing(self):
+        run, tmux = tmux_with("")
+        run.on(["tmux", "-u", "capture-pane"], screens_then(screen("claude_empty_placeholder.ansi"), [OURS]))
+        modes = ["0\n", "1\n"]
+        run.on(["tmux", "-u", "display-message"], lambda args: cp(0, modes.pop(0) if len(modes) > 1 else modes[0]))
+        r = self.deliver(tmux)
+        self.assertIsInstance(r, Pasted)
+        self.assertIn("捲動模式", r)
+        self.assertEqual(len(run.called(["tmux", "-u", "send-keys"])), 1)
 
     def test_someone_elses_text_in_the_box_is_not_nudged(self):
         run, tmux = tmux_with("")

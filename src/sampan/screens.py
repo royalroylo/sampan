@@ -365,7 +365,7 @@ def _cells(text):
                     inv = False
                 elif p == 90:
                     grey = True
-                elif p in (38, 48):
+                elif p in (38, 48, 58):  # extended colours: their parameters are values, not attributes
                     if p == 38:
                         grey = ps[j + 1:j + 3] == [5, 8]
                     j += 2 if ps[j + 1:j + 2] == [5] else 4 if ps[j + 1:j + 2] == [2] else 0
@@ -415,6 +415,17 @@ def claude_box_text(screen):
     if box is None:
         return None
     return "\n".join(ANSI_RE.sub("", ln).rstrip(" ") for ln in lines[box[0] + 1:box[1]]).strip("\n")
+
+
+def claude_prompt_text(screen):
+    """The plain text after ❯ NBSP on the input box's prompt line, or None when there is no box or prompt line."""
+    lines = screen.rstrip("\n").split("\n")
+    box = _box(lines)
+    if box is None:
+        return None
+    plain = [ANSI_RE.sub("", ln).rstrip(" ") for ln in lines]
+    prompt = next((i for i in range(box[1] - 1, box[0], -1) if plain[i].startswith(PROMPT_PREFIX)), None)
+    return None if prompt is None else plain[prompt][len(PROMPT_PREFIX):]
 
 
 def claude_input_state(screen):

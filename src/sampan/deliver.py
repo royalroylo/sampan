@@ -8,13 +8,14 @@ import subprocess
 
 from .codex_daemon import CODEX_NOT_FOUND, first_line
 from .launch import codex_env
-from .screens import claude_box_text, claude_input_state
+from .screens import claude_input_state, claude_prompt_text
 
 PASTE_SETTLE_S = 0.5  # let the agent take the bracketed paste before Enter
 VERIFY_S = 0.3  # after Enter: how often the box is looked at again
 VERIFY_LOOKS = 10  # how many looks before giving up (about 3 seconds)
 NUDGE_AFTER = 5  # still in the box after this many looks: press Enter once more (never paste again)
-OUR_MARKS = ("〔sampan", "[Pasted text")  # what a box holding our own paste shows (dispatch and notice texts start with 〔sampan)
+PASTE_MARK = "[Pasted text"  # how Claude shows a long or multi-line paste on the prompt line
+OURS_MIN = 8  # at least this many characters of our first line must match the prompt line
 REASON_STUCK = "按了兩次 Enter，訊息還留在輸入框"
 CODEX_QUEUE_TIMEOUT_S = 30
 REASON_DRAFT = "對方輸入框有未送出的字"
@@ -67,20 +68,40 @@ def to_claude(tmux, pane_id, outbox, did, sleep):
     r = tmux.send_keys(pane_id, "Enter")
     if r.returncode != 0:
         return Pasted(first_line(r.stderr) or f"tmux 結束碼 {r.returncode}")  # the text is already in the box
+    first = _first_line(outbox)
     for look in range(1, VERIFY_LOOKS + 1):
         sleep(VERIFY_S)
-        if not _ours_in_box(tmux.capture(pane_id, escapes=True)):
-            return None  # sent (or someone else's text is there now: not ours to press Enter on)
+        if not _ours_pending(tmux.capture(pane_id, escapes=True), first):
+            # gone from the prompt line: sent. Also when the screen cannot be read or shows something else (a
+            # dialog, Claude's suggestion, someone's draft): never press a key on what is not our paste; if it was
+            # not sent after all, the reply check fails it later (找不到回覆), still at most once
+            return None
         if look == NUDGE_AFTER:
+            if tmux.pane_in_mode(pane_id) is not False:  # scrolled meanwhile: Enter would go to tmux
+                return Pasted(REASON_COPY_MODE)
             r = tmux.send_keys(pane_id, "Enter")
             if r.returncode != 0:
                 return Pasted(first_line(r.stderr) or f"tmux 結束碼 {r.returncode}")
     return Pasted(REASON_STUCK)
 
 
-def _ours_in_box(screen):
-    box = claude_box_text(screen)
-    return box is not None and any(m in box for m in OUR_MARKS)
+def _first_line(outbox):
+    try:
+        return outbox.read_text(encoding="utf-8").split("\n", 1)[0].strip()
+    except OSError:
+        return ""
+
+
+def _ours_pending(screen, first):
+    """The input box holds typed (not suggested) text and its prompt line is our paste: Claude's paste marker, or the
+    start of our first line (as much of it as the line shows, at least OURS_MIN characters)."""
+    if claude_input_state(screen) != "draft":
+        return False
+    text = (claude_prompt_text(screen) or "").strip()
+    if text.startswith(PASTE_MARK):
+        return True
+    n = min(len(first), len(text))
+    return n >= min(OURS_MIN, len(first)) and n > 0 and text[:n] == first[:n]
 
 
 def to_codex(cfg, run, thread_id, text):

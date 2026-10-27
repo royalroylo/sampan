@@ -923,6 +923,13 @@ class QueueLimitTest(Base):
         d = self.advance(tmux_runner(), d.id, later(send.QUEUE_LIMIT_S + 1))
         self.assertEqual(d.state, "sent")
 
+    def test_waiting_for_a_busy_or_stopped_target_has_no_limit(self):
+        d = self.submit()
+        self.set_row("b", agent_status="busy")
+        self.assertEqual(self.advance(FakeRunner(strict=True), d.id, later(send.QUEUE_LIMIT_S * 4)).state, "queued")
+        self.set_row("b", state=State.STOPPED, agent_status="-", pane=None)
+        self.assertEqual(self.advance(FakeRunner(strict=True), d.id, later(send.QUEUE_LIMIT_S * 5)).state, "queued")
+
     def test_a_sent_dispatch_waiting_for_its_reply_has_no_limit(self):
         d = self.submit()
         self.advance(tmux_runner(), d.id)

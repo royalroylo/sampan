@@ -41,6 +41,7 @@ REASON_NO_TEXT_YET = "對方閒著，但還沒看到回覆文字"
 REASON_NO_TEXT = "對方這輪結束了，但沒有回覆文字"
 REASON_STOP_WATCHING = "不再等回覆"
 BUSY = {"busy": "對方正在忙", "working": "對方正在忙", "waiting": "對方在等使用者回應"}
+WAITING = {*BUSY.values(), REASON_NOT_RUNNING, REASON_NO_THREAD}  # queued reasons that clear by themselves: no limit
 STATE_LABELS = {"queued": "排隊中", "sent": "已送出、等回覆", "done": "已回覆", "failed": "失敗", "cancelled": "已取消"}
 LOG_PREVIEW = 100
 
@@ -341,10 +342,14 @@ def _deliver(cfg, run, d, row, sleep, now, save):
 
 
 def _expire(cfg, d, now):
-    """A dispatch still queued QUEUE_LIMIT_S after it was created fails, so a target that never becomes ready (or a
-    screen sampan cannot read) does not keep it waiting forever; the caller is told like any failure."""
+    """A dispatch still queued QUEUE_LIMIT_S after it was created, for a reason that does not go away by itself (a
+    screen sampan cannot use: a menu, a draft, copy mode, a status it cannot read; a `codex queue` error), fails, so it
+    does not wait forever; the caller is told like any failure. Waiting for the target (busy, waiting for its user,
+    not running, no thread yet) has no limit, as before."""
     created = parse_iso(d.created)
     if d.state != "queued" or created is None or (now - created).total_seconds() <= QUEUE_LIMIT_S:
+        return
+    if d.reason in WAITING or d.reason.startswith("對方狀態："):
         return
     last = f"（最後一次：{d.reason}）" if d.reason else ""
     _finish(d, "failed", now, f"排隊 {QUEUE_LIMIT_S // 60} 分鐘還送不出去{last}")
