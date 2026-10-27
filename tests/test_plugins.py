@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from sampan.plugins import cmd_sync, plan_sync, read_state, status_lines
+from sampan.plugins import cmd_sync, plan_prune, plan_sync, read_state, status_lines
 from tests.fakes import FakeRunner, cp
 from tests.helpers import TOML, km_source, make_env
 
@@ -25,6 +25,32 @@ def write_plugins(cfg, profile, installed=None, known=None, settings=None):
 
 GOOD_KNOWN = {"claude-plugins-official": "anthropics/claude-plugins-official",
               "my-plugins": "owner/my-plugins"}
+# a config that lists no official marketplace (and so no plugin from it)
+NO_OFFICIAL = TOML.replace('claude-plugins-official = "anthropics/claude-plugins-official"\n', "") \
+    .replace(', "superpowers@claude-plugins-official"', "")
+
+
+class OfficialMarketplaceTest(unittest.TestCase):
+    """Claude adds its official marketplace by itself: unlisted and unused, sampan leaves it alone."""
+
+    def setUp(self):
+        self.cfg = make_env(Path(tempfile.mkdtemp()), NO_OFFICIAL)
+        assert "claude-plugins-official" not in self.cfg.marketplaces
+        write_plugins(self.cfg, "alice", known=GOOD_KNOWN)
+        self.alice = self.cfg.profiles["alice"]
+
+    def test_sync_does_not_warn(self):
+        _c, _e, warnings = plan_sync(self.cfg, self.alice, read_state(self.alice))
+        self.assertFalse(any("claude-plugins-official" in w for w in warnings), warnings)
+
+    def test_prune_keeps_it(self):
+        cmds, _skipped = plan_prune(self.cfg, self.alice, read_state(self.alice))
+        self.assertFalse(any("claude-plugins-official" in c for c, _cwd in cmds), cmds)
+
+    def test_another_source_under_that_name_is_pruned(self):
+        write_plugins(self.cfg, "alice", known={**GOOD_KNOWN, "claude-plugins-official": "someone/else"})
+        cmds, _skipped = plan_prune(self.cfg, self.alice, read_state(self.alice))
+        self.assertIn(["claude", "plugin", "marketplace", "remove", "claude-plugins-official"], [c for c, _ in cmds])
 
 
 class StateTest(unittest.TestCase):

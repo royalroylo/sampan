@@ -4,7 +4,7 @@ import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .config import redact, same_source, strip_credentials
+from .config import claude_added, redact, same_source, strip_credentials
 
 
 @dataclass
@@ -123,7 +123,8 @@ def plan_sync(cfg, profile, state):
         verb = "update" if pid in state.installed else "install"
         cmds.append(["claude", "plugin", verb, pid, "--scope", "user"])
     for m in sorted(set(state.marketplaces) - set(cfg.marketplaces)):
-        warnings.append(f"清單外的 marketplace：{m}")
+        if not claude_added(m, state.marketplaces[m]):
+            warnings.append(f"清單外的 marketplace：{m}")
     for pid in sorted(state.enabled - set(profile.plugins)):
         warnings.append(f"清單外但已啟用：{pid}")
     if state.scoped:
@@ -154,7 +155,8 @@ def plan_prune(cfg, profile, state):
         skipped.append(f"{len(home)} 個 plugin 的 ~ project scope 來自 ~/.claude/settings.json（預設 profile 的 user 設定），不動；"
                        f"成因是有 {profile.name} 的 session 工作目錄是 ~（見 sampan doctor）")
     for m in sorted(set(state.marketplaces) - set(cfg.marketplaces)):
-        cmds.append((["claude", "plugin", "marketplace", "remove", m], None))
+        if not claude_added(m, state.marketplaces[m]):  # Claude's own default, not sampan's to remove
+            cmds.append((["claude", "plugin", "marketplace", "remove", m], None))
     return cmds, skipped
 
 

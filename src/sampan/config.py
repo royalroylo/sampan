@@ -50,6 +50,14 @@ def source_key(src):
     return s
 
 
+OFFICIAL_MARKETPLACE = ("claude-plugins-official", "anthropics/claude-plugins-official")
+
+
+def claude_added(name, src):
+    """Claude's own official marketplace, which Claude adds by itself: left alone when the config does not list it."""
+    return name == OFFICIAL_MARKETPLACE[0] and same_source(src, OFFICIAL_MARKETPLACE[1])
+
+
 def same_source(a, b):
     """Whether two marketplace sources point to the same repo (a github.com URL equals owner/repo; .git and case are ignored)."""
     return valid_source(a) and valid_source(b) and source_key(a) == source_key(b)

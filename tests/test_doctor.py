@@ -16,7 +16,7 @@ from tests.fakes import FakeRunner, cp, pane_line, ps_line
 from tests.helpers import TOML, local_tz, make_env
 from tests.test_claude_state import write_session
 from tests.test_codex_state import make_db
-from tests.test_plugins import GOOD_KNOWN, write_plugins
+from tests.test_plugins import GOOD_KNOWN, NO_OFFICIAL, write_plugins
 
 NOW = datetime(2026, 10, 20, 12, 0, tzinfo=timezone(timedelta(hours=8)))
 SAMPAN = "/Users/u/.local/bin/sampan"
@@ -85,6 +85,18 @@ class DoctorTest(unittest.TestCase):
         titles = self.failing()
         self.assertTrue(any("同一個 repo" in t for t in titles))
         self.assertTrue(any("清單外" in t and "extra-hooks" in t for t in titles))
+
+    def test_official_marketplace_left_by_claude_is_not_reported(self):
+        # a new machine: Claude adds its official marketplace on its own, the config lists none, no plugin uses it
+        self.cfg = make_env(self.cfg.path.parent, NO_OFFICIAL)
+        titles = [c.title for c in self.checks()]
+        self.assertFalse(any("claude-plugins-official" in t for t in titles), titles)
+        self.assertFalse(any("marketplace remove" in c.detail for c in self.checks()))
+
+    def test_official_name_with_another_source_is_still_reported(self):
+        self.cfg = make_env(self.cfg.path.parent, NO_OFFICIAL)
+        write_plugins(self.cfg, "work", known={**GOOD_KNOWN, "claude-plugins-official": "someone/else"})
+        self.assertTrue(any("清單外" in t and "claude-plugins-official" in t for t in self.failing()))
 
     def test_wrong_source_fails(self):
         write_plugins(self.cfg, "work", known={**GOOD_KNOWN, "claude-plugins-official": "someone/else"})

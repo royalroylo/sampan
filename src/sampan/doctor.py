@@ -15,7 +15,7 @@ from . import update as update_mod
 from .claude_state import stale_session_files
 from .clock import fmt_local, parse_iso
 from .codex_state import _state_db
-from .config import same_source, source_key, valid_source
+from .config import claude_added, same_source, source_key, valid_source
 from .hook import hook_status
 from .observe import PROC_ROOT, SPLIT_HINT, live_by_pane, multi_agent_sessions
 from .plugins import read_state
@@ -94,7 +94,7 @@ def _plugins(cfg):
                 used = _in_use(st, name)
                 if used:
                     out.append(_keep_unlisted(p, name, "marketplace", used, repo))
-                else:
+                elif not claude_added(name, repo):
                     out.append(Check("fail", f"{p.name}：清單外的 marketplace {name}（{repo or '本機或不支援的來源'}）",
                                      f"CLAUDE_CONFIG_DIR={p.config_dir} claude plugin marketplace remove {name}"))
             elif not same_source(repo, cfg.marketplaces[name]):
