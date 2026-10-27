@@ -202,16 +202,47 @@ class McpInstallTest(unittest.TestCase):
         self.assertEqual(len(self.calls(r, "add")), 2)  # the Claude profiles were still installed
         self.assertEqual(mcp_install.uninstall(self.cfg, self.runner(installed={"codex"}), self.o), 1)
 
+    def work_dir(self):
+        return str(self.cfg.profiles["work"].config_dir)
+
+    def test_profile_limits_uninstall_to_that_profile(self):
+        self.write_codex(codex_approval.with_prompt(INSTALLED))
+        before = self.codex_file().read_text()
+        r = self.runner(installed={"default", self.work_dir(), "codex"})
+        self.assertEqual(mcp_install.uninstall(self.cfg, r, self.o, profiles=["work"]), 0)
+        rem = self.calls(r, "remove")
+        self.assertEqual(len(rem), 1)
+        self.assertEqual(rem[0]["env"].get("CLAUDE_CONFIG_DIR"), self.work_dir())
+        self.assertEqual(self.codex_file().read_text(), before)  # Codex not chosen: its tables stay
+        self.assertFalse(any("alice" in s for s in self.out), self.out)
+
+    def test_profile_can_name_codex_and_repeat(self):
+        r = self.runner(installed={"default", self.work_dir(), "codex"})
+        self.assertEqual(mcp_install.uninstall(self.cfg, r, self.o, profiles=["cx", "alice"]), 0)
+        self.assertEqual([c["args"][0] for c in self.calls(r, "remove")], ["claude", "codex"])  # config order
+        r = self.runner()
+        self.assertEqual(mcp_install.install(self.cfg, r, self.o, sampan_path=SP, profiles=["work"]), 0)
+        self.assertEqual(len(self.calls(r, "add")), 1)
+
+    def test_unknown_profile_refuses_and_runs_nothing(self):
+        r = self.runner(installed={"default", self.work_dir(), "codex"})
+        self.assertEqual(mcp_install.uninstall(self.cfg, r, self.o, profiles=["work", "nope"]), 2)
+        self.assertEqual(r.calls, [])
+        self.assertEqual(self.out, ["❌ 沒有這個使用中的 profile：nope（可用：alice, work, cx）"])
+        self.assertFalse(actionlog.log_path(self.cfg).exists())
+
     def test_cli_wires_install_and_uninstall(self):
         with mock.patch("sampan.cli.load_config", return_value=self.cfg), \
                 mock.patch("sampan.mcp_install.install", return_value=0) as i, \
                 mock.patch("sampan.doctor.current_sampan", return_value=SP):
             self.assertEqual(cli.main(["mcp", "install", "--dry-run"]), 0)
-        self.assertEqual(i.call_args.kwargs, {"sampan_path": SP, "dry_run": True})
+        self.assertEqual(i.call_args.kwargs, {"sampan_path": SP, "dry_run": True, "profiles": []})
         with mock.patch("sampan.cli.load_config", return_value=self.cfg), \
                 mock.patch("sampan.mcp_install.uninstall", return_value=0) as u:
             self.assertEqual(cli.main(["mcp", "uninstall"]), 0)
-        self.assertEqual(u.call_args.kwargs, {"dry_run": False})
+            self.assertEqual(cli.main(["mcp", "uninstall", "--profile", "work", "--profile", "cx"]), 0)
+        self.assertEqual(u.call_args_list[0].kwargs, {"dry_run": False, "profiles": []})
+        self.assertEqual(u.call_args_list[1].kwargs, {"dry_run": False, "profiles": ["work", "cx"]})
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@ import os
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -181,6 +181,17 @@ class CliTest(unittest.TestCase):
         self.assertEqual(fg.call_args_list[1].args[3], "b")
         self.assertFalse(fg.call_args_list[1].kwargs["dry_run"])
 
+    def test_cli_forget_takes_several_names_and_goes_on_after_a_failure(self):
+        with mock.patch("sampan.session_run.cmd_forget", side_effect=[0, 2, 1]) as fg, \
+                mock.patch("sys.stdin.isatty", return_value=False):
+            self.assertEqual(cli.main(["forget", "a", "b", "a", "c", "--dry-run"]), 2)
+        self.assertEqual([c.args[3] for c in fg.call_args_list], ["a", "b", "c"])  # a repeated name once
+        self.assertTrue(all(c.kwargs["dry_run"] for c in fg.call_args_list))
+        with mock.patch("sampan.session_run.cmd_forget") as fg, redirect_stderr(io.StringIO()), \
+                self.assertRaises(SystemExit):
+            cli.main(["forget"])
+        self.assertEqual(fg.call_count, 0)
+
     def test_statusline_passes_wrapped_command_and_stdin(self):
         stdin = mock.Mock()
         stdin.buffer.read.return_value = b'{"x": 1}'
@@ -350,6 +361,15 @@ class CliTest(unittest.TestCase):
         with mock.patch("sampan.send.cmd_show") as sh, redirect_stdout(buf):
             self.assertEqual(cli.main(["dispatches", "show"]), 2)
         self.assertEqual(sh.call_count, 0)
+
+    def test_dispatches_wait_without_show_is_refused(self):
+        for argv in (["dispatches", "--wait", "5"], ["dispatches", "cancel", "ab12", "--wait", "5"]):
+            buf = io.StringIO()
+            with mock.patch("sampan.send.cmd_dispatches") as cd, mock.patch("sampan.send.cmd_cancel") as cc, \
+                    mock.patch("sampan.send.command_caller", return_value=TERMINAL), redirect_stdout(buf):
+                self.assertEqual(cli.main(argv), 2, argv)
+            self.assertEqual((cd.call_count, cc.call_count), (0, 0))
+            self.assertEqual(buf.getvalue().strip(), "❌ --wait 只能跟 show 一起用：sampan dispatches show <編號> --wait 秒")
 
     def test_send_dash_reads_stdin(self):
         with mock.patch("sampan.send.cmd_send", return_value=0) as cs, mock.patch("sys.stdin", io.StringIO("from\nstdin $x `y`\n")), \

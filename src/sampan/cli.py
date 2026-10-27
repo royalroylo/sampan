@@ -58,8 +58,8 @@ def build_parser():
     sw.add_argument("profile")
     sw.add_argument("--timeout", type=int, default=60, help="等 claude 結束／接回的秒數（預設 60）")
     sw.add_argument("--dry-run", action="store_true")
-    fg = sub.add_parser("forget", help="從登記表移除一個沒在跑的 session（對話紀錄不刪，會印出手動接回的指令）")
-    fg.add_argument("name")
+    fg = sub.add_parser("forget", help="從登記表移除沒在跑的 session（可一次多個；對話紀錄不刪，會印出手動接回的指令）")
+    fg.add_argument("names", nargs="+", metavar="name")
     fg.add_argument("--dry-run", action="store_true")
     for verb, help_ in (("retire", "標記為不再重開"), ("activate", "恢復為重開")):
         sv = sub.add_parser(verb, help=help_)
@@ -85,6 +85,7 @@ def build_parser():
     for verb, help_ in (("install", "把 sampan MCP 裝進各啟用的 Claude profile 與 Codex"), ("uninstall", "從各 profile 與 Codex 移除 sampan MCP")):
         mi = mc.add_parser(verb, help=help_)
         mi.add_argument("--dry-run", action="store_true")
+        mi.add_argument("--profile", action="append", default=[], help="只處理這個 profile（可重複；Codex 用它的 profile 名稱）；預設全部")
     sub.add_parser("status", help="登記表與實際狀態的差異、最後活動、context 用量")
     sv = sub.add_parser("save", help="記錄每個 tmux session 的 agent、profile 與對話 id")
     sv.add_argument("--quiet", action="store_true", help="沒有警告時不輸出（給 launchd 用）")
@@ -419,6 +420,9 @@ def _dispatch(cfg, args):
         return cmd_send(cfg, run, out, args.name, message, wait=args.wait, timeout=args.timeout, caller=caller)
     if cmd == "dispatches":
         from .send import cmd_cancel, cmd_dispatches, cmd_show
+        if args.wait and args.action != "show":
+            out("❌ --wait 只能跟 show 一起用：sampan dispatches show <編號> --wait 秒")
+            return 2
         if args.action in ("cancel", "show"):
             if not args.id:
                 out(f"❌ 用法：sampan dispatches {args.action} <編號>")
@@ -438,8 +442,8 @@ def _dispatch(cfg, args):
         from .doctor import current_sampan
         from .runner import run
         if args.action == "install":
-            return mcp_install.install(cfg, run, out, sampan_path=current_sampan(), dry_run=args.dry_run)
-        return mcp_install.uninstall(cfg, run, out, dry_run=args.dry_run)
+            return mcp_install.install(cfg, run, out, sampan_path=current_sampan(), dry_run=args.dry_run, profiles=args.profile)
+        return mcp_install.uninstall(cfg, run, out, dry_run=args.dry_run, profiles=args.profile)
     if cmd == "mcp":
         from . import mcp_server
         from .runner import no_stdin
@@ -491,7 +495,8 @@ def _dispatch(cfg, args):
         if cmd == "rename":
             return session_run.cmd_rename(cfg, run, out, args.name, args.new)
         if cmd == "forget":
-            return session_run.cmd_forget(cfg, run, out, args.name, dry_run=args.dry_run)
+            # each name on its own (own lock, own log line); a failure does not stop the rest, the worst code is returned
+            return max(session_run.cmd_forget(cfg, run, out, n, dry_run=args.dry_run) for n in dict.fromkeys(args.names))
         if cmd == "switch":
             on_prompt, want = _prompt_fn()
             rc = session_run.cmd_switch(cfg, run, out, args.name, args.profile, dry_run=args.dry_run,

@@ -56,12 +56,21 @@ def _codex_approval(cfg, out, confirm, dry_run, *, adding=False):
     return 0
 
 
-def _apply(cfg, run, out, build, *, want_installed, dry_run, done, skip, codex_confirm, codex_first):
+def _apply(cfg, run, out, build, *, want_installed, dry_run, done, skip, codex_confirm, codex_first, profiles=()):
     """codex_confirm / codex_first: for Codex, the approval tables are set to codex_confirm before `codex mcp …`
-    (codex_first) or after it, also when that is skipped."""
+    (codex_first) or after it, also when that is skipped. profiles: only these labels (empty = all); an unknown one
+    refuses before anything runs."""
+    targets = _targets(cfg)
+    labels = [t[0] for t in targets]
+    unknown = [n for n in dict.fromkeys(profiles) if n not in labels]
+    if unknown:
+        out(f"❌ 沒有這個使用中的 profile：{', '.join(unknown)}（可用：{', '.join(labels)}）")
+        return 2
+    if profiles:
+        targets = [t for t in targets if t[0] in profiles]
     out = actionlog.tee(cfg, "mcp", out)
     rc = 0
-    for name, agent, env in _targets(cfg):
+    for name, agent, env in targets:
         need = _installed(run, agent, env) == want_installed
         if agent == "codex" and codex_first:
             rc |= _codex_approval(cfg, out, codex_confirm, dry_run)
@@ -84,18 +93,18 @@ def _apply(cfg, run, out, build, *, want_installed, dry_run, done, skip, codex_c
     return rc
 
 
-def install(cfg, run, out, *, sampan_path, dry_run=False):
+def install(cfg, run, out, *, sampan_path, dry_run=False, profiles=()):
     if Path(sampan_path).name != "sampan":  # e.g. `python -m sampan`: the agents would be told to start something that does not exist
         out(f"❌ 找不到 sampan 執行檔（{sampan_path}），沒裝")
         return 2
     return _apply(cfg, run, out, lambda a: _add_argv(a, sampan_path), want_installed=False,
                   dry_run=dry_run, done="已裝 sampan MCP（重開該 profile 的 session 才會出現工具）",
-                  skip="已裝，略過", codex_confirm=cfg.mcp_confirm, codex_first=False)
+                  skip="已裝，略過", codex_confirm=cfg.mcp_confirm, codex_first=False, profiles=profiles)
 
 
-def uninstall(cfg, run, out, *, dry_run=False):
+def uninstall(cfg, run, out, *, dry_run=False, profiles=()):
     return _apply(cfg, run, out, _remove_argv, want_installed=True, dry_run=dry_run,
-                  done="已移除 sampan MCP", skip="沒裝，略過", codex_confirm=False, codex_first=True)
+                  done="已移除 sampan MCP", skip="沒裝，略過", codex_confirm=False, codex_first=True, profiles=profiles)
 
 
 def _claude_has(profile):

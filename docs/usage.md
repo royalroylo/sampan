@@ -194,7 +194,7 @@ Claude Code 只在狀態列指令的輸入裡提供 5h／週額度，所以要�
 | session 換 profile（換帳號）繼續同一段對話 | `sampan switch <名稱> <profile> [--dry-run]`（或 ui 按 P）：執行中的照 `sampan move` 的流程在原目錄、用新 profile 接回；已停止的改登記表後直接接回。逐字稿在新 profile 讀不到時（各 profile 的 `projects/` 沒共用）會**搬**過去而不是複製，永遠只有一份；新 profile 已經有同一段對話的逐字稿時不動，請你先決定留哪份。Codex 沒有 profile，不適用 |
 | session 換到別的工作目錄 | `sampan move <名稱> <目錄>`（或 ui 按 m）：結束 agent、在新目錄接回同一段對話、自動信任新目錄（只在提示顯示的路徑就是新目錄時）、更新登記表。目錄不存在會建立；忙碌中、worktree、自己的 pane 不動 |
 | 某個 session 以後不用重開 | `sampan retire <名稱>`（恢復：`sampan activate <名稱>`）；對 retired 的 session 打 `sampan restore <名稱>` 會說「<名稱> 是 retired；先 sampan activate <名稱>」 |
-| 把沒在跑的 session 從登記表移除 | `sampan forget <名稱> [--dry-run]`（或 ui 按 X）：只限已停止或 retired 的（還在 tmux 裡的先 `sampan stop`）；ui 裡會先問確定。移除後印出手動接回的指令；對話紀錄永遠不刪，移除前的登記表留在 `history/` |
+| 把沒在跑的 session 從登記表移除 | `sampan forget <名稱>… [--dry-run]`（或 ui 按 X；可一次給多個名稱，逐一處理，有一個失敗其他照做）：只限已停止或 retired 的（還在 tmux 裡的先 `sampan stop`）；ui 裡會先問確定。移除後印出手動接回的指令；對話紀錄永遠不刪，移除前的登記表留在 `history/` |
 | 整理 session 的資料夾 | `sampan folder list｜add <路徑>｜rename <路徑> <新名稱>｜rm <路徑>｜move <名稱或路徑>... <目的｜/>`，見「資料夾」 |
 | 傳訊息給一個 session | `sampan send <名稱> <訊息｜-> [--wait] [--timeout 秒]`，見「傳訊息給 session」 |
 | 看／取消派工 | `sampan dispatches [--all]`、`sampan dispatches show <編號> [--wait 秒]`、`sampan dispatches cancel <編號>` |
@@ -250,7 +250,7 @@ session 可以放進資料夾（多層用 `/`，例如 `客戶/甲`）。資料�
 - 最多送一次：按鍵或 `codex queue` 之前紀錄就先寫成已送出，sampan 送到一半被砍掉也不會重送（那筆之後會變「找不到回覆」）。
 - 回覆只認**這則訊息**：在對方的逐字稿找到這則訊息，取它之後、對方回到閒著時的最後一段回答。對方中途 `/clear`、換了對話或被停掉 → 派工變「失敗」並寫明原因（例如「找不到回覆」），不拿別段文字充數。對方沒回這則就有人打了下一則（例如按 Esc 中斷後繼續打字）→「對方沒回這則就換了下一則」；這輪結束了卻沒有回覆文字 →「對方這輪結束了，但沒有回覆文字」。
 - 不帶 `--wait`：試送一次，印出派工編號就結束（排隊中也是結束碼 0）；之後由 `--wait` 的指令、`sampan dispatches show`、MCP 工具或開著的 `sampan` 畫面接著推進（沒人盯時派工停在原狀態，下次有人盯再接著做）。
-- `sampan dispatches show <編號> [--wait 秒]`：推進一次（帶 `--wait` 就最多等那麼久），印出狀態、原因與**完整回覆**。沒帶 `--wait` 送出的，用它看回覆。
+- `sampan dispatches show <編號> [--wait 秒]`：推進一次（帶 `--wait` 就最多等那麼久），印出狀態、原因與**完整回覆**。沒帶 `--wait` 送出的，用它看回覆。`--wait` 只能跟 `show` 一起用，其他用法會報錯。
 - `--wait`：每 2 秒看一次，對方回完就把回覆印到 stdout（結束碼 0）；失敗印原因（結束碼 1）；超過 `--timeout`（預設 600 秒）印「還在做，派工 <編號>」（結束碼 124），派工照樣留著；按 Ctrl-C 也一樣留著（結束碼 130）。
 - `sampan dispatches` 列排隊中與等回覆的派工（編號、從誰、給誰、狀態、建立時間、原因）；`--all` 連已回覆、失敗、取消的一起列。`sampan dispatches cancel <編號>` 取消還沒送出的；已送出、等回覆的改成不再等回覆（訊息已在對方那裡，收不回）。
 - 開新 session 時一起送：`sampan new <名稱> <目標> <目錄> --message <訊息｜->`（`-` 從 stdin 讀）。訊息當作 agent 啟動時的第一個 prompt（`claude "$(cat <檔>)"`、`codex "$(cat <檔>)"`），所以資料夾信任等啟動提示照常先問，答完才送出；同時建一筆狀態直接是「已送出」的派工，之後照一般派工看回覆；新 session 還沒被認出來（還在開、停在信任提示、Codex 還沒有對話）時不判失敗，原因寫「對方 session 還在啟動」。下指令的不會收到完成通知，用 `sampan dispatches show` 看。沒帶 `--message` 時行為跟以前完全一樣。
@@ -258,7 +258,7 @@ session 可以放進資料夾（多層用 `/`，例如 `客戶/甲`）。資料�
 
 ## 讓 agent 用 sampan
 
-`sampan mcp serve` 是一個 stdio MCP server：agent（Claude Code、Codex）透過它的工具 `list_sessions`、`send`、`new_session`、`dispatch_result`、`cancel_dispatch` 傳訊息給其他 session、開新 session、看回覆，規則跟 `sampan send` 一樣。用 `sampan mcp install` 把它登記到每個啟用的 Claude profile 與 Codex（`sampan mcp uninstall` 移除，兩者都有 `--dry-run`），裝好後重開該 profile 的 session 才看得到工具。
+`sampan mcp serve` 是一個 stdio MCP server：agent（Claude Code、Codex）透過它的工具 `list_sessions`、`send`、`new_session`、`dispatch_result`、`cancel_dispatch` 傳訊息給其他 session、開新 session、看回覆，規則跟 `sampan send` 一樣。用 `sampan mcp install` 把它登記到每個啟用的 Claude profile 與 Codex（`sampan mcp uninstall` 移除，兩者都有 `--dry-run`，也都可用 `--profile <名稱>` 只處理指定的 profile，可重複），裝好後重開該 profile 的 session 才看得到工具。
 
 - 預設 `[mcp] confirm = true`：會動作的工具（`send`、`new_session`、`cancel_dispatch`）每次都由 agent 自己的權限詢問問你。sampan 在這三個工具上標記「需要使用者互動」，Claude Code 每次呼叫都會跳自己的權限提示（終端機每次都問，auto／bypass 模式也問，沒有「不再詢問」；Remote Control 照官方文件應該會顯示完整的權限提示、不給一鍵核准，但還沒在手機上實測過）；Codex 靠 `approval_mode = "prompt"`，`sampan mcp install` 會替你寫進 Codex 的 `config.toml`（先備份）。提示裡看得到工具與完整參數；不同意就回「不要」，要改訊息就請 agent 改了再送。看狀態的工具永遠不問。
 - 失敗就關：`confirm = true` 時，這三個工具只給確定會先問人的 client（`claude-code`、`codex-mcp-client`）用，其他 client 會被拒絕（「這個 client 不會先問使用者；要用請在 config 設 [mcp] confirm = false」），不是由 `claude`／`codex` 直接啟動的 `sampan mcp serve`（例如從 shell 灌 JSON-RPC 進去）也被拒絕（只看行程名稱，可被假冒，見下方「做不到的事」）；`codex exec` 在 approval policy 為 `never` 時這三個工具會被 Codex 拒絕（已實測），不會不問就執行；Codex 的 sampan 工具沒設成每次詢問時也拒絕（「Codex 的 sampan 工具沒設成每次詢問（<路徑>）：跑 sampan mcp install」）。
