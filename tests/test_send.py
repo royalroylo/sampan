@@ -1,6 +1,7 @@
 """Sending: submit a dispatch, advance it (queued → sent → done / failed), notify the caller, the send / dispatches commands."""
 import dataclasses
 import json
+import os
 import tempfile
 import threading
 import time
@@ -128,6 +129,21 @@ class SubmitTest(Base):
         log = (self.cfg.state_dir / "actions.log").read_text()
         self.assertIn("[send]", log)
         self.assertIn(d.id, log)
+
+    def test_every_log_line_names_the_sampan_process(self):
+        d = self.submit()
+        self.advance(tmux_runner(), d.id)
+        send.cancel(self.cfg, d.id, now=later(1))
+        lines = [ln for ln in (self.cfg.state_dir / "actions.log").read_text().splitlines() if d.id in ln]
+        self.assertGreaterEqual(len(lines), 3)  # submitted, delivered, cancelled
+        by = f"〔sampan {send.RUNNING_VERSION}，pid {os.getpid()}〕"
+        for ln in lines:
+            self.assertTrue(ln.endswith(by), ln)
+
+    def test_the_version_is_the_one_this_process_loaded(self):
+        from sampan import update
+        with mock.patch.object(update, "current_version", return_value="9.9.9"):  # upgraded on disk meanwhile
+            self.assertNotEqual(send.process_tag(), f"〔sampan 9.9.9，pid {os.getpid()}〕")
 
     def test_terminal_caller_is_never_notified(self):
         d = self.submit(caller=send.TERMINAL, notify=True)

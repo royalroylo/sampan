@@ -5,6 +5,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Every dispatch line in `actions.log` (`[send]`, `[cancel]`) ends with the sampan process that wrote it, 〔sampan <version>，pid <pid>〕: several sampan processes advance dispatches (the screen, each agent's MCP server, commands), and the version is the one that process loaded, so an old one still running after an upgrade shows up.
+
 ## [0.13.2] - 2026-10-27
 
 ### Fixed

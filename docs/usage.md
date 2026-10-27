@@ -254,7 +254,7 @@ session 可以放進資料夾（多層用 `/`，例如 `客戶/甲`）。資料�
 - `--wait`：每 2 秒看一次，對方回完就把回覆印到 stdout（結束碼 0）；失敗印原因（結束碼 1）；超過 `--timeout`（預設 600 秒）印「還在做，派工 <編號>」（結束碼 124），派工照樣留著；按 Ctrl-C 也一樣留著（結束碼 130）。
 - `sampan dispatches` 列排隊中與等回覆的派工（編號、從誰、給誰、狀態、建立時間、原因）；`--all` 連已回覆、失敗、取消的一起列。`sampan dispatches cancel <編號>` 取消還沒送出的；已送出、等回覆的改成不再等回覆（訊息已在對方那裡，收不回）。
 - 開新 session 時一起送：`sampan new <名稱> <目標> <目錄> --message <訊息｜->`（`-` 從 stdin 讀）。訊息當作 agent 啟動時的第一個 prompt（`claude "$(cat <檔>)"`、`codex "$(cat <檔>)"`），所以資料夾信任等啟動提示照常先問，答完才送出；同時建一筆狀態直接是「已送出」的派工，之後照一般派工看回覆；新 session 還沒被認出來（還在開、停在信任提示、Codex 還沒有對話）時不判失敗，原因寫「對方 session 還在啟動」。下指令的不會收到完成通知，用 `sampan dispatches show` 看。沒帶 `--message` 時行為跟以前完全一樣。
-- 送出、送達、取消都記在 `actions.log`（`[send]`、`[cancel]`）。排程的 `sampan save` 永遠不送、不推進派工。
+- 送出、送達、取消都記在 `actions.log`（`[send]`、`[cancel]`），每行最後標出是哪個 sampan 寫的（`〔sampan 0.13.3，pid 12345〕`，版本是那個 process 啟動時載入的；畫面、每個 agent 的 MCP server 和指令都會推進派工，升級後還在跑舊版的也看得出來）。排程的 `sampan save` 永遠不送、不推進派工。
 
 ## 讓 agent 用 sampan
 

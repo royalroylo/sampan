@@ -4,6 +4,7 @@ Actions layer. Every state change happens inside dispatch.transaction: the lates
 back under one lock, so two watchers (an MCP server and the sampan screen) never deliver the same dispatch twice.
 The target's conversation id is read from status_rows on every advance; Dispatch.thread_id is only a cache.
 """
+import os
 import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -19,6 +20,7 @@ from .registry import RegistryError, load_rows
 from .status import State, status_rows
 from .textwidth import text_width
 from .tmux import Tmux
+from .update import current_version
 
 POLL_S = 2
 NOT_SEEN_GRACE_S = 15  # right after delivery the transcript may not have the message yet
@@ -42,6 +44,18 @@ REASON_NO_TEXT = "對方這輪結束了，但沒有回覆文字"
 REASON_STOP_WATCHING = "不再等回覆"
 BUSY = {"busy": "對方正在忙", "working": "對方正在忙", "waiting": "對方在等使用者回應"}
 WAITING = {*BUSY.values(), REASON_NOT_RUNNING, REASON_NO_THREAD}  # queued reasons that clear by themselves: no limit
+RUNNING_VERSION = current_version()  # read once at import: the code this process runs, even after an upgrade on disk
+
+
+def process_tag():
+    """Which sampan process wrote a log line (several run at once: the screen, each agent's MCP server, commands)."""
+    return f"〔sampan {RUNNING_VERSION}，pid {os.getpid()}〕"
+
+
+def _log(cfg, label, line):
+    actionlog.append(cfg, label, [line + process_tag()])
+
+
 STATE_LABELS = {"queued": "排隊中", "sent": "已送出、等回覆", "done": "已回覆", "failed": "失敗", "cancelled": "已取消"}
 LOG_PREVIEW = 100
 
@@ -194,7 +208,7 @@ def submit(cfg, run, caller, to, message, *, notify, now, snapshot_fn=None, stat
                 thread_id=(row.sid or None) if row.agent == "codex" else None)
     if isinstance(r, str):
         return r
-    actionlog.append(cfg, "send", [f"派工 {r.id}：{_who(r)} → {to}（{row.agent}）：{_preview(message)}"])
+    _log(cfg, "send", f"派工 {r.id}：{_who(r)} → {to}（{row.agent}）：{_preview(message)}")
     return r
 
 
@@ -236,7 +250,7 @@ def submit_new(cfg, caller, to, to_agent, to_profile, message, *, notify, now):
     r = _create(cfg, caller, to, to_agent, to_profile, message, "sent", now, notify=notify, strip=True, startup=True)
     if isinstance(r, str):
         return r
-    actionlog.append(cfg, "send", [f"派工 {r.id}：{_who(r)} → {to}（{to_agent}，開場訊息）：{_preview(message)}"])
+    _log(cfg, "send", f"派工 {r.id}：{_who(r)} → {to}（{to_agent}，開場訊息）：{_preview(message)}")
     return r
 
 
@@ -250,7 +264,7 @@ def abort_new(cfg, did, reason, *, now):
                 d.notify = False  # the caller is told right away by `sampan new` / new_session
     except (dispatch.DispatchError, OSError):
         return
-    actionlog.append(cfg, "send", [f"派工 {did}：{reason}"])
+    _log(cfg, "send", f"派工 {did}：{reason}")
 
 
 def _drop_outboxes(cfg, ids):
@@ -332,13 +346,13 @@ def _deliver(cfg, run, d, row, sleep, now, save):
         why = deliver.to_claude(Tmux(run), row.pane, outbox, d.id, sleep)
     if isinstance(why, deliver.Unsure):  # it may have reached the target: never send the same dispatch twice
         _finish(d, "failed", now, f"{REASON_PASTED}：{why}" if isinstance(why, deliver.Pasted) else str(why))
-        actionlog.append(cfg, "send", [f"派工 {d.id}：{d.reason}"])
+        _log(cfg, "send", f"派工 {d.id}：{d.reason}")
         return
     if why:
         d.state, d.sent_at, d.reason = "queued", None, why  # nothing was sent: try again later
         return
     d.reason = ""
-    actionlog.append(cfg, "send", [f"派工 {d.id}：已送到 {d.to_name}"])
+    _log(cfg, "send", f"派工 {d.id}：已送到 {d.to_name}")
 
 
 def _expire(cfg, d, now):
@@ -353,7 +367,7 @@ def _expire(cfg, d, now):
         return
     last = f"（最後一次：{d.reason}）" if d.reason else ""
     _finish(d, "failed", now, f"排隊 {QUEUE_LIMIT_S // 60} 分鐘還送不出去{last}")
-    actionlog.append(cfg, "send", [f"派工 {d.id}：{d.reason}"])
+    _log(cfg, "send", f"派工 {d.id}：{d.reason}")
 
 
 def _sending(d, now, save):
@@ -468,13 +482,13 @@ def notify_caller(cfg, run, d, sleep, *, rows=None, snapshot_fn=None, status_fn=
     if isinstance(why, deliver.Unsure):  # the notice may be with the caller: count it as given, never send it again
         note = f"完成通知{REASON_PASTED}：{why}" if isinstance(why, deliver.Pasted) else f"完成通知{why}"
         d.reason = f"{d.reason}；{note}" if d.state == "failed" and d.reason else note
-        actionlog.append(cfg, "send", [f"派工 {d.id}：{note}"])
+        _log(cfg, "send", f"派工 {d.id}：{note}")
         return False
     if why is not None:
         d.notified = False  # nothing was sent: try again later
         return False
     d.notified = True
-    actionlog.append(cfg, "send", [f"派工 {d.id}：已通知 {d.from_name}"])
+    _log(cfg, "send", f"派工 {d.id}：已通知 {d.from_name}")
     return True
 
 
@@ -520,7 +534,7 @@ def cancel(cfg, did, *, now=None, wait_s=None):
     except (dispatch.DispatchError, OSError) as e:
         return str(e)
     what = "取消" if was == "queued" else REASON_STOP_WATCHING
-    actionlog.append(cfg, "cancel", [f"派工 {did}：{what}（給 {result.to_name}）"])
+    _log(cfg, "cancel", f"派工 {did}：{what}（給 {result.to_name}）")
     return result
 
 
