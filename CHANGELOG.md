@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.13.5] - 2026-10-27
+
 ### Fixed
 - `sampan doctor` no longer reports Claude's own official marketplace (`claude-plugins-official` from `anthropics/claude-plugins-official`) as unlisted, nor suggests removing it, when the config does not list it and no plugin uses it; `plugins sync` no longer warns about it and `--prune` keeps it. The same name with another source is still reported.
 - `sampan new` from the command line says the session runs in the background and how to go in, once it is up (it used to return to the shell without a word after a startup prompt was answered).
