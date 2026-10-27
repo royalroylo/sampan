@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.13.4] - 2026-10-27
+
 ### Added
 - `sampan forget` takes several names, handled one by one; one failing does not stop the rest, and the worst exit code is returned.
 - `sampan mcp install` / `uninstall --profile <name>` (repeatable) handle only those profiles, Codex by its profile name; an unknown name refuses before anything runs.
