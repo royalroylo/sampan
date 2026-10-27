@@ -79,7 +79,7 @@ Install Claude Code the same way as above (`curl -fsSL https://claude.ai/install
 */5 * * * * $HOME/.local/bin/sampan save --quiet
 ```
 
-or a systemd user timer (**an example, untested**; save as `~/.config/systemd/user/sampan-save.service` and `sampan-save.timer`, then `systemctl --user enable --now sampan-save.timer`):
+or a systemd user timer (tried on WSL2: the timer comes back after WSL restarts, and `Persistent=true` runs a missed save at boot; save as `~/.config/systemd/user/sampan-save.service` and `sampan-save.timer`, then `systemctl --user enable --now sampan-save.timer`):
 
 ```
 # sampan-save.service
@@ -96,6 +96,17 @@ WantedBy=timers.target
 ```
 
 Like the macOS schedule, it only saves; it never restores, starts or moves anything. How Linux is tested: [CONTRIBUTING.md](../../CONTRIBUTING.md#testing-on-linux).
+
+### WSL
+
+On Windows, install and use sampan inside WSL (for example Ubuntu), as for Linux above:
+
+- Run the installer in a WSL terminal. In the Windows command prompt or Git Bash it stops (`unsupported system MINGW…`).
+- Claude Code in WSL is a separate install (the Linux one) with its own login: WSL's `~/.claude` is not Windows'.
+- Keep sessions in WSL's own directories (under `~`); `/mnt/c/…` is slow.
+- For auto-save use the systemd user timer above: first add `[boot]` `systemd=true` to `/etc/wsl.conf`, then restart WSL.
+- Restart WSL with `wsl.exe --shutdown` (`wsl --shutdown` typed inside WSL is not found). Then open a new terminal tab, enter with `wsl ~` and run `sampan restore`; going back into WSL in the old tab can garble every key in some terminals (for example WezTerm).
+- When Windows restarts or WSL shuts down, tmux and every session end; run `sampan restore` yourself to bring them back.
 
 ## What sampan init does
 

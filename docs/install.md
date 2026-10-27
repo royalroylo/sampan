@@ -76,7 +76,7 @@ Claude Code 的安裝同上（`curl -fsSL https://claude.ai/install.sh | bash`�
 */5 * * * * $HOME/.local/bin/sampan save --quiet
 ```
 
-或 systemd user timer（**範例，未測試**；存成 `~/.config/systemd/user/sampan-save.service` 與 `sampan-save.timer`，再 `systemctl --user enable --now sampan-save.timer`）：
+或 systemd user timer（已在 WSL2 實測，WSL 重開後 timer 會自己起來，`Persistent=true` 開機後補跑一次；存成 `~/.config/systemd/user/sampan-save.service` 與 `sampan-save.timer`，再 `systemctl --user enable --now sampan-save.timer`）：
 
 ```
 # sampan-save.service
@@ -93,6 +93,17 @@ WantedBy=timers.target
 ```
 
 同樣只存檔，不會 restore、new 或 move。Linux 上的測試方式見 [CONTRIBUTING.md](../CONTRIBUTING.md#testing-on-linux)。
+
+### WSL
+
+Windows 上要在 WSL（例如 Ubuntu）裡安裝和使用，步驟同上面的 Linux：
+
+- 在 WSL 的終端機裡跑安裝腳本。在 Windows 的命令提示字元或 Git Bash 裡跑會停下來（`unsupported system MINGW…`）。
+- WSL 裡的 Claude Code 要另外裝（Linux 版）、另外登入：WSL 的 `~/.claude` 跟 Windows 的不共用。
+- session 盡量開在 WSL 自己的目錄（`~` 底下），`/mnt/c/…` 很慢。
+- 自動存檔用上面的 systemd user timer：先在 `/etc/wsl.conf` 加 `[boot]` `systemd=true`，再重開 WSL。
+- 重開 WSL 是 `wsl.exe --shutdown`（在 WSL 裡打 `wsl --shutdown` 會找不到指令）。之後開一個新的終端機分頁、用 `wsl ~` 進去，再 `sampan restore` 接回；在原本的分頁重新進 WSL，有的終端機（例如 WezTerm）按鍵會變成亂碼。
+- Windows 重開機或 WSL 關掉時，tmux 和所有 session 都會結束，要自己 `sampan restore` 接回。
 
 ## sampan init 做什麼
 

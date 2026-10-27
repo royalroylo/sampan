@@ -5,6 +5,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- `sampan doctor` no longer reports Claude's own official marketplace (`claude-plugins-official` from `anthropics/claude-plugins-official`) as unlisted, nor suggests removing it, when the config does not list it and no plugin uses it; `plugins sync` no longer warns about it and `--prune` keeps it. The same name with another source is still reported.
+- `sampan new` from the command line says the session runs in the background and how to go in, once it is up (it used to return to the shell without a word after a startup prompt was answered).
+- `sampan status` calls a stopped session 已停止, as the screen does (it said 該跑沒跑, which read like a fault after a deliberate stop).
+- `sampan init` on Linux prints a cron line to paste and the link to the systemd timer example, not only "use cron or a systemd timer".
+
+### Docs
+- Install: a WSL section (where to run the installer, separate Claude login, `wsl.exe --shutdown`, new tab after a restart, systemd for the timer); the systemd timer example is tried on WSL2. Platforms: Linux tried on WSL2 with the real Claude Code.
+
 ## [0.13.4] - 2026-10-27
 
 ### Added
