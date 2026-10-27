@@ -32,7 +32,7 @@ class State(StrEnum):
 
 LABELS = {
     State.RUNNING: "執行中",
-    State.STOPPED: "該跑沒跑",
+    State.STOPPED: "已停止",
     State.RETIRED: "retired",
     State.AWAIT_TRUST: "等待信任確認",
     State.UNREGISTERED: "未登記",

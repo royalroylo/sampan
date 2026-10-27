@@ -24,7 +24,9 @@ from .observe import PROC_ROOT
 from .plugins import read_state
 from .procs import claude_pids, list_procs, proc_env
 
-NO_SCHEDULE_NOTE = "ℹ 這台不是 macOS，沒有自動存檔排程；需要時自己跑 `sampan save`（或用 cron／systemd timer）"
+NO_SCHEDULE_NOTE = ("ℹ 這台不是 macOS，沒有自動存檔排程；沒存到的 session 重開機後接不回來。要自動存檔請自己排，例如 crontab -e 加一行：\n"
+                    "   */5 * * * * $HOME/.local/bin/sampan save --quiet\n"
+                    "   systemd user timer 的範例見 https://github.com/royalroylo/sampan/blob/main/docs/install.md#linux")
 NAME_RULE = "名稱只能用英數字、- 和 _"
 
 

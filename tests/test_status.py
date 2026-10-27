@@ -44,6 +44,7 @@ class StatusTest(unittest.TestCase):
         self.assertEqual(rows["running"].state, State.RUNNING)
         self.assertEqual(rows["running"].agent_status, "busy")
         self.assertEqual(rows["down"].state, State.STOPPED)
+        self.assertEqual(rows["down"].display, "已停止")  # same word as the sampan screen; a stop on purpose is not a fault
         self.assertEqual(rows["wrongprof"].state, State.PROFILE_MISMATCH)
         self.assertEqual(rows["wrongprof"].detail, "（登記 alice）")
         self.assertEqual(rows["wrongprof"].display, "profile 不符（登記 alice）")
