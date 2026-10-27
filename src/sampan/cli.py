@@ -486,6 +486,8 @@ def _dispatch(cfg, args):
                 extra.update(caller=caller, notify=False)
             rc = session_run.cmd_new(cfg, run, out, args.name, args.target, args.cwd, dry_run=args.dry_run,
                                      on_prompt=on_prompt, **extra)
+            if rc == 0 and not args.dry_run and not want:  # the command returns to the shell: say where the session went
+                out(f"✔ {args.name} 在背景執行；要進去：sampan 畫面選它，或 tmux attach -t {args.name}")
             return _go_in(run, want, rc)
         if cmd == "stop":
             return session_run.cmd_stop(cfg, run, out, names=tuple(args.names), profile=args.profile,

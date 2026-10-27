@@ -128,6 +128,15 @@ class CliTest(unittest.TestCase):
             cli.main(["new", "x", "claude:alice", "/tmp"])
             self.assertNotIn("folder", nw.call_args.kwargs)
 
+    def test_new_says_where_the_session_is_once_it_runs(self):
+        for rc, argv, said in ((0, [], True), (1, [], False), (0, ["--dry-run"], False)):
+            buf = io.StringIO()
+            with mock.patch("sampan.session_run.cmd_new", return_value=rc), redirect_stdout(buf), \
+                    mock.patch("sys.stdin.isatty", return_value=False):
+                self.assertEqual(cli.main(["new", "wsl-test", "claude:alice", "/tmp", *argv]), rc)
+            line = "✔ wsl-test 在背景執行；要進去：sampan 畫面選它，或 tmux attach -t wsl-test"
+            self.assertEqual(line in buf.getvalue(), said, (rc, argv, buf.getvalue()))
+
     def test_going_in_from_a_cli_prompt_attaches(self):
         from sampan.prompts import ATTACH
 
