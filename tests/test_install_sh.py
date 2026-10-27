@@ -106,7 +106,7 @@ class StubbedInstallTest(unittest.TestCase):
 
     def test_fallback_version_is_installed_with_reinstall_when_the_lookup_fails(self):
         self.run_sh("--no-init")
-        self.assertTrue(any(c.startswith("tool install --reinstall git+") and c.endswith("@v0.13.2") for c in self.calls()), self.calls())
+        self.assertTrue(any(c.startswith("tool install --reinstall git+") and c.endswith("@v0.13.3") for c in self.calls()), self.calls())
         self.assertFalse([c for c in self.calls() if "uninstall" in c])
 
     def test_failed_install_fails_the_script(self):

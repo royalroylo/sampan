@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.13.3] - 2026-10-27
+
 ### Changed
 - Every dispatch line in `actions.log` (`[send]`, `[cancel]`) ends with the sampan process that wrote it, 〔sampan <version>，pid <pid>〕: several sampan processes advance dispatches (the screen, each agent's MCP server, commands), and the version is the one that process loaded, so an old one still running after an upgrade shows up.
 
@@ -377,7 +379,8 @@ First public release. Versions up to 0.5.3 were released privately under the nam
 ### Security
 - Credentials in git URLs are no longer shown in output.
 
-[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.13.2...HEAD
+[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.13.3...HEAD
+[0.13.3]: https://github.com/royalroylo/sampan/releases/tag/v0.13.3
 [0.13.2]: https://github.com/royalroylo/sampan/releases/tag/v0.13.2
 [0.13.1]: https://github.com/royalroylo/sampan/releases/tag/v0.13.1
 [0.13.0]: https://github.com/royalroylo/sampan/releases/tag/v0.13.0
