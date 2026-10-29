@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import claude_state, codex_state
+from . import claude_state, codex_daemon, codex_state
 from .claude_state import find_transcript, read_session_files, transcript_problem, transcript_stats
 from .clock import now_iso
 from .codex_state import (
@@ -19,7 +19,9 @@ from .codex_state import (
     LSOF,
     _started_at,
     codex_pid_in_pane,
+    daemon_fallback,
     find_rollout,
+    live_codex,
     rollout_from_lsof,
     rollout_last_time,
     threads_fallback,
@@ -153,8 +155,16 @@ def _claude_row(cfg, run, p, procs, proc_root):
                 last=last, text=text, skip=skip)
 
 
-def _codex_rows(cfg, run, tops, now):
-    """Codex rows: thread id from the rollout the native process has open, else the threads table (unique guesses only)."""
+def _in_tmux_threads(cfg, run, panes, procs, now, snap):
+    """Thread ids the Codex processes in tmux panes are on (read with the same daemon snapshot): never an outside one's."""
+    found, _ = live_codex(cfg, run, panes, procs, now=now.timestamp(), snapshot_fn=lambda *a, **k: snap)
+    return {lc.thread_id for lc in found.values() if lc.thread_id}
+
+
+def _codex_rows(cfg, run, tops, now, panes=(), procs=(), snapshot_fn=None):
+    """Codex rows: thread id from the rollout the native process has open, else the threads table, else the daemon's
+    loaded threads (a TUI attached to the 0.164 daemon holds no rollout, and a resumed thread's row is old); unique
+    guesses only."""
     home = cfg.codex.home
     rows = []
     for p, deep in tops:
@@ -163,12 +173,23 @@ def _codex_rows(cfg, run, tops, now):
         rows.append(dict(agent="codex", pid=p.pid, pids=tuple(dict.fromkeys((p.pid, deep))), profile=cfg.codex.profile,
                          session_id=tid, cwd=cwd, last=None, text=None, skip=None))
     bound = {r["session_id"] for r in rows if r["session_id"]}
-    guesses = {}
+    guesses, starts = {}, {}
     for r in rows:
         if r["session_id"] or not cfg.codex.enabled or r["cwd"] == "?":
             continue
         started = _started_at(run, r["pids"][-1], now.timestamp())
         guesses[r["pid"]] = threads_fallback(home, r["cwd"], started, bound) if started is not None else None
+        if started is not None:
+            starts[r["pid"]] = started
+    unresolved = [r for r in rows if r["pid"] in starts and guesses[r["pid"]] is None]
+    if unresolved:  # the only daemon call: none when lsof or the db already told every row
+        snap = (snapshot_fn or codex_daemon.snapshot)(home, run, now=now)
+        if snap is not None and os.path.realpath(snap.home) == os.path.realpath(home):
+            taken = bound | {g for g in guesses.values() if g and g != AMBIGUOUS} | \
+                _in_tmux_threads(cfg, run, panes, procs, now, snap)
+            for r in unresolved:
+                same = sum(1 for x in unresolved if os.path.realpath(x["cwd"]) == os.path.realpath(r["cwd"]))
+                guesses[r["pid"]] = daemon_fallback(snap, r["cwd"], taken, starts[r["pid"]], same)
     for r in rows:
         if not cfg.codex.enabled:
             r["skip"] = "設定檔停用了 Codex"
@@ -180,7 +201,7 @@ def _codex_rows(cfg, run, tops, now):
             else:
                 r["skip"] = ("同目錄有兩段對話一樣接近，判斷不出 thread id" if g == AMBIGUOUS else
                              "同目錄有多個 Codex 對到同一段對話，判斷不出 thread id" if g else
-                             "讀不到 rollout（還沒送出第一個 prompt？），判斷不出 thread id")
+                             "判斷不出這個 Codex 在哪段對話：新開的先送出第一個 prompt、剛 resume 的先送一則訊息，再接手一次")
                 continue
         path = find_rollout(home, r["session_id"])
         if path is None:
@@ -190,7 +211,7 @@ def _codex_rows(cfg, run, tops, now):
     return rows
 
 
-def outside_agents(cfg, run, now, *, proc_root=PROC_ROOT, own_pid=None):
+def outside_agents(cfg, run, now, *, proc_root=PROC_ROOT, own_pid=None, snapshot_fn=None):
     """Top-level claude/codex processes outside tmux, newest activity first. None when tmux panes cannot be read."""
     tmux = Tmux(run)
     panes = tmux.panes()
@@ -204,7 +225,7 @@ def outside_agents(cfg, run, now, *, proc_root=PROC_ROOT, own_pid=None):
     tops = _top_outside(procs, panes)
     rows = [_claude_row(cfg, run, p, procs, proc_root) for p in tops if p.comm == "claude"]
     rows += _codex_rows(cfg, run, [(p, codex_pid_in_pane(procs, p.pid) or p.pid) for p in tops
-                                   if p.comm != "claude"], now)
+                                   if p.comm != "claude"], now, panes, procs, snapshot_fn)
     result = []
     for r in rows:
         if r["pid"] in mine:
@@ -342,13 +363,14 @@ def _show(out, cands):
 
 
 def cmd_adopt(cfg, run, out, ask, *, dry_run=False, picker_fn=None, sleep=time.sleep,
-              now_fn=lambda: datetime.now(timezone.utc), timeout=15, proc_root=PROC_ROOT, own_pid=None, opened=None):
+              now_fn=lambda: datetime.now(timezone.utc), timeout=15, proc_root=PROC_ROOT, own_pid=None, opened=None,
+              snapshot_fn=None):
     """picker_fn(cands) returns a list of Outside.key (None = cancelled); when None, use the text menu where numbers are typed.
     opened: given a list, append the names of the tmux sessions that were opened, in order (the ui then attaches to the first).
     Returns 0 all adopted, 1 some skipped or unconfirmed, 2 registry/tmux unreadable, 130 cancelled while waiting or entering names."""
     if _load(cfg, out) is None:
         return 2
-    cands = outside_agents(cfg, run, now_fn(), proc_root=proc_root, own_pid=own_pid)
+    cands = outside_agents(cfg, run, now_fn(), proc_root=proc_root, own_pid=own_pid, snapshot_fn=snapshot_fn)
     if cands is None:
         out("❌ 讀不到 tmux 的 pane，分不出哪些在 tmux 裡，什麼都沒做")
         return 2

@@ -189,7 +189,7 @@ Claude Code 只在狀態列指令的輸入裡提供 5h／週額度，所以要�
 | 讓 agent 正常結束（先收起來，要用時再 restore） | `sampan stop [名稱…] [--profile <p>] [--force] [--keep-tmux]`：結束後若那個 tmux session 只剩這一個 pane，就一起關掉；有其他視窗或 pane 則保留 |
 | 重開指定的 session | `sampan restart <名稱…>`：閒置的先停再背景接回原對話（不會把你帶進去），已停止的直接接回；忙碌中的、sampan 自己所在的 pane、retired 的略過，並在最後列出名稱與原因。全部都不能重開時回傳 1 |
 | 重開機後接回 | `sampan restore [名稱…] [--all] [--dry-run]` |
-| 接手在 tmux 外（例如終端機程式的分頁）跑的 claude／codex | `sampan adopt [--dry-run]`（或 ui 按 A）：列出 tmux 外的 claude／codex（目錄、最後活動、最後一句話），勾選後逐一問 session 名稱；你自己在原視窗 `/exit`（Codex：`/quit`），sampan 等它結束後才在新的 tmux session 接回同一段對話並登記。sampan 不對原視窗按任何鍵；判斷不出對話 id 或 profile 的不能選 |
+| 接手在 tmux 外（例如終端機程式的分頁）跑的 claude／codex | `sampan adopt [--dry-run]`（或 ui 按 A）：列出 tmux 外的 claude／codex（目錄、最後活動、最後一句話），勾選後逐一問 session 名稱；你自己在原視窗 `/exit`（Codex：`/quit`），sampan 等它結束後才在新的 tmux session 接回同一段對話並登記。sampan 不對原視窗按任何鍵；判斷不出對話 id 或 profile 的不能選（Codex：新開的要先送出第一個 prompt、剛 `codex resume` 的要先送一則訊息，sampan 才認得出是哪段對話） |
 | 改 session 名稱 | `sampan rename <名稱> <新名稱>`（或 ui 按 e）：tmux session 與登記表一起改，agent 照常執行、不送任何按鍵。名稱不能含 `.` 或 `:` |
 | session 換 profile（換帳號）繼續同一段對話 | `sampan switch <名稱> <profile> [--dry-run]`（或 ui 按 P）：執行中的照 `sampan move` 的流程在原目錄、用新 profile 接回；已停止的改登記表後直接接回。逐字稿在新 profile 讀不到時（各 profile 的 `projects/` 沒共用）會**搬**過去而不是複製，永遠只有一份；新 profile 已經有同一段對話的逐字稿時不動，請你先決定留哪份。Codex 沒有 profile，不適用 |
 | session 換到別的工作目錄 | `sampan move <名稱> <目錄>`（或 ui 按 m）：結束 agent、在新目錄接回同一段對話、自動信任新目錄（只在提示顯示的路徑就是新目錄時）、更新登記表。目錄不存在會建立；忙碌中、worktree、自己的 pane 不動 |

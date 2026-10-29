@@ -145,8 +145,88 @@ class Base(unittest.TestCase):
     def text(self):
         return "\n".join(self.msgs)
 
-    def found(self):
-        return outside_agents(self.cfg, self.runner(), NOW, proc_root=NO_PROC, own_pid=99999)
+    def found(self, **kw):
+        return outside_agents(self.cfg, self.runner(), NOW, proc_root=NO_PROC, own_pid=99999, **kw)
+
+
+TID2 = "01a1568b-81c2-71f1-99f7-b7a590f4ed97"
+TID3 = "01a1568b-81c2-71f1-99f7-b7a590f4ed98"
+
+
+class ResumedCodexTest(Base):
+    """Codex 0.164 TUI attached to the shared daemon: no rollout open (lsof), and a resumed thread's threads row was
+    created long before the process started. The daemon's loaded threads are the last way to tell (WSL report)."""
+
+    def setUp(self):
+        super().setUp()
+        self.snaps = []
+
+    def snap(self, *threads, loaded=None):
+        from sampan.codex_daemon import CodexThread, DaemonSnapshot
+        ts = [CodexThread(tid, "", cwd, "codex-tui", "vscode", None, "idle", (), updated, None)
+              for tid, cwd, updated in threads]
+        snap = DaemonSnapshot(self.cfg.codex.home, None, tuple(ts),
+                              frozenset(loaded if loaded is not None else [t[0] for t in threads]), NOW)
+
+        def fn(home, run, now):
+            self.snaps.append(home)
+            return snap
+        return fn
+
+    def runner(self):
+        r = super().runner()
+        r.on(["ps", "-o", "etime="], cp(out="10:00\n"))  # every process started 10 minutes ago
+        return r
+
+    def resumed(self, tid, cwd=None):
+        self.iterm_codex(700, tid=None, cwd=cwd)
+        self.rollout(tid, str(cwd or self.cwd))
+        return NOW - timedelta(minutes=2)  # used after the process started
+
+    def test_resumed_codex_is_found_through_the_daemon(self):
+        used = self.resumed(TID)
+        [c] = self.found(snapshot_fn=self.snap((TID, str(self.cwd), used),
+                                               (TID2, str(self.cwd), NOW - timedelta(days=3))))  # stale, not this one
+        self.assertEqual((c.session_id, c.skip), (TID, None))
+        self.assertEqual(c.text, "整理 README")
+
+    def test_thread_of_a_codex_in_tmux_is_not_taken(self):
+        used = self.resumed(TID)
+        self.panes.append(pane_line("cx", "%5", 500, "codex", str(self.cwd)))
+        self.procs += [ps_line(500, 1, "-zsh", "-zsh"), ps_line(501, 500, "codex", "codex")]
+        self.lsof[501] = self.rollout(TID2, str(self.cwd))
+        [c] = self.found(snapshot_fn=self.snap((TID, str(self.cwd), used), (TID2, str(self.cwd), used)))
+        self.assertEqual((c.session_id, c.skip), (TID, None))
+
+    def test_two_candidates_are_not_guessed(self):
+        used = self.resumed(TID)
+        self.rollout(TID2, str(self.cwd))
+        [c] = self.found(snapshot_fn=self.snap((TID, str(self.cwd), used), (TID2, str(self.cwd), used)))
+        self.assertIsNone(c.session_id)
+        self.assertIn("判斷不出", c.skip)
+
+    def test_resumed_but_not_used_yet_says_send_a_message_first(self):
+        self.resumed(TID)
+        [c] = self.found(snapshot_fn=self.snap((TID, str(self.cwd), NOW - timedelta(days=3))))
+        self.assertIsNone(c.session_id)
+        self.assertIn("剛 resume", c.skip)
+        self.assertIn("送一則訊息", c.skip)
+
+    def test_no_daemon_call_when_lsof_found_it(self):
+        self.iterm_codex(700)
+        [c] = self.found(snapshot_fn=self.snap())
+        self.assertEqual((c.session_id, self.snaps), (TID, []))
+
+    def test_no_daemon_is_the_same_skip(self):
+        self.resumed(TID)
+        [c] = self.found(snapshot_fn=lambda home, run, now: None)
+        self.assertIn("剛 resume", c.skip)
+
+    def test_adopt_passes_the_daemon_reader_on(self):
+        used = self.resumed(TID)
+        self.adopt(self.runner(), dry_run=True, snapshot_fn=self.snap((TID, str(self.cwd), used)))
+        self.assertIn("codex resume", self.text())
+        self.assertIn(TID, self.text())
 
 
 class ListTest(Base):
@@ -194,7 +274,7 @@ class ListTest(Base):
         self.assertIn("判斷不出對話 id", skips[600])
         self.assertIn("不在設定檔", skips[800])
         self.assertIn("找不到逐字稿", skips[900])
-        self.assertIn("thread id", skips[700])
+        self.assertIn("判斷不出這個 Codex 在哪段對話", skips[700])
         self.assertFalse(any(c.selected for c in self.found()))
 
     def test_missing_cwd_is_skipped(self):
