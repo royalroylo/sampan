@@ -1,6 +1,6 @@
 # Image for the installer test (install-test.sh): a bare Ubuntu with a non-root user that has passwordless sudo.
 # No uv, no tmux, no git, no ps, no lsof on purpose: install.sh has to bring them. Build context = `git archive` of the repo.
-FROM ubuntu:24.04
+FROM ubuntu:25.10
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
  && apt-get install -y --no-install-recommends sudo curl ca-certificates locales \
