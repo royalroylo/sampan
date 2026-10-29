@@ -19,6 +19,7 @@ from pathlib import Path
 
 from . import dispatch, folders, send, session_run
 from .procs import list_procs
+from .prompts import SKIP
 from .registry import RegistryError, load_rows
 from .send import Caller, CallerUnsure, lookup_caller  # noqa: F401  (CallerUnsure, lookup_caller re-exported)
 from .status import status_rows
@@ -451,15 +452,21 @@ class Server:
         checked = session_run.check_new(self.cfg, self.run, name, target, cwd)
         if isinstance(checked, str):
             raise ToolError(checked)
-        cwd = checked[2]
+        agent, cwd = checked[0], checked[2]
         caller = self._refresh_caller()
         try:
             before = {d.id for d in dispatch.load(self.cfg.state_dir)}
         except dispatch.DispatchError as e:
             raise ToolError(str(e)) from e
-        lines = []
+        lines, stuck = [], []
+
+        def stop(_name, _agent, p):  # nobody to ask from here: never a key, the user goes in
+            stuck.append(p)
+            return SKIP
+        # with confirm the user saw this cwd in the tool's permission prompt: its own trust prompt is answered
         rc = session_run.cmd_new(self.cfg, self.run, lines.append, name, target, cwd, message=message,
-                                 caller=caller, sleep=self.sleep, folder=folder)  # checks everything again before creating
+                                 caller=caller, sleep=self.sleep, folder=folder, on_prompt=stop,
+                                 trust=self.cfg.mcp_confirm)  # checks everything again before creating
         said = "\n".join(str(x).removeprefix("❌ ") for x in lines).strip()
         new = [d for d in dispatch.load(self.cfg.state_dir) if d.id not in before and d.to_name == name]
         if not new or rc not in (0, 1):
@@ -468,6 +475,12 @@ class Server:
         if d.state == "failed":
             raise ToolError(d.reason or said)
         self.mine.add(d.id)
+        if stuck:
+            p = stuck[-1]
+            what = f"信任 {p.trust_path} 的提示" if p.trust_path else (p.question or "認不出的選單")
+            raise ToolError(f"{name} 已開啟，但停在 {agent} 的提示（{what}），這個提示 sampan 不替使用者回答。"
+                            f"請使用者進去處理：tmux attach -t {name}。開場訊息（派工 {d.id}）處理完才會開始，"
+                            f"之後用 dispatch_result 看")
         out = {"dispatch": d.id}
         if said:
             out["note"] = said

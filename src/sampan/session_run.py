@@ -150,7 +150,7 @@ def cmd_new(cfg, run, out, name, target, cwd, *, folder=None, **kw):
 
 
 def _cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.sleep, timeout=15, uuid4=uuid.uuid4,
-             on_prompt=None, wait=True, message=None, caller=None, notify=None):
+             on_prompt=None, wait=True, message=None, caller=None, notify=None, trust=False):
     """target: claude:<profile>, <profile> (taken as claude) or codex.
 
     wait=False: return as soon as the launch command is sent (the ui's n then goes straight into tmux and the user answers the startup menu there). A Claude row is
@@ -158,6 +158,8 @@ def _cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.slee
 
     on_prompt(name, agent, prompt): asked when the agent stops at a menu on startup (trust, update, hooks review) (prompts.Relay);
     None (plain non-interactive CLI, tests) = do not look at the screen, press no keys. Time spent answering prompts does not count toward timeout.
+    trust: answer by itself, once, a trust prompt that shows exactly cwd (MCP new_session, whose cwd the user approved in
+    the tool's permission prompt); any other prompt still goes to on_prompt.
 
     message: the first message, given to the agent as its startup prompt (`claude "$(cat <outbox>)"`), recorded as a
     `sent` dispatch (notify only when caller is a sampan session; notify None = when a caller is given, False for the
@@ -210,10 +212,24 @@ def _cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.slee
         out(f"▶ {name}（codex）已開啟，等 Codex 建立對話…")
     if not wait:
         return 0
-    relay = Relay(on_prompt, tmux, out, sleep) if on_prompt is not None else None
+    trusted, waiting = [], []  # waiting: auto answered SKIP for a slow redraw, which is not a refusal
+
+    def auto(p):
+        if trusted:
+            if _shows(p, cwd):
+                waiting.append(1)
+                return SKIP
+            return None
+        yes = _trust_yes(p, cwd)
+        if yes is not None:
+            trusted.append(1)
+            out(f"  已信任 {cwd}")
+        return yes
+    relay = Relay(on_prompt, tmux, out, sleep, auto=auto if trust else None) if on_prompt is not None else None
     idle_ticks = 0
     for _ in range(timeout):
         sleep(1)
+        waiting.clear()
         panes = tmux.panes()
         if panes is None:  # unreadable this round: make no judgement, look again next round
             continue
@@ -227,7 +243,11 @@ def _cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.slee
             out(f"▶ {name}（codex，{la.session_id[:8]}）已登記")
             return 0
         screen = tmux.capture(pane) if relay is not None or agent == "codex" else None
-        if relay is not None and _relay_stop(out, name, relay.check(name, agent, pane, screen)):
+        res = relay.check(name, agent, pane, screen) if relay is not None else None
+        if res == SKIP and waiting:
+            relay.skipped.clear()  # our keys are sent and the screen has not caught up: keep watching
+            continue
+        if _relay_stop(out, name, res):
             return 1
         # Codex only creates the conversation once the first prompt is sent: if it is already at the input box, stop waiting; sampan save registers it later
         idle_ticks = idle_ticks + 1 if agent == "codex" and la is not None and la.agent == "codex" \

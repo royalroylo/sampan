@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest import mock
 
 from sampan import actionlog, deliver, dispatch, folders
+from sampan.prompts import SKIP
 from sampan.registry import Row, load_rows, write_rows
 from sampan.send import Caller
 from sampan.session_run import check_new, cmd_forget, cmd_new, cmd_rename, cmd_set_state
@@ -318,6 +319,49 @@ class NewAndStateTest(Base):
                      uuid4=lambda: B, timeout=5, on_prompt=lambda *_a: 1)
         self.assertEqual(rc, 0)
         self.assertEqual([k[1:] for k in sent[1:]], [["Down"], ["Enter"]])
+
+    def trust_runner(self, shown):
+        """A Claude that stops at the trust prompt for `shown`; Down+Enter trusts it and the session comes up."""
+        from tests.test_prompts import CLAUDE_TRUST
+        r = self.runner()
+        r.on(["tmux", "-u", "list-panes"], lambda a: cp(out="\n".join(self.panes) + "\n"))
+        screen, sent = [CLAUDE_TRUST.replace("/private/tmp/…/scratchpad/claude-trust-probe", shown)], []
+
+        def send(a):
+            sent.append(a[4:])
+            if a[5:] == ["Enter"] and sent[-2:-1] == [["%50", "Down"]]:
+                screen[0] = ""
+                self.panes = [pane_line("new-x", "%50", 100, "claude", str(self.cwd))]
+                self.procs = [ps_line(100, 1, "-zsh", "-zsh"), ps_line(900, 100, "claude", "claude")]
+                write_session(self.cfg, "work", 900, sid=B, cwd=str(self.cwd), tmux="new-x:@1.%50")
+            return cp()
+        r.on(["tmux", "-u", "send-keys"], send)
+        r.on(["tmux", "-u", "capture-pane"], lambda a: cp(out=screen[0]))
+        return r, sent
+
+    def test_new_with_trust_answers_only_the_prompt_for_its_own_directory(self):
+        # MCP new_session with confirm: the user approved this cwd in the tool's permission prompt
+        asked = []
+        r, sent = self.trust_runner(str(self.cwd.resolve()))
+        rc = cmd_new(self.cfg, r, self.msgs.append, "new-x", "work", str(self.cwd), sleep=lambda _: None,
+                     uuid4=lambda: B, timeout=5, trust=True, on_prompt=lambda *a: asked.append(a) or SKIP)
+        self.assertEqual((rc, asked), (0, []))
+        self.assertEqual([k[1:] for k in sent[1:]], [["Down"], ["Enter"]])
+        self.assertIn(f"  已信任 {self.cwd.resolve()}", self.msgs)
+        for shown in ("/somewhere/else", str(self.cwd.resolve().parent)):  # another directory: never answered
+            with self.subTest(shown=shown):
+                self.panes, self.procs, asked = [], [ps_line(1, 0, "launchd", "launchd")], []
+                r, sent = self.trust_runner(shown)
+                rc = cmd_new(self.cfg, r, self.msgs.append, "new-x", "work", str(self.cwd), sleep=lambda _: None,
+                             uuid4=lambda: B, timeout=5, trust=True, on_prompt=lambda *a: asked.append(a) or SKIP)
+                self.assertEqual((rc, len(asked)), (1, 1))
+                self.assertEqual(sent[1:], [])
+
+    def test_new_without_trust_relays_the_trust_prompt(self):
+        r, sent = self.trust_runner(str(self.cwd.resolve()))
+        rc = cmd_new(self.cfg, r, self.msgs.append, "new-x", "work", str(self.cwd), sleep=lambda _: None,
+                     uuid4=lambda: B, timeout=5, on_prompt=lambda *a: SKIP)
+        self.assertEqual((rc, sent[1:]), (1, []))
 
     def test_new_without_on_prompt_never_presses(self):
         from tests.test_prompts import CODEX_TRUST

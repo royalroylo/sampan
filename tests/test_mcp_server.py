@@ -765,6 +765,58 @@ class FolderToolTest(Base):
         self.assertIn("控制字元", tool_text(c.response(2)))
 
 
+class NewSessionTrustTest(Base):
+    """MCP new_session in a directory Claude has not trusted (派工 0516): it used to sit at the prompt and say success."""
+
+    def setUp(self):
+        super().setUp()
+        self.cwd = Path(self._tmp.name) / "w" / "n1"
+        self.cwd.mkdir(parents=True)
+        self.args = {"name": "n1", "target": "claude:work", "cwd": str(self.cwd), "message": "開工"}
+
+    def fake_new(self, stops_at=None):
+        seen = {}
+
+        def fake(cfg, run, out, name, target, cwd, *, message=None, caller=None, on_prompt=None, trust=False, **kw):
+            seen.update(on_prompt=on_prompt, trust=trust)
+            send.submit_new(cfg, caller, name, "claude", "work", message, notify=True, now=NOW)
+            if stops_at is not None:
+                from sampan.prompts import SKIP
+                self.assertEqual(on_prompt(name, "claude", stops_at), SKIP)  # no one to ask: never a key
+                out(f"⚠ {name} 停在提示，進去處理")
+                return 1
+            return 0
+        return fake, seen
+
+    def test_confirm_lets_new_trust_its_own_directory(self):
+        for confirm in (True, False):
+            with self.subTest(confirm=confirm):
+                fake, seen = self.fake_new()
+                with mock.patch.object(mcp_server.session_run, "cmd_new", fake):
+                    c = self.serve(Client([init(1), call(2, "new_session", self.args)], last_id=2), run=new_runner(),
+                                   confirm=confirm, parent_agent=True)
+                self.assertFalse(c.response(2)["result"]["isError"], tool_text(c.response(2)))
+                self.assertIs(seen["trust"], confirm)
+                self.assertIsNotNone(seen["on_prompt"])
+
+    def test_stuck_at_a_prompt_is_an_error_that_says_where(self):
+        from sampan.screens import Prompt
+        p = Prompt("claude", "Quick safety check", ("Yes, I trust this folder", "No, exit"), 0, (),
+                   trust_path="/elsewhere")
+        fake, _ = self.fake_new(stops_at=p)
+        with mock.patch.object(mcp_server.session_run, "cmd_new", fake):
+            c = self.serve(Client([init(1), call(2, "new_session", self.args)], last_id=2), run=new_runner(),
+                           confirm=False)
+        self.assertTrue(c.response(2)["result"]["isError"])
+        text = tool_text(c.response(2))
+        d = self.dispatches()[-1]
+        self.assertIn("/elsewhere", text)
+        self.assertIn("tmux attach -t n1", text)
+        self.assertIn(d.id, text)  # the opening message waits in the window; dispatch_result still works
+        c = self.serve(Client([init(1), call(2, "dispatch_result", {"id": d.id})]))
+        self.assertFalse(c.response(2)["result"]["isError"], tool_text(c.response(2)))
+
+
 class OwnershipTest(Base):
     def other(self):
         self.rows["b"] = dataclasses.replace(self.rows["b"], agent_status="busy")
