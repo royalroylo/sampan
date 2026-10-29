@@ -22,15 +22,23 @@ NOW = datetime(2026, 10, 20, 12, 0, tzinfo=timezone(timedelta(hours=8)))
 SAMPAN = "/Users/u/.local/bin/sampan"
 
 
+def listed(cfg, profile):
+    """installed_plugins entries for every plugin the profile's list asks for, as a successful sync leaves them."""
+    return {pid: [("user", "1", None)] for pid in cfg.profiles[profile].plugins}
+
+
 class DoctorTest(unittest.TestCase):
     def setUp(self):
         self.cfg = make_env(Path(tempfile.mkdtemp()))
-        for p in ("alice", "work"):
-            write_plugins(self.cfg, p, known=GOOD_KNOWN)
+        self.sync_all()
         self.cfg.save_log.parent.mkdir(parents=True)
         self.cfg.save_log.write_text(f"{(NOW - timedelta(minutes=30)).isoformat()} ok 新增 0\n")
         self.r = FakeRunner().on(["claude", "auth", "status"],
                                  cp(out=json.dumps({"loggedIn": True, "email": "alice@example.com"})))
+
+    def sync_all(self):
+        for p in ("alice", "work"):
+            write_plugins(self.cfg, p, installed=listed(self.cfg, p), known=GOOD_KNOWN)
 
     def checks(self, uid=None, sampan_path=SAMPAN, which=lambda name: f"/opt/homebrew/bin/{name}", env=None, **kw):
         env = {"PATH": f"{self.cfg.home}/.local/bin:/usr/bin"} if env is None else env
@@ -89,13 +97,16 @@ class DoctorTest(unittest.TestCase):
     def test_official_marketplace_left_by_claude_is_not_reported(self):
         # a new machine: Claude adds its official marketplace on its own, the config lists none, no plugin uses it
         self.cfg = make_env(self.cfg.path.parent, NO_OFFICIAL)
+        self.sync_all()
         titles = [c.title for c in self.checks()]
         self.assertFalse(any("claude-plugins-official" in t for t in titles), titles)
         self.assertFalse(any("marketplace remove" in c.detail for c in self.checks()))
 
     def test_official_marketplace_in_use_still_says_keep_it(self):
         self.cfg = make_env(self.cfg.path.parent, NO_OFFICIAL)
-        write_plugins(self.cfg, "work", installed={"superpowers@claude-plugins-official": [("user", "1", None)]},
+        self.sync_all()
+        write_plugins(self.cfg, "work", installed={**listed(self.cfg, "work"),
+                                                   "superpowers@claude-plugins-official": [("user", "1", None)]},
                       known=GOOD_KNOWN)
         checks = [c for c in self.checks() if "claude-plugins-official" in c.title]
         self.assertEqual([c.level for c in checks], ["warn"])
@@ -113,7 +124,8 @@ class DoctorTest(unittest.TestCase):
     def test_git_url_marketplace_is_fine(self):
         self.cfg = make_env(self.cfg.path.parent, TOML.replace('"owner/my-plugins"', '"https://git.example.com/owner/my-plugins.git"'))
         for p in ("alice", "work"):
-            write_plugins(self.cfg, p, known={**GOOD_KNOWN, "my-plugins": "https://git.example.com/owner/my-plugins.git"})
+            write_plugins(self.cfg, p, installed=listed(self.cfg, p),
+                          known={**GOOD_KNOWN, "my-plugins": "https://git.example.com/owner/my-plugins.git"})
         self.assertEqual(self.failing(), [])
 
     def test_unlisted_marketplace_with_installed_plugin_is_not_removed(self):
@@ -126,6 +138,20 @@ class DoctorTest(unittest.TestCase):
         self.assertEqual({c.level for c in checks}, {"warn"})
         self.assertFalse(any("marketplace remove" in c.detail for c in checks), [c.detail for c in checks])
         self.assertTrue(all("sampan init" in c.detail for c in checks))
+
+    def test_listed_plugin_that_failed_to_install_fails(self):
+        # WSL report: marketplace add failed, the plugin never installed, doctor still said everything matched the list
+        write_plugins(self.cfg, "work", known={"claude-plugins-official": "anthropics/claude-plugins-official"})
+        checks = [c for c in self.checks() if c.level == "fail" and c.title.startswith("work：清單上")]
+        titles = [c.title for c in checks]
+        self.assertTrue(any("marketplace my-plugins" in t for t in titles), titles)
+        self.assertTrue(any("tools@my-plugins" in t for t in titles), titles)
+        self.assertTrue(all("sampan plugins sync --profile work" in c.detail for c in checks))
+        self.assertNotIn("plugin 與 marketplace 設定符合清單", [c.title for c in self.checks()])
+
+    def test_plugin_installed_only_outside_user_scope_still_counts_as_missing(self):
+        write_plugins(self.cfg, "work", installed={"tools@my-plugins": [("local", "1", "/repo")]}, known=GOOD_KNOWN)
+        self.assertTrue(any("沒裝上" in t and "tools@my-plugins" in t for t in self.failing()))
 
     def test_extra_marketplace_in_settings_fails(self):
         (self.cfg.profiles["work"].config_dir / "settings.json").write_text(
