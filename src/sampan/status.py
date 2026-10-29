@@ -9,6 +9,7 @@ from .observe import live_by_pane, multi_agent_sessions
 from .procs import list_procs
 from .registry import RegistryError, load_rows
 from .screens import at_trust_prompt
+from .textwidth import ljust
 from .tmux import Tmux, unreadable_message
 
 CONTEXT_LIMIT = 250_000
@@ -178,8 +179,13 @@ def cmd_status(cfg, run, out):
     warning = rows.warning
     if warning:
         out(f"⚠ {warning}")
-    out(f"{'名稱':<38} {'agent':<6} {'profile':<12} {'id':<8} {'狀態':<16} {'活動':<7} {'最後活動':<11} context")
+    widths = (38, 6, 12, 8, 16, 7, 11)
+
+    def line(*cells):
+        return " ".join(ljust(c, w) for c, w in zip(cells, widths)) + " " + cells[-1]
+
+    out(line("名稱", "agent", "profile", "id", "狀態", "活動", "最後活動", "context"))
     for r in rows:
-        out(f"{r.name:<38} {r.agent:<6} {r.profile:<12} {r.sid[:8]:<8} {r.display:<16} {r.agent_status:<7} "
-            f"{_fmt_time(r.last):<11} {_fmt_tokens(r.tokens, r.context_window)}")
+        out(line(r.name, r.agent, r.profile, r.sid[:8], r.display, r.agent_status,
+                 _fmt_time(r.last), _fmt_tokens(r.tokens, r.context_window)))
     return 1 if warning else 0

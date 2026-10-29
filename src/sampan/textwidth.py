@@ -20,3 +20,8 @@ def pad(text, width):
         out.append(ch)
         used += w
     return "".join(out) + " " * max(0, width - used)
+
+
+def ljust(text, width):
+    """Pad to a display width like str.ljust (CJK takes two cells); longer text is kept whole."""
+    return text + " " * max(0, width - text_width(text))

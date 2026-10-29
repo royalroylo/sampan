@@ -168,6 +168,30 @@ class AgentStatusTest(unittest.TestCase):
         self.assertEqual(rows[0].last, datetime.fromtimestamp(1_792_000_000, timezone.utc))
 
 
+class StatusAlignmentTest(unittest.TestCase):
+    def test_columns_line_up_by_display_width_with_cjk_names(self):
+        from sampan.textwidth import text_width
+        cfg = make_env(Path(tempfile.mkdtemp()))
+        write_rows(cfg.registry_path, [Row("報價系統-測試", "claude", "alice", A, "/c"),
+                                       Row("plain", "claude", "alice", B, "/c")], "t", cfg.history_dir)
+        r = FakeRunner().on(["tmux", "-u", "list-panes"], cp(out=""))
+        msgs = []
+        cmd_status(cfg, r, msgs.append)
+        lines = [m for m in msgs if not m.startswith("⚠")]
+        # the agent column starts at the same screen column on the header and every row
+        starts = {text_width(m[:m.index(word)]) for m, word in zip(lines, ["agent", "claude", "claude"])}
+        self.assertEqual(len(starts), 1, lines)
+
+    def test_long_name_is_not_cut(self):
+        cfg = make_env(Path(tempfile.mkdtemp()))
+        long = "長" * 30
+        write_rows(cfg.registry_path, [Row(long, "claude", "alice", A, "/c")], "t", cfg.history_dir)
+        r = FakeRunner().on(["tmux", "-u", "list-panes"], cp(out=""))
+        msgs = []
+        cmd_status(cfg, r, msgs.append)
+        self.assertTrue(any(m.startswith(long + " ") for m in msgs), msgs)
+
+
 class MultiAgentStatusTest(unittest.TestCase):
     def test_session_with_two_agents_is_unmanaged(self):
         cfg = make_env(Path(tempfile.mkdtemp()))
