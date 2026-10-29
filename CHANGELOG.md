@@ -5,6 +5,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.13.6] - 2026-10-29
+
+### Added
+- MCP: a `folder_move` tool (put sessions in a folder, created when missing; `/` is the top level; one unknown name, a bad folder name or a broken `folders.json` and nothing changes), `new_session` takes an optional `folder`, and `list_sessions` says each session's `folder`. An agent limited to the MCP can now group sessions. `folder_move` asks like the other acting tools. **Codex: run `sampan mcp install` again** so it asks for `folder_move` too; until then Codex is refused that tool, and `sampan doctor` says so.
+
+### Fixed
+- `sampan doctor` reports a listed marketplace that never got added and listed plugins that never installed (it said the setup matched the list), with `sampan plugins sync --profile <p>` as the fix.
+- `sampan status` lines its columns up by display width, so Chinese names no longer shift the table; long names are kept whole.
+- `sampan adopt` finds a Codex 0.164 that was `codex resume`d outside tmux through the Codex daemon's loaded threads (lsof sees no rollout and its threads row is old). Never a thread a Codex in tmux is on, and no guess while another Codex in that directory is unknown; a guessed conversation is marked and not preselected. The skip text for an unknown Codex now says what to do: send the first prompt in a new one, or one message after a resume.
+
+### Docs
+- WSL: plugins and private-repo credentials (including Windows' Git Credential Manager for GitHub), user-level MCP servers and the Linux Node, moving a Windows Claude conversation in by hand (Codex conversations cannot be moved yet).
+
 ## [0.13.5] - 2026-10-27
 
 ### Fixed
