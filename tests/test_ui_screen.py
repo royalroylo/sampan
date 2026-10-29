@@ -402,10 +402,17 @@ class CursesScreenTest(unittest.TestCase):
 
     def test_adopt_checklist_cancel(self):
         c = NS(key="600", agent="claude", profile="alice", session_id=SID, cwd="/p", where="~/p", last=NOW,
-               ago="3 分鐘前", text="修 bug", quote="「修 bug」", selected=True, skip=None)
+               ago="3 分鐘前", text="修 bug", quote="「修 bug」", selected=True, skip=None, guessed=False)
         s = self.screen(["q"])
         self.assertIsNone(s.adopt_checklist([c]))
         self.assertIn("「修 bug」", "\n".join(self.scr.screens[-1]))
+
+    def test_adopt_card_says_a_guessed_codex_conversation(self):
+        c = NS(key="700", agent="codex", profile="", session_id=SID, cwd="/p", where="~/p", last=NOW,
+               ago="3 分鐘前", text="整理", quote="「整理」", selected=False, skip=None, guessed=True)
+        s = self.screen(["q"])
+        self.assertIsNone(s.adopt_checklist([c]))
+        self.assertIn("推測", "\n".join(self.scr.screens[-1]))
 
     def test_tiny_terminal_does_not_crash(self):
         s = self.screen(["q"], h=2, w=4)

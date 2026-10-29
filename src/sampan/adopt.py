@@ -55,6 +55,7 @@ class Outside:
     text: str  # beginning of the last user message
     selected: bool
     skip: object  # str | None: why it cannot be adopted
+    guessed: bool = False  # the Codex thread id is the daemon's best guess: shown, never preselected
 
     @property
     def quote(self):
@@ -155,10 +156,15 @@ def _claude_row(cfg, run, p, procs, proc_root):
                 last=last, text=text, skip=skip)
 
 
+GUESSED = "從 Codex 常駐服務推測的對話（沒有預先勾選）：確認最後一句話是這個視窗的，再勾選接手"
+
+
 def _in_tmux_threads(cfg, run, panes, procs, now, snap):
-    """Thread ids the Codex processes in tmux panes are on (read with the same daemon snapshot): never an outside one's."""
+    """(thread ids the Codex processes in tmux panes are on, real cwds of the ones whose thread is unknown), read with
+    the same daemon snapshot. Neither may be given to an outside Codex."""
     found, _ = live_codex(cfg, run, panes, procs, now=now.timestamp(), snapshot_fn=lambda *a, **k: snap)
-    return {lc.thread_id for lc in found.values() if lc.thread_id}
+    return ({lc.thread_id for lc in found.values() if lc.thread_id},
+            [os.path.realpath(lc.cwd) for lc in found.values() if not lc.thread_id])
 
 
 def _codex_rows(cfg, run, tops, now, panes=(), procs=(), snapshot_fn=None):
@@ -182,14 +188,24 @@ def _codex_rows(cfg, run, tops, now, panes=(), procs=(), snapshot_fn=None):
         if started is not None:
             starts[r["pid"]] = started
     unresolved = [r for r in rows if r["pid"] in starts and guesses[r["pid"]] is None]
+    guessed = set()
     if unresolved:  # the only daemon call: none when lsof or the db already told every row
         snap = (snapshot_fn or codex_daemon.snapshot)(home, run, now=now)
         if snap is not None and os.path.realpath(snap.home) == os.path.realpath(home):
-            taken = bound | {g for g in guesses.values() if g and g != AMBIGUOUS} | \
-                _in_tmux_threads(cfg, run, panes, procs, now, snap)
+            in_tmux, unknown = _in_tmux_threads(cfg, run, panes, procs, now, snap)
+            taken = bound | {g for g in guesses.values() if g and g != AMBIGUOUS} | in_tmux
+            # every other Codex whose thread is unknown (outside or in tmux, its start time read or not) could be on
+            # the thread the daemon offers: then there is no telling, so no guess (adopt would open the wrong one)
+            unknown += [x["cwd"] if x["cwd"] == "?" else os.path.realpath(x["cwd"]) for x in rows
+                        if not x["session_id"] and guesses.get(x["pid"]) in (None, AMBIGUOUS)]
             for r in unresolved:
-                same = sum(1 for x in unresolved if os.path.realpath(x["cwd"]) == os.path.realpath(r["cwd"]))
-                guesses[r["pid"]] = daemon_fallback(snap, r["cwd"], taken, starts[r["pid"]], same)
+                if r["cwd"] == "?" or "?" in unknown or unknown.count(os.path.realpath(r["cwd"])) > 1:
+                    guesses[r["pid"]] = AMBIGUOUS
+                    continue
+                g = daemon_fallback(snap, r["cwd"], taken, starts[r["pid"]], 1)
+                guesses[r["pid"]] = g
+                if g and g != AMBIGUOUS:
+                    guessed.add(r["pid"])
     for r in rows:
         if not cfg.codex.enabled:
             r["skip"] = "設定檔停用了 Codex"
@@ -198,6 +214,7 @@ def _codex_rows(cfg, run, tops, now, panes=(), procs=(), snapshot_fn=None):
             g = guesses.get(r["pid"])
             if g and g != AMBIGUOUS and list(guesses.values()).count(g) == 1:
                 r["session_id"] = g
+                r["guessed"] = r["pid"] in guessed
             else:
                 r["skip"] = ("同目錄有兩段對話一樣接近，判斷不出 thread id" if g == AMBIGUOUS else
                              "同目錄有多個 Codex 對到同一段對話，判斷不出 thread id" if g else
@@ -235,7 +252,7 @@ def outside_agents(cfg, run, now, *, proc_root=PROC_ROOT, own_pid=None, snapshot
         last = r["last"]
         result.append(Outside(str(r["pid"]), r["agent"], r["pid"], r["pids"], r["profile"], r["session_id"], r["cwd"],
                               _short(cfg, r["cwd"]), last, _ago(last, now), _snippet(r["text"] or ""),
-                              r["skip"] is None, r["skip"]))
+                              r["skip"] is None and not r.get("guessed"), r["skip"], bool(r.get("guessed"))))
     epoch = datetime.min.replace(tzinfo=timezone.utc)
     return sorted(result, key=lambda c: c.last or epoch, reverse=True)
 
@@ -360,6 +377,8 @@ def _show(out, cands):
         out(f"  [{mark}] {i:>2}) {c.agent}  {c.profile or '-'}  {c.where}  {c.ago}  {c.quote}".rstrip())
         if c.skip:
             out(f"         ↷ 跳過：{c.skip}")
+        elif c.guessed:
+            out(f"         ? {GUESSED}")
 
 
 def cmd_adopt(cfg, run, out, ask, *, dry_run=False, picker_fn=None, sleep=time.sleep,

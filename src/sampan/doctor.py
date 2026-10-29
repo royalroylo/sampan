@@ -76,12 +76,14 @@ def _keep_unlisted(p, name, where, used, src):
                  f"不要移除（這些 plugin 會失效）；要讓 sampan 管理就再跑 sampan init，或在 [marketplaces] 加上 {add}")
 
 
-def _not_installed(p, st):
-    """What the list asks for but a sync never got in (e.g. marketplace add failed); doctor used to call this matching."""
+def _not_installed(cfg, p, st):
+    """What the list asks for but a sync never got in (e.g. marketplace add failed); doctor used to call this matching.
+    A marketplace with the wrong source is reported on its own, and sync skips its plugins, so they are not repeated."""
     fix = f"sampan plugins sync --profile {p.name}（看它印出的錯誤：常見是私有 repo 沒有認證）"
     out = [Check("fail", f"{p.name}：清單上的 marketplace {m} 沒有加進來", fix)
            for m in sorted({pid.split("@", 1)[1] for pid in p.plugins} - set(st.marketplaces))]
-    missing = [pid for pid in p.plugins if pid not in st.installed]
+    wrong = {m for m, repo in st.marketplaces.items() if m in cfg.marketplaces and not same_source(repo, cfg.marketplaces[m])}
+    missing = [pid for pid in p.plugins if pid not in st.installed and pid.split("@", 1)[1] not in wrong]
     if missing:
         out.append(Check("fail", f"{p.name}：清單上的 plugin 沒裝上：{', '.join(missing)}", fix))
     return out
@@ -100,7 +102,7 @@ def _plugins(cfg):
             out.append(Check("fail", f"{p.name}：settings.json 的 extraKnownMarketplaces 有清單外項目 {name}",
                              "從該 profile 的 settings.json 移除"))
         out += _scoped(cfg, p, st)
-        out += _not_installed(p, st)
+        out += _not_installed(cfg, p, st)
         for name, repo in sorted(st.marketplaces.items()):
             if name not in cfg.marketplaces:
                 used = _in_use(st, name)

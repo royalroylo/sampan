@@ -116,7 +116,7 @@ On Windows, install and use sampan inside WSL (for example Ubuntu), as for Linux
 - User-level MCP servers (`claude mcp add --scope user`) do not come with the plugins; add them again in WSL. For ones that need Node, install the Linux Node in WSL first (for example from NodeSource): WSL's PATH carries the Windows paths by default, and `npx` may resolve to the Windows one under `/mnt/c/…`.
 - Moving a Claude conversation that is under way on Windows into WSL (by hand):
   1. Note the conversation id (`/status` shows it) and `/exit` on the Windows side.
-  2. Copy `%USERPROFILE%\.claude\projects\C--Users-…\<id>.jsonl` (and the folder of the same name, if there is one) to WSL's `~/.claude/projects/-mnt-c-Users-…/` (the folder name is the working directory inside WSL with `/` turned into `-`).
+  2. Copy `%USERPROFILE%\.claude\projects\C--Users-…\<id>.jsonl` (and the folder of the same name, if there is one) to WSL's `~/.claude/projects/-mnt-c-Users-…/` (the folder name is the working directory inside WSL with every character other than letters and digits, `/`, `.`, `_` and spaces included, turned into `-`: `/mnt/c/Users/a.b/my_app` → `-mnt-c-Users-a-b-my-app`).
   3. In WSL `cd` to the same directory (`/mnt/c/…`), run `claude --resume <id>`, and once it is back hand it to sampan with `sampan adopt`.
   A Codex conversation records Windows paths (`C:\…`); there is no way to move it yet.
 

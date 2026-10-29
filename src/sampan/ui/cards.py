@@ -1,7 +1,7 @@
 """Info card: per-row data (gather_cards), card contents (card_lines, restore_card, adopt_card, preview_header) and the style decisions. Pure data, never touches curses."""
 from .. import claude_state, codex_state
 from .. import folders as F
-from ..adopt import _ago, _short
+from ..adopt import GUESSED, _ago, _short
 from ..registry import RegistryError, load_rows
 from ..restart import BUSY
 from ..status import State, _fmt_time, _fmt_tokens
@@ -187,6 +187,8 @@ def adopt_card(c):
         lines += ["", "最後一句話", Wrap(c.quote)]
     if c.skip:
         lines += ["", Wrap(f"↷ 不能接手：{c.skip}")]
+    elif c.guessed:
+        lines += ["", Wrap(f"? {GUESSED}")]
     return lines
 
 

@@ -183,12 +183,36 @@ class ResumedCodexTest(Base):
         self.rollout(tid, str(cwd or self.cwd))
         return NOW - timedelta(minutes=2)  # used after the process started
 
-    def test_resumed_codex_is_found_through_the_daemon(self):
+    def test_resumed_codex_is_found_through_the_daemon_but_not_preselected(self):
         used = self.resumed(TID)
         [c] = self.found(snapshot_fn=self.snap((TID, str(self.cwd), used),
                                                (TID2, str(self.cwd), NOW - timedelta(days=3))))  # stale, not this one
-        self.assertEqual((c.session_id, c.skip), (TID, None))
+        self.assertEqual((c.session_id, c.skip, c.guessed, c.selected), (TID, None, True, False))
         self.assertEqual(c.text, "整理 README")
+        self.adopt(self.runner(), snapshot_fn=self.snap((TID, str(self.cwd), used)))
+        self.assertIn("推測", self.text())
+        self.assertEqual(self.keys(), [])  # the default picker takes only the preselected: nothing is launched
+
+    def test_another_unknown_codex_in_the_same_directory_blocks_the_guess(self):
+        # review: a Codex whose start time cannot be read could be on the thread the daemon offers
+        used = self.resumed(TID)
+        self.procs += [ps_line(799, 1, "-zsh", "-zsh"), ps_line(800, 799, "codex", "codex", stat="S+")]
+        self.cwds[800] = str(self.cwd)
+        r = self.runner()
+        r.on(["ps", "-o", "etime="], lambda a: cp(rc=1) if a[-1] == "800" else cp(out="10:00\n"))
+        cands = outside_agents(self.cfg, r, NOW, proc_root=NO_PROC, own_pid=99999,
+                               snapshot_fn=self.snap((TID, str(self.cwd), used)))
+        self.assertEqual([c.session_id for c in cands], [None, None])
+
+    def test_a_tmux_codex_with_an_unknown_thread_in_the_same_directory_blocks_the_guess(self):
+        used = self.resumed(TID)
+        self.panes.append(pane_line("cx", "%5", 500, "codex", str(self.cwd)))
+        self.procs += [ps_line(500, 1, "-zsh", "-zsh"), ps_line(501, 500, "codex", "codex")]
+        r = self.runner()
+        r.on(["ps", "-o", "etime="], lambda a: cp(rc=1) if a[-1] == "501" else cp(out="10:00\n"))
+        [c] = outside_agents(self.cfg, r, NOW, proc_root=NO_PROC, own_pid=99999,
+                             snapshot_fn=self.snap((TID, str(self.cwd), used)))
+        self.assertIsNone(c.session_id)
 
     def test_thread_of_a_codex_in_tmux_is_not_taken(self):
         used = self.resumed(TID)
@@ -196,7 +220,7 @@ class ResumedCodexTest(Base):
         self.procs += [ps_line(500, 1, "-zsh", "-zsh"), ps_line(501, 500, "codex", "codex")]
         self.lsof[501] = self.rollout(TID2, str(self.cwd))
         [c] = self.found(snapshot_fn=self.snap((TID, str(self.cwd), used), (TID2, str(self.cwd), used)))
-        self.assertEqual((c.session_id, c.skip), (TID, None))
+        self.assertEqual((c.session_id, c.skip, c.guessed), (TID, None, True))
 
     def test_two_candidates_are_not_guessed(self):
         used = self.resumed(TID)

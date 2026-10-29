@@ -149,6 +149,13 @@ class DoctorTest(unittest.TestCase):
         self.assertTrue(all("sampan plugins sync --profile work" in c.detail for c in checks))
         self.assertNotIn("plugin 與 marketplace 設定符合清單", [c.title for c in self.checks()])
 
+    def test_wrong_source_marketplace_is_not_also_reported_as_missing_plugins(self):
+        # review: sync skips a wrong-source marketplace's plugins, so "run sync" would not help
+        write_plugins(self.cfg, "work", known={**GOOD_KNOWN, "my-plugins": "someone/else"})
+        titles = self.failing()
+        self.assertTrue(any("來源" in t and "my-plugins" in t for t in titles), titles)
+        self.assertFalse(any("沒裝上" in t and t.startswith("work：") for t in titles), titles)
+
     def test_plugin_installed_only_outside_user_scope_still_counts_as_missing(self):
         write_plugins(self.cfg, "work", installed={"tools@my-plugins": [("local", "1", "/repo")]}, known=GOOD_KNOWN)
         self.assertTrue(any("沒裝上" in t and "tools@my-plugins" in t for t in self.failing()))

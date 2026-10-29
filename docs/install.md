@@ -113,7 +113,7 @@ Windows 上要在 WSL（例如 Ubuntu）裡安裝和使用，步驟同上面的 
 - 使用者層級的 MCP（`claude mcp add --scope user`）不會跟著 plugin 裝好，要在 WSL 裡另外加。要 Node 的，先在 WSL 裝 Linux 版 Node（例如 NodeSource）：WSL 的 PATH 預設帶著 Windows 的路徑，`npx` 可能會用到 `/mnt/c/…` 裡 Windows 的那個。
 - 把 Windows 上進行中的 Claude 對話搬進 WSL（手動）：
   1. 記下對話 id（`/status` 看得到），在 Windows 那邊 `/exit`。
-  2. 把 `%USERPROFILE%\.claude\projects\C--Users-…\<id>.jsonl`（有同名資料夾的話一起）複製到 WSL 的 `~/.claude/projects/-mnt-c-Users-…/`（資料夾名稱是 WSL 裡的工作目錄把 `/` 換成 `-`）。
+  2. 把 `%USERPROFILE%\.claude\projects\C--Users-…\<id>.jsonl`（有同名資料夾的話一起）複製到 WSL 的 `~/.claude/projects/-mnt-c-Users-…/`（資料夾名稱是 WSL 裡的工作目錄把英數字以外的字元，包括 `/`、`.`、`_`、空白，都換成 `-`，例如 `/mnt/c/Users/a.b/my_app` → `-mnt-c-Users-a-b-my-app`）。
   3. 在 WSL 裡 `cd` 到同一個目錄（`/mnt/c/…`），`claude --resume <id>`，確認接上後再 `sampan adopt` 交給 sampan。
   Codex 的對話記錄裡寫的是 Windows 路徑（`C:\…`），目前沒有搬家的方法。
 
