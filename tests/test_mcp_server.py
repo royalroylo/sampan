@@ -799,6 +799,37 @@ class NewSessionTrustTest(Base):
                 self.assertIs(seen["trust"], confirm)
                 self.assertIsNotNone(seen["on_prompt"])
 
+    def test_codex_client_never_gets_the_trust_answered(self):
+        fake, seen = self.fake_new()
+        with mock.patch.object(mcp_server.session_run, "cmd_new", fake), \
+                mock.patch.object(mcp_server.Server, "_client_asks", lambda *_a: None):
+            self.serve(Client([init(1, client="codex-mcp-client"), call(2, "new_session", self.args)], last_id=2),
+                       run=new_runner(), confirm=True)
+        self.assertIs(seen["trust"], False)
+
+    def test_claude_that_never_came_up_is_an_error_not_a_success(self):
+        # reviewer: a login / theme screen is no prompt sampan parses; the timeout used to read as success
+        def fake(cfg, run, out, name, target, cwd, *, message=None, caller=None, **kw):
+            send.submit_new(cfg, caller, name, "claude", "work", message, notify=True, now=NOW)
+            out(f"  已信任 {cwd}")
+            out(f"⚠ {name} 已開啟並登記，但 15 秒內沒看到 session 檔")
+            return 1
+        with mock.patch.object(mcp_server.session_run, "cmd_new", fake):
+            c = self.serve(Client([init(1), call(2, "new_session", self.args)], last_id=2), run=new_runner())
+        self.assertTrue(c.response(2)["result"]["isError"])
+        text = tool_text(c.response(2))
+        self.assertIn("沒有啟動完成", text)
+        self.assertIn(f"已信任 {self.cwd.resolve()}", text)  # the user learns the folder is now trusted
+        self.assertIn("tmux attach -t n1", text)
+
+    def test_truncated_codex_path_is_said(self):
+        from sampan.screens import Prompt
+        cut = str(self.cwd.resolve())[:-3]
+        fake, _ = self.fake_new(stops_at=Prompt("codex", "trust?", ("Yes", "No"), 0, (), ("1", "2"), trust_path=cut))
+        with mock.patch.object(mcp_server.session_run, "cmd_new", fake):
+            c = self.serve(Client([init(1), call(2, "new_session", self.args)], last_id=2), run=new_runner())
+        self.assertIn("截斷", tool_text(c.response(2)))
+
     def test_stuck_at_a_prompt_is_an_error_that_says_where(self):
         from sampan.screens import Prompt
         p = Prompt("claude", "Quick safety check", ("Yes, I trust this folder", "No, exit"), 0, (),

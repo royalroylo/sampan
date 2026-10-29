@@ -357,6 +357,46 @@ class NewAndStateTest(Base):
                 self.assertEqual((rc, len(asked)), (1, 1))
                 self.assertEqual(sent[1:], [])
 
+    def test_new_trust_presses_once_through_a_slow_redraw(self):
+        from tests.test_prompts import CLAUDE_TRUST
+        r = self.runner()
+        r.on(["tmux", "-u", "list-panes"], lambda a: cp(out="\n".join(self.panes) + "\n"))
+        trust = CLAUDE_TRUST.replace("/private/tmp/…/scratchpad/claude-trust-probe", str(self.cwd.resolve()))
+        sent, captures = [], [0]
+
+        def send(a):
+            sent.append(a[4:])
+            return cp()
+
+        def capture(a):
+            captures[0] += 1
+            if [k for k in sent[1:] if k[1:] == ["Enter"]] and captures[0] >= 5:  # the screen catches up late
+                self.panes = [pane_line("new-x", "%50", 100, "claude", str(self.cwd))]
+                self.procs = [ps_line(100, 1, "-zsh", "-zsh"), ps_line(900, 100, "claude", "claude")]
+                write_session(self.cfg, "work", 900, sid=B, cwd=str(self.cwd), tmux="new-x:@1.%50")
+                return cp(out="")
+            return cp(out=trust)
+        r.on(["tmux", "-u", "send-keys"], send)
+        r.on(["tmux", "-u", "capture-pane"], capture)
+        asked = []
+        rc = cmd_new(self.cfg, r, self.msgs.append, "new-x", "work", str(self.cwd), sleep=lambda _: None,
+                     uuid4=lambda: B, timeout=8, trust=True, on_prompt=lambda *a: asked.append(a) or SKIP)
+        self.assertEqual((rc, asked), (0, []))
+        self.assertEqual([k[1:] for k in sent[1:]], [["Down"], ["Enter"]])  # never pressed a second time
+
+    def test_new_trust_then_another_prompt_goes_to_on_prompt(self):
+        from tests.test_prompts import CLAUDE_TRUST
+        r, sent = self.trust_runner(str(self.cwd.resolve()))
+        other = CLAUDE_TRUST.replace("/private/tmp/…/scratchpad/claude-trust-probe", "/another/dir")
+        r.on(["tmux", "-u", "send-keys"], lambda a: sent.append(a[4:]) or cp())
+        screens = [CLAUDE_TRUST.replace("/private/tmp/…/scratchpad/claude-trust-probe", str(self.cwd.resolve())), other]
+        r.on(["tmux", "-u", "capture-pane"], lambda a: cp(out=screens[0] if not sent[1:] else screens[1]))
+        asked = []
+        rc = cmd_new(self.cfg, r, self.msgs.append, "new-x", "work", str(self.cwd), sleep=lambda _: None,
+                     uuid4=lambda: B, timeout=5, trust=True, on_prompt=lambda n, a, p: asked.append(p.trust_path) or SKIP)
+        self.assertEqual((rc, asked), (1, ["/another/dir"]))
+        self.assertEqual([k[1:] for k in sent[1:]], [["Down"], ["Enter"]])
+
     def test_new_without_trust_relays_the_trust_prompt(self):
         r, sent = self.trust_runner(str(self.cwd.resolve()))
         rc = cmd_new(self.cfg, r, self.msgs.append, "new-x", "work", str(self.cwd), sleep=lambda _: None,

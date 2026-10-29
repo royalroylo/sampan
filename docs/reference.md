@@ -107,7 +107,7 @@ stdio MCP server（每行一則 JSON-RPC 2.0；協定版本 `2025-06-18`，clien
 |---|---|---|---|
 | `list_sessions` | 無 | `sessions`：每列 `name`、`agent`、`profile`、`cwd`、`folder`（所在資料夾，`""` 是最上層；`folders.json` 讀不到時全是 `""`，`warning` 說明）、`state`（`running`、`stopped`…）、`activity`（`idle`、`busy`…）、`last`（UTC ISO 或 `null`）；讀不到 tmux 時多一個 `warning` | 不問 |
 | `send` | `session`、`message`、`wait`（預設 `false`） | `dispatch`、`state`，做完時有 `reply`，還沒送出時有 `reason`。`wait` 最多等 60 秒；沒等到的照樣留著，完成或失敗時往呼叫者的 session 送一則通知 | 問 |
-| `new_session` | `name`、`target`（`claude:<profile>`、`<profile>` 或 `codex`）、`cwd`、`message`、`folder`（選填，跟 `sampan new --folder` 一樣，沒有就建立） | `dispatch`（跟 `sampan new --message` 一樣，開場訊息的派工）。新目錄的信任提示：`confirm = true` 時你已在權限提示看過 `cwd`，sampan 只替你信任「提示上顯示的正是這個 `cwd`」的那一個；其他提示（別的目錄、更新、認不出的選單）和 `confirm = false` 時一律不按鍵，回 `isError` 說停在哪個提示、`tmux attach -t <名稱>` 進去處理，開場訊息處理完才開始（派工照樣可用 `dispatch_result` 看） | 問 |
+| `new_session` | `name`、`target`（`claude:<profile>`、`<profile>` 或 `codex`）、`cwd`、`message`、`folder`（選填，跟 `sampan new --folder` 一樣，沒有就建立） | `dispatch`（跟 `sampan new --message` 一樣，開場訊息的派工）。新目錄的信任提示：`confirm = true` 而且呼叫的是 Claude Code（它的權限提示顯示完整參數；Codex 還沒確認，不自動信任）時，你已在權限提示看過 `cwd`，sampan 只替你信任「提示上顯示的正是這個 `cwd`」的那一個；其他提示（別的目錄、更新、認不出的選單）和 `confirm = false` 時一律不按鍵，回 `isError` 說停在哪個提示、`tmux attach -t <名稱>` 進去處理，開場訊息處理完才開始（派工照樣可用 `dispatch_result` 看）。Claude 在時限內沒啟動完成（例如停在登入或主題畫面）也回 `isError`；已替你信任的目錄會寫在訊息裡 | 問 |
 | `dispatch_result` | `id`、`wait`（0–60 秒，預設 0） | `dispatch`、`state`、`label`、`to`、`reply`、`reason` | 不問 |
 | `cancel_dispatch` | `id` | `dispatch`、`state`；排隊中的取消，已送出的改成不再等回覆（多一個 `reason`「不再等回覆」） | 問 |
 | `folder_move` | `sessions`（名稱清單）、`folder`（路徑，`/` 是最上層；沒有就建立） | `moved`、`folder`。跟 `sampan folder move` 一樣只改畫面分組；有一個名稱找不到、資料夾名稱不合法或 `folders.json` 壞了就整筆不改 | 問 |

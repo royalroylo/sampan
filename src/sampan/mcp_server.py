@@ -35,6 +35,7 @@ ACTING_TOOLS = ("send", "new_session", "cancel_dispatch", "folder_move")
 ASKING_CLIENTS = {"claude-code", "codex-mcp-client"}  # Codex: only with approval_mode = "prompt" (codex_approval)
 NOT_ASKING = "這個 client 不會先問使用者；要用請在 config 設 [mcp] confirm = false"
 CODEX = "codex-mcp-client"
+CLAUDE_CODE = "claude-code"  # its permission prompt shows a tool's whole arguments (the cwd new_session will trust)
 # basename of the command of the process that must have started the server (checked 2026-10-27: Claude Code runs
 # `claude`, Codex runs `…/.codex/packages/app-server-daemon/releases/<version>/bin/codex`)
 AGENT_PARENTS = ("claude", "codex")
@@ -463,10 +464,11 @@ class Server:
         def stop(_name, _agent, p):  # nobody to ask from here: never a key, the user goes in
             stuck.append(p)
             return SKIP
-        # with confirm the user saw this cwd in the tool's permission prompt: its own trust prompt is answered
+        # with confirm, Claude Code showed the user this cwd in the tool's permission prompt: its own trust prompt is
+        # answered. Not for Codex: whether its approval shows the whole arguments is not verified
         rc = session_run.cmd_new(self.cfg, self.run, lines.append, name, target, cwd, message=message,
                                  caller=caller, sleep=self.sleep, folder=folder, on_prompt=stop,
-                                 trust=self.cfg.mcp_confirm)  # checks everything again before creating
+                                 trust=self.cfg.mcp_confirm and self.client_name == CLAUDE_CODE)  # checks everything again before creating
         said = "\n".join(str(x).removeprefix("❌ ") for x in lines).strip()
         new = [d for d in dispatch.load(self.cfg.state_dir) if d.id not in before and d.to_name == name]
         if not new or rc not in (0, 1):
@@ -475,12 +477,18 @@ class Server:
         if d.state == "failed":
             raise ToolError(d.reason or said)
         self.mine.add(d.id)
+        later = f"請使用者進去處理：tmux attach -t {name}。開場訊息（派工 {d.id}）處理完才會開始，之後用 dispatch_result 看"
+        trusted = next((x.strip() for x in said.splitlines() if x.strip().startswith("已信任 ")), None)
+        done = f"（{trusted}）" if trusted else ""
         if stuck:
             p = stuck[-1]
-            what = f"信任 {p.trust_path} 的提示" if p.trust_path else (p.question or "認不出的選單")
-            raise ToolError(f"{name} 已開啟，但停在 {agent} 的提示（{what}），這個提示 sampan 不替使用者回答。"
-                            f"請使用者進去處理：tmux attach -t {name}。開場訊息（派工 {d.id}）處理完才會開始，"
-                            f"之後用 dispatch_result 看")
+            if p.trust_path and cwd.startswith(p.trust_path) and p.trust_path != cwd:
+                what = f"信任資料夾的提示，路徑被畫面寬度截斷（{p.trust_path}），無法確認是 {cwd}"
+            else:
+                what = f"信任 {p.trust_path} 的提示" if p.trust_path else (p.question or "認不出的選單")
+            raise ToolError(f"{name} 已開啟{done}，但停在 {agent} 的提示（{what}），這個提示 sampan 不替使用者回答。{later}")
+        if rc == 1 and agent == "claude":  # no session file in time and no prompt sampan recognises: not a success
+            raise ToolError(f"{name} 已開啟{done}，但 Claude 沒有啟動完成（可能停在登入、主題或其他 sampan 認不出的畫面）。{later}")
         out = {"dispatch": d.id}
         if said:
             out["note"] = said
