@@ -104,6 +104,18 @@ Windows 上要在 WSL（例如 Ubuntu）裡安裝和使用，步驟同上面的 
 - 自動存檔用上面的 systemd user timer：先在 `/etc/wsl.conf` 加 `[boot]` `systemd=true`，再重開 WSL。
 - 重開 WSL 是 `wsl.exe --shutdown`（在 WSL 裡打 `wsl --shutdown` 會找不到指令）。之後開一個新的終端機分頁、用 `wsl ~` 進去，再 `sampan restore` 接回；在原本的分頁重新進 WSL，有的終端機（例如 WezTerm）按鍵會變成亂碼。
 - Windows 重開機或 WSL 關掉時，tmux 和所有 session 都會結束，要自己 `sampan restore` 接回。
+- plugin：把 Windows 上用的 marketplace 和 plugin 寫進 `config.toml`，再 `sampan plugins sync`。私有 repo 要先在 WSL 裡設好 git 認證，否則 marketplace 加不進來（`sampan doctor` 會報「清單上的 marketplace … 沒有加進來」）：自架的 Git 伺服器可用 `git config --global credential.helper store`；GitHub 可以借 Windows 的 Git Credential Manager：
+  ```sh
+  git config --global credential.helper ""   # 先清掉其他 helper
+  git config --global --add credential.helper "/mnt/c/Program\ Files/Git/mingw64/bin/git-credential-manager.exe"
+  git config --global credential.https://github.com.username <你的 GitHub 帳號>
+  ```
+- 使用者層級的 MCP（`claude mcp add --scope user`）不會跟著 plugin 裝好，要在 WSL 裡另外加。要 Node 的，先在 WSL 裝 Linux 版 Node（例如 NodeSource）：WSL 的 PATH 預設帶著 Windows 的路徑，`npx` 可能會用到 `/mnt/c/…` 裡 Windows 的那個。
+- 把 Windows 上進行中的 Claude 對話搬進 WSL（手動）：
+  1. 記下對話 id（`/status` 看得到），在 Windows 那邊 `/exit`。
+  2. 把 `%USERPROFILE%\.claude\projects\C--Users-…\<id>.jsonl`（有同名資料夾的話一起）複製到 WSL 的 `~/.claude/projects/-mnt-c-Users-…/`（資料夾名稱是 WSL 裡的工作目錄把 `/` 換成 `-`）。
+  3. 在 WSL 裡 `cd` 到同一個目錄（`/mnt/c/…`），`claude --resume <id>`，確認接上後再 `sampan adopt` 交給 sampan。
+  Codex 的對話記錄裡寫的是 Windows 路徑（`C:\…`），目前沒有搬家的方法。
 
 ## sampan init 做什麼
 

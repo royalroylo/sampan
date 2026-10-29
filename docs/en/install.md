@@ -107,6 +107,18 @@ On Windows, install and use sampan inside WSL (for example Ubuntu), as for Linux
 - For auto-save use the systemd user timer above: first add `[boot]` `systemd=true` to `/etc/wsl.conf`, then restart WSL.
 - Restart WSL with `wsl.exe --shutdown` (`wsl --shutdown` typed inside WSL is not found). Then open a new terminal tab, enter with `wsl ~` and run `sampan restore`; going back into WSL in the old tab can garble every key in some terminals (for example WezTerm).
 - When Windows restarts or WSL shuts down, tmux and every session end; run `sampan restore` yourself to bring them back.
+- Plugins: put the marketplaces and plugins you use on Windows into `config.toml`, then `sampan plugins sync`. A private repo needs git credentials set up inside WSL first, or its marketplace cannot be added (`sampan doctor` reports 「清單上的 marketplace … 沒有加進來」): a self-hosted Git server can use `git config --global credential.helper store`; for GitHub you can borrow Windows' Git Credential Manager:
+  ```sh
+  git config --global credential.helper ""   # clear other helpers first
+  git config --global --add credential.helper "/mnt/c/Program\ Files/Git/mingw64/bin/git-credential-manager.exe"
+  git config --global credential.https://github.com.username <your GitHub user>
+  ```
+- User-level MCP servers (`claude mcp add --scope user`) do not come with the plugins; add them again in WSL. For ones that need Node, install the Linux Node in WSL first (for example from NodeSource): WSL's PATH carries the Windows paths by default, and `npx` may resolve to the Windows one under `/mnt/c/…`.
+- Moving a Claude conversation that is under way on Windows into WSL (by hand):
+  1. Note the conversation id (`/status` shows it) and `/exit` on the Windows side.
+  2. Copy `%USERPROFILE%\.claude\projects\C--Users-…\<id>.jsonl` (and the folder of the same name, if there is one) to WSL's `~/.claude/projects/-mnt-c-Users-…/` (the folder name is the working directory inside WSL with `/` turned into `-`).
+  3. In WSL `cd` to the same directory (`/mnt/c/…`), run `claude --resume <id>`, and once it is back hand it to sampan with `sampan adopt`.
+  A Codex conversation records Windows paths (`C:\…`); there is no way to move it yet.
 
 ## What sampan init does
 
