@@ -13,7 +13,7 @@
 | `[ui] start_dir` | 字串路徑，`n`（開新工作）的選目錄畫面從這裡開始；沒寫時用 `~/Projects`（存在的話），否則 `~` |
 | `[ui] detach_key` | 字串，預設 `"C-q"`。在 sampan 管的 session 裡按這個鍵就跳回 sampan：從 tmux 外接上的會 detach，sampan 在 tmux 裡切過去的會切回原本的 session；其他 tmux session 裡這個鍵照常傳給程式。sampan 打開畫面與接上 session 前把綁定寫進正在跑的 tmux（不改 `~/.tmux.conf`），並在它管的 session 設 `@sampan` 標記；你自己已經把這個鍵綁成別的，sampan 不覆蓋，`sampan doctor` 會提示。`""` 不綁（並拿掉 sampan 之前綁的）。限制：在 `sampan` 畫面外（例如 `sampan new` 後直接 `tmux attach`）開的 session，要等 `sampan` 畫面下次打開或做完一個動作才有標記；從 tmux 外接上後自己切過別的 session（`Ctrl-b s`），Ctrl-q 會切回上一個 session 而不是 detach |
 | `[ui] codex_auto_start` | 布林，預設 `true`。打開 `sampan` 畫面時若 Codex 常駐服務沒在執行，就在背景跑一次 `codex remote-control start`；`false` 不啟動 |
-| `[mcp] confirm` | 布林，預設 `true`。`sampan mcp serve` 的 `send`、`new_session`、`cancel_dispatch` 每次都由 agent 自己的權限詢問問你（Claude Code 的權限提示、Codex 的 `approval_mode = "prompt"`）；不確定會先問人的 client 一律拒絕，不跳過。agent 從 Bash 跑 `sampan send`、`sampan new … --message`、`sampan dispatches cancel` 也被拒絕。`false` 都不問、直接做（照樣記 `actions.log`、可取消）。唯讀的 `list_sessions`、`dispatch_result` 永遠不問 |
+| `[mcp] confirm` | 布林，預設 `true`。`sampan mcp serve` 的 `send`、`new_session`、`cancel_dispatch`、`folder_move` 每次都由 agent 自己的權限詢問問你（Claude Code 的權限提示、Codex 的 `approval_mode = "prompt"`）；不確定會先問人的 client 一律拒絕，不跳過。agent 從 Bash 跑 `sampan send`、`sampan new … --message`、`sampan dispatches cancel` 也被拒絕。`false` 都不問、直接做（照樣記 `actions.log`、可取消）。唯讀的 `list_sessions`、`dispatch_result` 永遠不問 |
 | `[codex] enabled` | 布林，預設 `true`。沒有任何 `agent = "codex"` 的 profile 時，`[codex]` 在記憶體裡當成一個隱含的 Codex profile，第一次 `sampan profile rename／disable／enable／forget／add --codex` 才轉成 `[profiles.<名稱>]`；只要有任何 `agent = "codex"` 的 profile，整個 `[codex]` 都不再作用；設成 `false` 表示不用 Codex（沒有 Codex profile），forget 最後一個 Codex profile 時會寫入 |
 | `[codex] home` | Codex 資料夾；沒寫時用環境變數 `CODEX_HOME`，再沒有就是 `~/.codex`（只用在隱含的 Codex profile） |
 | `[marketplaces] <名稱> = "owner/repo"` | plugin 來源：GitHub `owner/repo`，或 git 網址（`https://…`、`ssh://…`、`git@host:path`，例如自架的 Gitea）。本機目錄不支援 |
@@ -105,11 +105,12 @@ stdio MCP server（每行一則 JSON-RPC 2.0；協定版本 `2025-06-18`，clien
 
 | 工具 | 參數 | 回傳 | 核准 |
 |---|---|---|---|
-| `list_sessions` | 無 | `sessions`：每列 `name`、`agent`、`profile`、`cwd`、`state`（`running`、`stopped`…）、`activity`（`idle`、`busy`…）、`last`（UTC ISO 或 `null`）；讀不到 tmux 時多一個 `warning` | 不問 |
+| `list_sessions` | 無 | `sessions`：每列 `name`、`agent`、`profile`、`cwd`、`folder`（所在資料夾，`""` 是最上層；`folders.json` 讀不到時全是 `""`，`warning` 說明）、`state`（`running`、`stopped`…）、`activity`（`idle`、`busy`…）、`last`（UTC ISO 或 `null`）；讀不到 tmux 時多一個 `warning` | 不問 |
 | `send` | `session`、`message`、`wait`（預設 `false`） | `dispatch`、`state`，做完時有 `reply`，還沒送出時有 `reason`。`wait` 最多等 60 秒；沒等到的照樣留著，完成或失敗時往呼叫者的 session 送一則通知 | 問 |
-| `new_session` | `name`、`target`（`claude:<profile>`、`<profile>` 或 `codex`）、`cwd`、`message` | `dispatch`（跟 `sampan new --message` 一樣，開場訊息的派工） | 問 |
+| `new_session` | `name`、`target`（`claude:<profile>`、`<profile>` 或 `codex`）、`cwd`、`message`、`folder`（選填，跟 `sampan new --folder` 一樣，沒有就建立） | `dispatch`（跟 `sampan new --message` 一樣，開場訊息的派工） | 問 |
 | `dispatch_result` | `id`、`wait`（0–60 秒，預設 0） | `dispatch`、`state`、`label`、`to`、`reply`、`reason` | 不問 |
 | `cancel_dispatch` | `id` | `dispatch`、`state`；排隊中的取消，已送出的改成不再等回覆（多一個 `reason`「不再等回覆」） | 問 |
+| `folder_move` | `sessions`（名稱清單）、`folder`（路徑，`/` 是最上層；沒有就建立） | `moved`、`folder`。跟 `sampan folder move` 一樣只改畫面分組；有一個名稱找不到、資料夾名稱不合法或 `folders.json` 壞了就整筆不改 | 問 |
 
 核准由 agent 自己的權限詢問做：`confirm = true` 時，`tools/list` 裡這三個工具帶 `_meta["anthropic/requiresUserInteraction"] = true`，Claude Code 每次呼叫都跳自己的權限提示（終端機每次都問，auto／bypass 模式也問，沒有「不再詢問」；Remote Control 照官方文件應該會顯示完整的權限提示、不給一鍵核准，但還沒在手機上實測過）；提示裡是工具名稱與完整參數，不同意就回「不要」，要改訊息就請 agent 改了再送（sampan 不再有自己的表單，也沒有「改訊息」欄位）。名稱、目標、目錄有換行或控制字元會在送出前就拒絕。`new_session` 跟 `sampan new` 用同一套檢查（名稱、profile 停用、Codex 停用、tmux session 已存在、目錄不存在）。同意派工就算同意它的完成或失敗通知，不另外問。`dispatch_result` 看到已回覆或失敗的結果後就不再發通知。server 活著時每 3 秒推進這個呼叫者發出的派工；它跑的子程式一律 stdin 接 `/dev/null`，不會讀到 JSON-RPC 的輸入。
 
@@ -122,7 +123,7 @@ stdio MCP server（每行一則 JSON-RPC 2.0；協定版本 `2025-06-18`，clien
 `[mcp] confirm = true` 的做法（失敗就關）：
 
 - **Claude Code**：工具帶 `anthropic/requiresUserInteraction`，每次呼叫都問，連 auto／bypass 模式也問。
-- **Codex**：`sampan mcp install` 在 Codex 的 `config.toml` 寫 `[mcp_servers.sampan.tools.<工具>]` 的 `approval_mode = "prompt"`（`send`、`new_session`、`cancel_dispatch`）。`confirm = false` 或 `uninstall` 時只拿掉設成 `prompt` 的那幾段（使用者自己改成 `approve` 的不動）。改檔前先備份成 `config.toml.bak-sampan-<YYYYmmdd-HHMMSS>`，只動 sampan 的那幾段，其他每個位元組（含 CRLF、註解）原樣保留，檔案以 UTF-8 讀寫；改完驗證不是合法 TOML 就不寫。使用者在 Codex 的詢問裡選「always allow」時，Codex 會把它改成 `approve`：`sampan doctor` 會報出來，再跑 `sampan mcp install` 就改回 `prompt`。
+- **Codex**：`sampan mcp install` 在 Codex 的 `config.toml` 寫 `[mcp_servers.sampan.tools.<工具>]` 的 `approval_mode = "prompt"`（`send`、`new_session`、`cancel_dispatch`、`folder_move`）。`confirm = false` 或 `uninstall` 時只拿掉設成 `prompt` 的那幾段（使用者自己改成 `approve` 的不動）。改檔前先備份成 `config.toml.bak-sampan-<YYYYmmdd-HHMMSS>`，只動 sampan 的那幾段，其他每個位元組（含 CRLF、註解）原樣保留，檔案以 UTF-8 讀寫；改完驗證不是合法 TOML 就不寫。使用者在 Codex 的詢問裡選「always allow」時，Codex 會把它改成 `approve`：`sampan doctor` 會報出來，再跑 `sampan mcp install` 就改回 `prompt`。
 - **只認會先問人的 client**：`confirm = true` 時這三個工具只給 `claude-code`、`codex-mcp-client` 用，其他 client 回「這個 client 不會先問使用者；要用請在 config 設 [mcp] confirm = false」。`sampan mcp serve` 的直接上層行程還要是 `claude` 或 `codex`（啟動時查一次，查不到也算不是）：從 shell 把 JSON-RPC 灌進 `sampan mcp serve`、自稱 `claude-code` 會被拒絕，但只看名稱、可以假冒（見下方限制）。`codex exec` 在 approval policy 為 `never` 時不會問人，這三個工具會被 Codex 拒絕（已實測），不會不問就執行。Codex 還要求那個工具在 Codex 實際使用的 `CODEX_HOME`（沒設就 `~/.codex`）與 sampan 設定的 Codex 家目錄兩邊都是 `approval_mode = "prompt"`，否則回「Codex 的 sampan 工具沒設成每次詢問（<路徑>）：跑 sampan mcp install」。
 - **`sampan doctor`** 會檢查：「Codex 的 sampan 工具沒設成每次詢問（[mcp] confirm = true）：跑 sampan mcp install 補上」、「…還設著每次詢問（[mcp] confirm = false）：跑 sampan mcp install 拿掉」、「Codex config.toml 讀不了：…」。
 - **agent 從 Bash 跑指令**：`confirm = true` 時，`sampan send`、`sampan new … --message`、`sampan dispatches cancel` 由 agent（不是終端機前的人）執行會被拒絕（結束碼 2）；要讓 agent 直接用指令，設 `[mcp] confirm = false`。

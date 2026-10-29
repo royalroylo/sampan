@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
-from sampan import codex_approval, dispatch, mcp_server, send
+from sampan import codex_approval, dispatch, folders, mcp_server, send
 from sampan.registry import Row, write_rows
 from sampan.send import Caller
 from sampan.status import State
@@ -144,11 +144,12 @@ class ProtocolTest(Base):
                 self.assertEqual(r["capabilities"], {"tools": {}})
                 self.assertEqual(r["serverInfo"]["name"], "sampan")
 
-    def test_tools_list_has_five_tools_with_schemas(self):
+    def test_tools_list_has_six_tools_with_schemas(self):
         c = self.serve(Client([init(1), json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n",
                                req(2, "tools/list")]))
         tools = {t["name"]: t for t in c.response(2)["result"]["tools"]}
-        self.assertEqual(set(tools), {"list_sessions", "send", "new_session", "dispatch_result", "cancel_dispatch"})
+        self.assertEqual(set(tools), {"list_sessions", "send", "new_session", "dispatch_result", "cancel_dispatch",
+                                      "folder_move"})
         for t in tools.values():
             self.assertEqual(t["inputSchema"]["type"], "object")
             self.assertTrue(t["description"])
@@ -553,7 +554,7 @@ class SendToolTest(Base):
         self.rows["b"] = dataclasses.replace(self.rows["b"], last=NOW, agent_status="busy")
         c = self.serve(Client([init(1), call(2, "list_sessions", {})]))
         rows = {r["name"]: r for r in tool_json(c.response(2))["sessions"]}
-        self.assertEqual(rows["b"], {"name": "b", "agent": "claude", "profile": "alice", "cwd": "/w/b",
+        self.assertEqual(rows["b"], {"name": "b", "agent": "claude", "profile": "alice", "cwd": "/w/b", "folder": "",
                                      "state": "running", "activity": "busy", "last": "2026-10-26T12:00:00+00:00"})
         self.assertEqual(rows["a"]["cwd"], "")
         self.assertIsNone(rows["a"]["last"])
@@ -690,6 +691,78 @@ class NewSessionToolTest(Base):
                 self.assertEqual(c.elicits, [])
                 self.assertTrue(c.response(2)["result"]["isError"])
                 self.assertIn(why, tool_text(c.response(2)))
+
+
+class FolderToolTest(Base):
+    def setUp(self):
+        super().setUp()
+        write_rows(self.cfg.registry_path, [Row(n, "claude", "alice", f"s{n}", f"/w/{n}") for n in ("a", "b", "c")],
+                   "t", self.cfg.history_dir)
+
+    def tree(self):
+        return folders.load(self.cfg.state_dir)
+
+    def test_folder_move_puts_sessions_in_a_folder_it_creates_and_back_at_the_top(self):
+        c = self.serve(Client([init(1), call(2, "folder_move", {"sessions": ["a", "b"], "folder": "客戶/甲"})]),
+                       confirm=False)
+        self.assertEqual(tool_json(c.response(2)), {"moved": ["a", "b"], "folder": "客戶/甲"})
+        self.assertEqual(self.tree().sessions, {"a": "客戶/甲", "b": "客戶/甲"})
+        c = self.serve(Client([init(1), call(2, "list_sessions", {})]))  # tool calls run in parallel: one serve each
+        rows = {r["name"]: r["folder"] for r in tool_json(c.response(2))["sessions"]}
+        self.assertEqual(rows, {"a": "客戶/甲", "b": "客戶/甲", "c": ""})
+        c = self.serve(Client([init(1), call(2, "folder_move", {"sessions": ["a"], "folder": "/"})]), confirm=False)
+        self.assertEqual(tool_json(c.response(2))["folder"], "")
+        self.assertEqual(self.tree().sessions, {"b": "客戶/甲"})
+
+    def test_folder_move_refuses_and_writes_nothing(self):
+        cases = [({"sessions": ["a", "nope"], "folder": "x"}, "找不到 session nope"),
+                 ({"sessions": [], "folder": "x"}, "sessions"),
+                 ({"sessions": "a", "folder": "x"}, "sessions"),
+                 ({"sessions": ["a"], "folder": "x/a\x07b"}, "控制字元"),
+                 ({"sessions": ["a"]}, "folder")]
+        for args, why in cases:
+            with self.subTest(args=args):
+                c = self.serve(Client([init(1), call(2, "folder_move", args)]), confirm=False)
+                self.assertTrue(c.response(2)["result"]["isError"])
+                self.assertIn(why, tool_text(c.response(2)))
+                self.assertFalse((self.cfg.state_dir / folders.FOLDERS_FILE).exists())
+
+    def test_folder_move_never_writes_over_a_broken_file(self):
+        (self.cfg.state_dir / folders.FOLDERS_FILE).write_text("{broken")
+        c = self.serve(Client([init(1), call(2, "folder_move", {"sessions": ["a"], "folder": "x"})]), confirm=False)
+        self.assertTrue(c.response(2)["result"]["isError"])
+        self.assertEqual((self.cfg.state_dir / folders.FOLDERS_FILE).read_text(), "{broken")
+        c = self.serve(Client([init(1), call(2, "list_sessions", {})]))
+        body = tool_json(c.response(2))  # still lists the sessions, says why the folders are missing
+        self.assertEqual({r["folder"] for r in body["sessions"]}, {""})
+        self.assertIn("folders.json", body["warning"])
+
+    def test_folder_move_is_an_acting_tool(self):
+        self.assertIn("folder_move", mcp_server.ACTING_TOOLS)
+
+    def test_new_session_passes_the_folder_on_and_checks_it_first(self):
+        cwd = Path(self._tmp.name) / "w" / "n1"
+        cwd.mkdir(parents=True)
+        seen = {}
+
+        def fake_new(cfg, run, out, name, target, cwd, *, message=None, caller=None, folder=None, **kw):
+            seen["folder"] = folder
+            send.submit_new(cfg, caller, name, "claude", "work", message, notify=True, now=NOW)
+            return 0
+
+        args = {"name": "n1", "target": "claude:work", "cwd": str(cwd), "message": "開工"}
+        with mock.patch.object(mcp_server.session_run, "cmd_new", fake_new):
+            self.serve(Client([init(1), call(2, "new_session", {**args, "folder": "客戶甲"})], last_id=2),
+                       run=new_runner(), confirm=False)
+            self.assertEqual(seen["folder"], "客戶甲")
+            seen.clear()
+            self.serve(Client([init(1), call(2, "new_session", args)], last_id=2), run=new_runner(), confirm=False)
+            self.assertIsNone(seen["folder"])
+        with mock.patch.object(mcp_server.session_run, "cmd_new", side_effect=AssertionError("must not run")):
+            c = self.serve(Client([init(1), call(2, "new_session", {**args, "folder": "a/\x07"})]), run=new_runner(),
+                           confirm=False)
+        self.assertTrue(c.response(2)["result"]["isError"])
+        self.assertIn("控制字元", tool_text(c.response(2)))
 
 
 class OwnershipTest(Base):

@@ -17,7 +17,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import dispatch, send, session_run
+from . import dispatch, folders, send, session_run
 from .procs import list_procs
 from .registry import RegistryError, load_rows
 from .send import Caller, CallerUnsure, lookup_caller  # noqa: F401  (CallerUnsure, lookup_caller re-exported)
@@ -28,7 +28,7 @@ PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26")  # the first is answered when t
 WATCH_S = 3
 WAIT_MAX_S = 60  # a tool call may not block longer than this (MCP clients time tool calls out themselves)
 INTERACTION_META = "anthropic/requiresUserInteraction"
-ACTING_TOOLS = ("send", "new_session", "cancel_dispatch")
+ACTING_TOOLS = ("send", "new_session", "cancel_dispatch", "folder_move")
 # clientInfo.name of the clients known to ask the user for a tool marked INTERACTION_META (checked 2026-10-27:
 # Claude Code 2.1.287 sends "claude-code", Codex 0.164.0 sends "codex-mcp-client")
 ASKING_CLIENTS = {"claude-code", "codex-mcp-client"}  # Codex: only with approval_mode = "prompt" (codex_approval)
@@ -48,7 +48,8 @@ def _str(desc):
 
 TOOLS = [
     {"name": "list_sessions",
-     "description": "列出 sampan 登記的 session：名稱、agent、profile、目錄、狀態（running 才收得到訊息）、忙／閒（activity）、最後活動。唯讀。",
+     "description": "列出 sampan 登記的 session：名稱、agent、profile、目錄、所在資料夾（folder，\"\" 是最上層）、"
+                    "狀態（running 才收得到訊息）、忙／閒（activity）、最後活動。唯讀。",
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "send",
      "description": "傳一則訊息給另一個執行中的 sampan session（對方閒著才送，忙就排隊）。回傳派工編號；"
@@ -65,8 +66,17 @@ TOOLS = [
          "name": _str("新 session 的名稱（不能含 . 或 :）"),
          "target": _str("claude:<profile>、<profile>（當成 claude）或 codex"),
          "cwd": _str("工作目錄"),
-         "message": _str("開場訊息")},
+         "message": _str("開場訊息"),
+         "folder": _str("選填：放進哪個 sampan 資料夾（例如 客戶/甲），沒有就建立")},
          "required": ["name", "target", "cwd", "message"]}},
+    {"name": "folder_move",
+     "description": "把 session 搬進 sampan 畫面上的資料夾（沒有就建立；folder 給 \"/\" 是搬回最上層）。"
+                    "只改畫面上的分組，不影響 session 本身。",
+     "inputSchema": {"type": "object", "properties": {
+         "sessions": {"type": "array", "items": {"type": "string"}, "minItems": 1,
+                      "description": "要搬的 session 名稱（list_sessions 看）"},
+         "folder": _str("目的資料夾路徑，例如 客戶/甲；\"/\" 是最上層")},
+         "required": ["sessions", "folder"]}},
     {"name": "dispatch_result",
      "description": "看一筆派工的狀態（queued／sent／done／failed／cancelled）、回覆與原因；wait 秒數內（最多 60）等它做完。唯讀。",
      "inputSchema": {"type": "object", "properties": {
@@ -147,6 +157,17 @@ def _arg_str(args, key):
     if not isinstance(v, str) or not v:
         raise ToolError(f"參數 {key} 要是非空字串")
     return v
+
+
+def _folder(text):
+    """A folder path from a tool argument ("" or "/" is the top level); ToolError for a name folders refuses."""
+    path = text.strip().strip("/")
+    if path:
+        try:
+            folders.add(folders.Tree(), path)
+        except folders.FoldersError as e:
+            raise ToolError(str(e)) from e
+    return path
 
 
 class Server:
@@ -350,14 +371,43 @@ class Server:
             cwd = {r.tmux: r.cwd for r in load_rows(self.cfg.registry_path, codex_profile=self.cfg.codex.profile)}
         except RegistryError:
             cwd = {}
+        warnings = [getattr(rows, "warning", None)]
+        try:
+            where = folders.load(self.cfg.state_dir).sessions
+        except folders.FoldersError as e:
+            where = {}
+            warnings.append(f"讀不到資料夾設定，folder 全部當成最上層：{e}")
         out = {"sessions": [{"name": r.name, "agent": r.agent, "profile": r.profile, "cwd": cwd.get(r.name, ""),
-                             "state": r.state.value, "activity": r.agent_status,
+                             "folder": where.get(r.name, ""), "state": r.state.value, "activity": r.agent_status,
                              "last": r.last.astimezone(timezone.utc).isoformat(timespec="seconds") if r.last else None}
                             for r in rows]}
-        warning = getattr(rows, "warning", None)
+        warning = "；".join(w for w in warnings if w)
         if warning:
             out["warning"] = warning
         return out
+
+    def tool_folder_move(self, args):
+        names, dest = args.get("sessions"), args.get("folder")
+        if not isinstance(names, list) or not names or not all(isinstance(n, str) and n for n in names):
+            raise ToolError("參數 sessions 要是 session 名稱的清單（至少一個）")
+        if not isinstance(dest, str):
+            raise ToolError("參數 folder 要是字串（\"/\" 是最上層）")
+        dest = _folder(dest)
+        try:
+            known = {r.tmux for r in load_rows(self.cfg.registry_path, codex_profile=self.cfg.codex.profile)}
+        except RegistryError as e:
+            raise ToolError(str(e)) from e
+        names = list(dict.fromkeys(names))
+        for n in names:
+            if n not in known:
+                raise ToolError(f"找不到 session {n}（list_sessions 看名稱）")
+        try:  # edit: loads first, and never writes over a file it cannot trust
+            folders.edit(self.cfg.state_dir, lambda t: folders.move(t, [("session", n) for n in names], dest))
+        except folders.FoldersError as e:
+            raise ToolError(f"{e}（資料夾沒有改動）") from e
+        except OSError as e:
+            raise ToolError(f"資料夾設定寫不進去：{e}") from e
+        return {"moved": names, "folder": dest}
 
     def tool_send(self, args):
         to, message = _arg_str(args, "session"), _arg_str(args, "message")
@@ -393,6 +443,11 @@ class Server:
     def tool_new_session(self, args):
         name, target = _arg_str(args, "name"), _arg_str(args, "target")
         cwd, message = _arg_str(args, "cwd"), _arg_str(args, "message")
+        folder = args.get("folder")
+        if folder is not None:
+            if not isinstance(folder, str):
+                raise ToolError("參數 folder 要是字串")
+            folder = _folder(folder) or None
         checked = session_run.check_new(self.cfg, self.run, name, target, cwd)
         if isinstance(checked, str):
             raise ToolError(checked)
@@ -404,7 +459,7 @@ class Server:
             raise ToolError(str(e)) from e
         lines = []
         rc = session_run.cmd_new(self.cfg, self.run, lines.append, name, target, cwd, message=message,
-                                 caller=caller, sleep=self.sleep)  # checks everything again before creating
+                                 caller=caller, sleep=self.sleep, folder=folder)  # checks everything again before creating
         said = "\n".join(str(x).removeprefix("❌ ") for x in lines).strip()
         new = [d for d in dispatch.load(self.cfg.state_dir) if d.id not in before and d.to_name == name]
         if not new or rc not in (0, 1):
