@@ -164,7 +164,7 @@ Claude Code 只在狀態列指令的輸入裡提供 5h／週額度，所以要�
 
 **做到一半想先收起來**：在清單上按 `s`。之後要繼續，移到那一列按 Enter，會接回同一段對話並進去。
 
-**關機或重開機**：關機前可以先 `sampan stop`（所有閒置的 agent 正常結束；忙碌中的不動，會告訴你）。重開機後打 `sampan`，按 `R`，確認勾選的，就一個個接回原本的對話。sampan **不會自己接回**，一定要你按。macOS 上，從 SSH 開的 tmux 裡的 Claude 打不開鑰匙圈，登入資訊會寫在 `.credentials.json`；重開後如果是從桌面的終端機接回，Claude 改用鑰匙圈裡可能已經過期的那份，那個 profile 就會變成未登入（Remote Control 也連不上）。`sampan doctor` 看到同一個 profile 有兩份登入資訊時會提醒：檔案比較新時出 ⚠（從桌面接回會用到過期的那份），處理方法是從桌面開的終端機啟動 sampan、在那個 profile 的 session 執行 `/login`，鑰匙圈那份變成比較新的，就降成 ℹ️。sampan 不讀登入內容，只比兩份的修改時間。
+**關機或重開機**：關機前可以先 `sampan stop`（所有閒置的 agent 正常結束；忙碌中的不動，會告訴你）。重開機後打 `sampan`，按 `R`，確認勾選的，就一個個接回原本的對話。sampan **不會自己接回**，一定要你按。macOS 上，Claude 的登入資訊可能同時有兩份：鑰匙圈一份、`.credentials.json` 一份。Claude 先用鑰匙圈那份（帳號是你的使用者名稱），鑰匙圈打不開時才用檔案那份，所以其中一份會變舊；用到舊的那份時，那個 profile 就會變成未登入（Remote Control 也連不上）。`sampan doctor` 看到同一個 profile 有兩份時會提醒：檔案比較新時出 ⚠，處理方法是在那個 profile 執行 `/login`（例如 `sampan claude <profile>`），鑰匙圈那份變成比較新的，就降成 ℹ️。鑰匙圈裡同名、但帳號不是你的那份（例如用別的使用者身分跑過 Claude 留下的），Claude 不會用，doctor 不拿它判斷，只用 ℹ️ 列出來並附上刪除指令，要不要刪由你決定。sampan 不讀登入內容，只看鑰匙圈項目的屬性和兩份的修改時間。
 
 **在 tmux 外的終端機（任何終端機程式）開了好幾個 Claude，想統一管理**：打 `sampan`，按 `A`。
 

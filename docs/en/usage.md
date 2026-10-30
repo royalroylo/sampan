@@ -179,12 +179,14 @@ the same conversation and takes you in.
 **Shutting down or rebooting**: before shutting down you can run `sampan stop` (every idle agent exits normally; busy ones
 are left alone and reported). After the reboot type `sampan`, press `R`, confirm the checked ones, and the original
 conversations come back one by one. sampan **never resumes on its own**; you always press the key. On macOS a
-Claude inside a tmux started over SSH cannot open the keychain and keeps its login in `.credentials.json`; when the
-sessions come back from a desktop terminal after the reboot, Claude uses the keychain copy, which may be stale, and the
-profile reads as logged out (Remote Control cannot connect either). `sampan doctor` reports a profile with both copies:
-a warning when the file is newer (a desktop start would use the stale copy); start sampan from a desktop terminal and
-run `/login` in a session of that profile, the keychain copy becomes the newer one and the warning turns into a note.
-sampan never reads the logins themselves, only compares the two modification times.
+Claude login can exist twice: in the keychain and in `.credentials.json`. Claude uses the keychain copy (filed under
+your user name) and the file only when the keychain cannot be opened, so one copy goes stale; when Claude picks the stale
+one the profile reads as logged out (Remote Control cannot connect either). `sampan doctor` reports a profile with both
+copies: a warning when the file is newer; run `/login` in that profile (for example `sampan claude <profile>`), the
+keychain copy becomes the newer one and the warning turns into a note. A keychain item of the same name under another
+account (left by Claude run as another user) is never used by Claude: doctor does not judge by it, only lists it as a
+note with the command to delete it, which is yours to run. sampan never reads the logins themselves, only the keychain
+items' attributes and the two modification times.
 
 **You have several Claude agents running in terminals outside tmux and want them in one place**: type `sampan`, press `A`.
 

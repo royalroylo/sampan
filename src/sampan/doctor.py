@@ -1,7 +1,9 @@
 import hashlib
 import json
 import os
+import pwd
 import re
+import shlex
 import shutil
 import sqlite3
 import sys
@@ -174,7 +176,10 @@ def _auth(cfg, run):
 
 KEYCHAIN_SERVICE = "Claude Code-credentials"  # Claude adds "-" + sha256(CLAUDE_CONFIG_DIR)[:8] when the variable is set
 KEYCHAIN_UNKNOWN_TIME = datetime.min.replace(tzinfo=timezone.utc)  # the item exists but its time cannot be read
+KEYCHAIN_FALLBACK_ACCOUNT = "claude-code-user"
 _MDAT_RE = re.compile(r'"mdat"<timedate>=\S*\s+"(\d{14})Z')
+_ACCT_RE = re.compile(r'"acct"<blob>="([^"]*)"')
+_ACCOUNT_OK = re.compile(r"^[a-zA-Z0-9._-]+$")
 
 
 def _keychain_service(p):
@@ -182,46 +187,69 @@ def _keychain_service(p):
         f"{KEYCHAIN_SERVICE}-{hashlib.sha256(str(p.config_dir).encode()).hexdigest()[:8]}"
 
 
-def _keychain_mtime(run, service):
-    """When the login keychain item was last written; None when there is none or it cannot be read. Only the item's
-    attributes are read (never -w / -g: no secret, and no permission dialog)."""
-    r = run(["security", "find-generic-password", "-s", service], timeout=5)  # a locked keychain may ask to unlock
+def _keychain_account(env):
+    """The account Claude files its login under (Claude Code 2.1.287): $USER, else the login name; claude-code-user when
+    that has other characters. Items of the same service under another account are never read by Claude."""
+    try:
+        name = env.get("USER") or pwd.getpwuid(os.getuid()).pw_name
+    except (KeyError, OSError):
+        return KEYCHAIN_FALLBACK_ACCOUNT
+    return name if _ACCOUNT_OK.match(name) else KEYCHAIN_FALLBACK_ACCOUNT
+
+
+def _keychain_item(run, service, account=None):
+    """(account | None, last written) of the first login keychain item named service, under account when given; None when
+    there is none or it cannot be read. Only the item's attributes are read (never -w / -g: no secret, and no permission
+    dialog)."""
+    r = run(["security", "find-generic-password", *(["-a", account] if account else []), "-s", service],
+            timeout=5)  # a locked keychain may ask to unlock
     if r.returncode != 0:
         return None
-    m = _MDAT_RE.search(r.stdout or "")
-    return datetime.strptime(m.group(1), "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc) if m else KEYCHAIN_UNKNOWN_TIME
+    out = r.stdout or ""
+    m, a = _MDAT_RE.search(out), _ACCT_RE.search(out)
+    when = datetime.strptime(m.group(1), "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc) if m else KEYCHAIN_UNKNOWN_TIME
+    return (a.group(1) if a else None), when
 
 
-def _two_logins(cfg, run, platform):
-    """macOS: a profile with a login both in the keychain and in .credentials.json. Claude uses the keychain when it
-    can open it (a tmux server started from the desktop) and the file when it cannot (one started over SSH), so one
-    copy goes stale; after a reboot the other kind of start picks the stale one and the profile reads as logged out."""
+def _two_logins(cfg, run, platform, account=None):
+    """macOS: a profile with a login both in the keychain and in .credentials.json. Claude uses the keychain copy (the
+    item under its account) and the file only when the keychain cannot be opened, so one copy goes stale; whichever
+    start picks the stale one finds the profile logged out. The keychain can also hold an item of the same name under
+    another account (left by a Claude run as another user): Claude never reads it, so it is not judged, only named."""
     if platform != "darwin":
         return []
+    account = account or _keychain_account(os.environ)
     out = []
     for p in _present(cfg):
         if p.agent != "claude":
             continue
+        svc = _keychain_service(p)
+        first = _keychain_item(run, svc)  # the first item of that name, whatever its account
+        if first is None:
+            continue  # none, or the keychain cannot be read
+        kc = first[1] if first[0] in (account, None) else (_keychain_item(run, svc, account) or (None, None))[1]
+        if first[0] not in (account, None):
+            when = "" if first[1] == KEYCHAIN_UNKNOWN_TIME else f"（{fmt_local(first[1])}）"
+            out.append(Check("info", f"{p.name}：鑰匙圈裡還有一份帳號 {first[0]} 的登入{when}，Claude 不會用它",
+                             f"Claude 只讀帳號 {account} 那份。用不到可以刪（只刪這一份）："
+                             f"security delete-generic-password -a {shlex.quote(first[0])} -s \"{svc}\""))
         f = Path(p.config_dir) / ".credentials.json"
-        if not f.is_file():
-            continue
-        kc = _keychain_mtime(run, _keychain_service(p))
-        if kc is None:
+        if kc is None or not f.is_file():
             continue
         ft = datetime.fromtimestamp(f.stat().st_mtime, timezone.utc)
         when = "" if kc == KEYCHAIN_UNKNOWN_TIME else f" {fmt_local(kc)}"
         title = f"{p.name}：登入資訊有兩份（鑰匙圈{when}、.credentials.json {fmt_local(ft)}）"
-        why = "Claude 能開鑰匙圈時（tmux 從桌面的終端機開）用鑰匙圈那份，不能時（從 SSH 開）用檔案那份。"
-        if ft > kc:  # the copy a desktop start would use is the older one: after a reboot this profile may be logged out
+        why = f"Claude 先用鑰匙圈那份（帳號 {account}），鑰匙圈打不開時才用檔案那份。"
+        if ft > kc:  # the copy Claude normally uses is the older one: it may have expired
             out.append(Check("warn", title + "，檔案比較新",
-                             why + "鑰匙圈那份可能已經過期，從桌面接回時這個 profile 會變成未登入（Remote Control 也連不上）。"
-                             f"處理：從桌面開的終端機啟動 sampan（tmux 才開得了鑰匙圈），在 {p.name} 的 session 執行 /login；"
+                             why + "鑰匙圈那份比較舊，可能已經過期，Claude 用到它時這個 profile 會變成未登入（Remote Control 也連不上）。"
+                             f"處理：在 {p.name} 執行 /login（例如 sampan claude {p.name}）；"
                              "鑰匙圈那份變成比較新的，這裡就降成 ℹ️"))
         else:  # contents cannot be compared without reading the secrets: only the times are
             out.append(Check("info", title,
-                             why + "鑰匙圈那份比較新，從桌面接回沒問題；只有從 SSH 開 tmux 時會用到檔案那份。"
-                             f"不想留兩份：確認從桌面開的 session 登入正常後，把 {f} 改名備份"
-                             "（之後從 SSH 開的 tmux 裡，這個 profile 會要求登入）"))
+                             why + "鑰匙圈那份比較新，沒有問題。"
+                             f"不想留兩份：確認登入正常後，把 {f} 改名備份"
+                             "（之後鑰匙圈打不開時，這個 profile 會要求登入）"))
     return out
 
 

@@ -453,7 +453,7 @@ class DetachKeyDoctorTest(unittest.TestCase):
 KEYCHAIN_ATTRS = """keychain: "/Users/u/Library/Keychains/login.keychain-db"
 class: "genp"
 attributes:
-    "acct"<blob>="u"
+    "acct"<blob>="{acct}"
     "cdat"<timedate>=0x32303236303932303133343334315A00  "20260920134341Z\\000"
     "mdat"<timedate>=0x32303236303932303133343334315A00  "{mdat}\\000"
     "svce"<blob>="{svce}"
@@ -466,14 +466,20 @@ class TwoLoginsDoctorTest(unittest.TestCase):
 
     def setUp(self):
         self.cfg = make_env(Path(tempfile.mkdtemp()))
-        self.items = {}  # service -> mdat
+        self.items = {}  # service -> mdat, for account "u" (the account Claude uses here)
+        self.others = []  # (service, account, mdat): items of the same name under other accounts, found first
 
     def runner(self):
         def security(a):
             assert "-w" not in a and "-g" not in a, a  # never the secret
             svc = a[a.index("-s") + 1]
-            return cp(out=KEYCHAIN_ATTRS.format(mdat=self.items[svc], svce=svc)) if svc in self.items else \
-                cp(rc=44, err="security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.")
+            acct = a[a.index("-a") + 1] if "-a" in a else None
+            hits = [(s_, a_, m) for s_, a_, m in self.others if s_ == svc and acct in (None, a_)]
+            hits += [(svc, "u", self.items[svc])] if svc in self.items and acct in (None, "u") else []
+            if not hits:
+                return cp(rc=44, err="security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.")
+            s_, a_, m = hits[0]  # like security: the first match only
+            return cp(out=KEYCHAIN_ATTRS.format(mdat=m, svce=s_, acct=a_))
         return FakeRunner().on(["security", "find-generic-password"], security)
 
     def svc(self, profile):
@@ -490,7 +496,7 @@ class TwoLoginsDoctorTest(unittest.TestCase):
 
     def checks(self, platform="darwin"):
         from sampan.doctor import _two_logins
-        return _two_logins(self.cfg, self.runner(), platform)
+        return _two_logins(self.cfg, self.runner(), platform, account="u")
 
     def test_keychain_and_newer_file_warns_with_the_fix(self):
         self.items[self.svc("work")] = "20260920134341Z"
@@ -529,18 +535,65 @@ class TwoLoginsDoctorTest(unittest.TestCase):
         self.file(default.name, NOW)
         self.assertEqual(len(self.checks()), 1)
 
+    def test_same_named_items_judge_by_the_one_claude_uses(self):
+        # 10/30: the default service had an old item under account root (10/16) found first, and the one Claude reads
+        # and writes (account = $USER) rewritten by /login at 11:10; doctor judged by the old one and warned
+        default = next(p for p in self.cfg.profiles.values() if p.default)
+        self.others.append(("Claude Code-credentials", "root", "20261015221907Z"))
+        self.items["Claude Code-credentials"] = "20261030031016Z"
+        self.file(default.name, datetime(2026, 10, 30, 6, 1, tzinfo=timezone(timedelta(hours=8))))
+        levels = {c.title: c.level for c in self.checks()}
+        two = next(t for t in levels if "兩份" in t)
+        self.assertEqual(levels[two], "info")
+        self.assertIn("11:10", two)
+        self.assertNotIn("10/16", two)
+
+    def test_an_item_under_another_account_is_named_with_how_to_remove_it(self):
+        default = next(p for p in self.cfg.profiles.values() if p.default)
+        self.others.append(("Claude Code-credentials", "root", "20261015221907Z"))
+        self.items["Claude Code-credentials"] = "20261030031016Z"
+        self.file(default.name, NOW)
+        [c] = [c for c in self.checks() if "root" in c.title]
+        self.assertEqual(c.level, "info")
+        self.assertIn("Claude 不會用", c.title)
+        self.assertIn('security delete-generic-password -a root -s "Claude Code-credentials"', c.detail)
+
+    def test_only_an_item_under_another_account_is_no_second_login(self):
+        # Claude never reads it: the file is this profile's only login, so no warning about two copies
+        default = next(p for p in self.cfg.profiles.values() if p.default)
+        self.others.append(("Claude Code-credentials", "root", "20261015221907Z"))
+        self.file(default.name, NOW)
+        checks = self.checks()
+        self.assertFalse(any("兩份" in c.title for c in checks), checks)
+        self.assertEqual([c.level for c in checks], ["info"])  # only the note about the unused item
+
+    def test_texts_do_not_guess_about_tmux_or_ssh(self):
+        self.items[self.svc("work")] = "20260920134341Z"
+        self.file("work", NOW)
+        self.items[self.svc("alice")] = "20261030065605Z"
+        self.file("alice", datetime(2026, 10, 30, 6, 33, tzinfo=timezone(timedelta(hours=8))))
+        for c in self.checks():
+            self.assertNotIn("SSH", c.title + c.detail)
+            self.assertNotIn("tmux", c.title + c.detail)
+
+    def test_account_follows_claude(self):
+        from sampan.doctor import _keychain_account
+        self.assertEqual(_keychain_account({"USER": "pat.lee"}), "pat.lee")
+        self.assertEqual(_keychain_account({"USER": "a b"}), "claude-code-user")
+        self.assertRegex(_keychain_account({}), r"^[a-zA-Z0-9._-]+$")  # USER unset: the login name
+
     def test_not_macos_reads_no_keychain(self):
         self.file("work", NOW)
         r = self.runner()
         from sampan.doctor import _two_logins
-        self.assertEqual(_two_logins(self.cfg, r, "linux"), [])
+        self.assertEqual(_two_logins(self.cfg, r, "linux", account="u"), [])
         self.assertEqual(r.called(["security"]), [])
 
     def test_item_without_a_readable_time_still_warns(self):
         self.file("work", NOW)
         r = FakeRunner().on(["security", "find-generic-password"], cp(out='class: "genp"\n    "mdat"<timedate>=<NULL>\n'))
         from sampan.doctor import _two_logins
-        [c] = _two_logins(self.cfg, r, "darwin")
+        [c] = _two_logins(self.cfg, r, "darwin", account="u")
         self.assertIn("鑰匙圈、.credentials.json", c.title)
 
 
@@ -548,7 +601,7 @@ class TwoLoginsDoctorTest(unittest.TestCase):
         self.file("work", NOW)
         r = FakeRunner().on(["security", "find-generic-password"], cp(rc=51, err="user interaction is not allowed"))
         from sampan.doctor import _two_logins
-        self.assertEqual(_two_logins(self.cfg, r, "darwin"), [])
+        self.assertEqual(_two_logins(self.cfg, r, "darwin", account="u"), [])
 
 
 class TmuxConfDoctorTest(unittest.TestCase):
