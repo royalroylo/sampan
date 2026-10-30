@@ -191,10 +191,32 @@ def target_problem(row, to):
     return None
 
 
-def submit(cfg, run, caller, to, message, *, notify, now, snapshot_fn=None, status_fn=None):
-    """Check the target and create a queued dispatch (outbox written, actions.log line). Dispatch, or why not (str)."""
+RAW_MAX = 500  # longest direct send, in characters
+REASON_RAW_CODEX = "直接送目前只支援 Claude"
+
+
+def raw_problem(message):
+    """Why message cannot be a direct send (one line starting with /, at most RAW_MAX characters), or None. It is
+    judged after strip, which is what gets sent."""
+    m = message.strip()
+    if "\n" in m or "\r" in m:
+        return "直接送只能是一行"
+    if not m.startswith("/"):
+        return "直接送要以 / 開頭（例如 /compact）"
+    if len(m) > RAW_MAX:
+        return f"直接送最多 {RAW_MAX} 字（這則 {len(m)} 字）"
+    return None
+
+
+def submit(cfg, run, caller, to, message, *, notify, now, snapshot_fn=None, status_fn=None, raw=False, batch=None):
+    """Check the target and create a queued dispatch (outbox written, actions.log line). Dispatch, or why not (str).
+    raw: send the stripped message as is, with no source line (Claude only; see raw_problem)."""
     if not message.strip():
         return "訊息是空的"
+    if raw:
+        message = message.strip()
+        if problem := raw_problem(message):
+            return problem
     if caller.name is not None and caller.name == to:
         return f"不能送給自己（{to}）"
     try:
@@ -204,11 +226,14 @@ def submit(cfg, run, caller, to, message, *, notify, now, snapshot_fn=None, stat
     problem = target_problem(row, to)
     if problem:
         return problem
+    if raw and row.agent == "codex":
+        return REASON_RAW_CODEX
     r = _create(cfg, caller, to, row.agent, row.profile, message, "queued", now, notify=notify,
-                thread_id=(row.sid or None) if row.agent == "codex" else None)
+                thread_id=(row.sid or None) if row.agent == "codex" else None, raw=raw, batch=batch)
     if isinstance(r, str):
         return r
-    _log(cfg, "send", f"派工 {r.id}：{_who(r)} → {to}（{row.agent}）：{_preview(message)}")
+    kind = f"{row.agent}，直接送" if raw else row.agent
+    _log(cfg, "send", f"派工 {r.id}：{_who(r)} → {to}（{kind}）：{_preview(message)}")
     return r
 
 
@@ -217,13 +242,13 @@ def _who(d):
 
 
 def _create(cfg, caller, to, to_agent, to_profile, message, state, now, *, notify, thread_id=None, strip=False,
-            startup=False):
+            startup=False, raw=False, batch=None):
     """Write the outbox and record a dispatch under the lock. A copy of it, or why not (str).
     strip: drop trailing newlines from the text (a startup prompt goes through `$(cat …)`, which drops them)."""
     try:
         with dispatch.transaction(cfg.state_dir) as items:
             did = dispatch.new_id({d.id for d in items})
-            text = deliver.compose(caller_label(caller), caller.profile, did, message)
+            text = message if raw else deliver.compose(caller_label(caller), caller.profile, did, message)
             if strip or state == "queued":  # a trailing newline (stdin) is never part of the message
                 text = text.rstrip("\n")
             dispatch.write_outbox(cfg.state_dir, did, text)
@@ -232,7 +257,7 @@ def _create(cfg, caller, to, to_agent, to_profile, message, state, now, *, notif
                 to, to_agent, to_profile, text, state, _iso(now),
                 sent_at=_iso(now) if state == "sent" else None,
                 notify=bool(notify and caller.name is not None), thread_id=thread_id, from_kind=caller_kind(caller),
-                startup=startup)
+                startup=startup, raw=raw, batch=batch)
             kept = dispatch.prune(items, now)
             _drop_outboxes(cfg, {x.id for x in items} - {x.id for x in kept})
             items[:] = kept + [d]

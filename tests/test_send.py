@@ -92,9 +92,9 @@ class Base(unittest.TestCase):
     def set_row(self, name, **changes):
         self.rows[name] = dataclasses.replace(self.rows[name], **changes)
 
-    def submit(self, to="b", message="hello", caller=CALLER_A, notify=False, run=None):
+    def submit(self, to="b", message="hello", caller=CALLER_A, notify=False, run=None, **kw):
         return send.submit(self.cfg, run or FakeRunner(strict=True), caller, to, message, notify=notify, now=NOW,
-                           status_fn=self.status_fn)
+                           status_fn=self.status_fn, **kw)
 
     def advance(self, run, did, at=NOW):
         return send.advance(self.cfg, run, did, sleep=self.sleeps.append, status_fn=self.status_fn, now=at)
@@ -115,6 +115,30 @@ class Base(unittest.TestCase):
 
 
 class SubmitTest(Base):
+    def test_raw_problem(self):
+        self.assertIsNone(send.raw_problem("/compact"))
+        self.assertIsNone(send.raw_problem(" /compact"))  # stripped first
+        for bad in ("hello", "/a\n/b", "/" + "x" * 500):
+            self.assertTrue(send.raw_problem(bad), bad)
+
+    def test_raw_submit_stores_the_bare_text(self):
+        d = self.submit(message=" /compact\n", raw=True)
+        self.assertEqual(d.text, "/compact")
+        self.assertTrue(d.raw)
+        self.assertEqual(dispatch.outbox_path(self.cfg.state_dir, d.id).read_text(), "/compact")
+        self.assertIn("直接送", (self.cfg.state_dir / "actions.log").read_text())
+
+    def test_raw_with_a_bad_message_creates_nothing(self):
+        self.assertEqual(self.submit(message="hello", raw=True), send.raw_problem("hello"))
+        self.assertEqual(dispatch.load(self.cfg.state_dir), [])
+
+    def test_raw_to_codex_is_refused(self):
+        self.assertEqual(self.submit(to="c", message="/compact", raw=True), "直接送目前只支援 Claude")
+        self.assertEqual(dispatch.load(self.cfg.state_dir), [])
+
+    def test_batch_id_is_recorded(self):
+        self.assertEqual(self.submit(batch="b1a2").batch, "b1a2")
+
     def test_creates_a_queued_dispatch_with_outbox_and_log(self):
         d = self.submit(message="line1\nline2", notify=True)
         self.assertIsInstance(d, dispatch.Dispatch)

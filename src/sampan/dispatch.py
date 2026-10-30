@@ -50,6 +50,8 @@ class Dispatch:
     thread_id: str | None = None
     from_kind: str | None = None  # KINDS; None (an old record without it) is inferred from from_name
     startup: bool = False  # the startup prompt of `sampan new --message`: the session may not be registered yet
+    raw: bool = False  # a direct send: text is the bare message (no source line), a slash command for the target itself
+    batch: str | None = None  # id of the batch send this dispatch belongs to
 
     def __post_init__(self):
         if self.from_kind is None:

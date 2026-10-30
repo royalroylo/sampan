@@ -92,6 +92,14 @@ class StoreTest(unittest.TestCase):
         with self.assertRaises(DispatchError):
             dispatch.load(self.dir)
 
+    def test_old_record_without_raw_or_batch_loads(self):
+        self.dir.mkdir(parents=True)
+        rec = {k: v for k, v in dataclasses.asdict(mk()).items() if k not in ("raw", "batch")}
+        (self.dir / "dispatches.json").write_text(json.dumps({"version": 1, "dispatches": [rec]}))
+        [d] = dispatch.load(self.dir)
+        self.assertIs(d.raw, False)
+        self.assertIsNone(d.batch)
+
     def test_checkpoint_writes_inside_the_transaction_and_survives_an_exception(self):
         with dispatch.transaction(self.dir) as cur:
             cur.append(mk("aaaa"))
