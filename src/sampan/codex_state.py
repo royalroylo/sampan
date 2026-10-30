@@ -110,7 +110,9 @@ def _state_db(codex_home):
 
 
 # the interactive TUI is source 'cli' when it runs its own app-server; attached to the shared daemon (Codex 0.164+) its
-# threads are source 'vscode' with originator 'codex-tui' (the Desktop app is 'vscode' + 'Codex Desktop': not a match)
+# threads are source 'vscode' with originator 'codex-tui' — or 'sampan' when sampan has been polling that daemon (seen
+# 2026-10-30 on Codex 0.164). The Desktop app is 'vscode' + 'Codex Desktop': not a match.
+TUI_ORIGINATORS = ("codex-tui", "sampan")
 _THREADS_SQL = "select id, created_at from threads where ({match}) and archived = 0 and cwd in ({marks})"
 
 
@@ -125,8 +127,8 @@ def threads_fallback(codex_home, cwd, started_at, exclude):
         con = sqlite3.connect(f"file:{quote(str(db))}?mode=ro", uri=True)
         try:
             try:
-                rows = con.execute(_THREADS_SQL.format(match="source = 'cli' or originator = 'codex-tui'", marks=marks),
-                                   cwds).fetchall()
+                rows = con.execute(_THREADS_SQL.format(match="source = 'cli' or originator in (?, ?)", marks=marks),
+                                   (*TUI_ORIGINATORS, *cwds)).fetchall()
             except sqlite3.OperationalError:  # an older state db without the originator column
                 rows = con.execute(_THREADS_SQL.format(match="source = 'cli'", marks=marks), cwds).fetchall()
         finally:
@@ -144,13 +146,13 @@ def threads_fallback(codex_home, cwd, started_at, exclude):
 
 
 def daemon_fallback(snap, cwd, exclude, started_at, panes_in_cwd=1):
-    """Live codex-tui threads the daemon reports in cwd that no other pane has and that were touched since this process
+    """Live TUI threads (TUI_ORIGINATORS) the daemon reports in cwd that no other pane has and that were touched since this process
     started (a stale thread of an earlier TUI is not this pane's): a thread id, AMBIGUOUS when there are several or more
     than the tmux panes that could own them (one runs outside tmux), None when none. For a pane whose db row is not
     near its start time (a `/new` long after launch)."""
     cwds = {cwd, os.path.realpath(cwd)}
     ids = sorted({t.id for t in snap.threads
-                  if t.originator == "codex-tui" and t.id not in exclude and (t.id in snap.loaded or t.status in ("active", "idle"))
+                  if t.originator in TUI_ORIGINATORS and t.id not in exclude and (t.id in snap.loaded or t.status in ("active", "idle"))
                   and (t.cwd in cwds or os.path.realpath(t.cwd) in cwds)
                   and t.updated_at.timestamp() >= started_at - TIE_TOLERANCE})
     if len(ids) > max(1, panes_in_cwd):

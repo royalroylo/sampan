@@ -174,6 +174,27 @@ class ObserveTest(unittest.TestCase):
         self.assertEqual((observed, skipped), ([], set()))
 
 
+    def test_codex_thread_stamped_sampan_is_observed_without_its_rollout(self):
+        # a TUI on the shared daemon does not hold its rollout open; once sampan has polled that daemon its new threads are
+        # originator 'sampan' (2026-10-30): save must still record the thread, and a Codex Desktop thread must not be taken
+        import time
+        from unittest import mock
+
+        from tests.test_codex_state import make_db
+        e = Env()
+        e.pane("cx", "%1", 100, command="codex", path="/c")
+        e.codex(200, 100, tid=None)
+        started = int(time.time()) - 300
+        make_db(e.cfg.codex.home, [(TID, "/c", "vscode", 0, started), (B, "/c", "vscode", 0, started + 1)],
+                originators={TID: "sampan", B: "Codex Desktop"})
+        run = e.runner()
+        run.on(["ps", "-o", "etime="], cp(out="05:00\n"))
+        with mock.patch("sampan.codex_state.codex_daemon.snapshot", return_value=None) as snap:
+            observed, _w, skipped = observe(e.cfg, run, e.panes, list_procs(run), proc_root=NO_PROC)
+        self.assertEqual(observed, [Observed("cx", "codex", e.cfg.codex.profile, TID, "/c", 200)])
+        self.assertEqual((skipped, snap.call_count), (set(), 0))  # the threads table resolved it: no daemon call
+
+
 class CodexDisabledTest(unittest.TestCase):
     def test_codex_counts_as_an_agent_even_when_disabled(self):
         import dataclasses

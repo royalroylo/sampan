@@ -204,6 +204,15 @@ class FallbackTest(unittest.TestCase):
             self.assertIsNone(threads_fallback(home, "/Users/u/proj", 1000.0, {TID}))
             self.assertIsNone(threads_fallback(home, "/Users/u/proj", 1500.0, set()))  # still the 120 s window
 
+    def test_fallback_matches_tui_thread_created_while_sampan_polls_the_daemon(self):
+        # once sampan has initialized against the shared daemon (clientInfo "sampan"), a TUI's new thread is originator 'sampan'
+        with tempfile.TemporaryDirectory() as d:
+            home = Path(d)
+            make_db(home, [(TID, "/Users/u/proj", "vscode", 0, 1002), (TID2, "/Users/u/proj", "vscode", 0, 1001)],
+                    originators={TID: "sampan", TID2: "Codex Desktop"})
+            self.assertEqual(threads_fallback(home, "/Users/u/proj", 1000.0, set()), TID)  # Desktop thread is not a match
+            self.assertIsNone(threads_fallback(home, "/Users/u/proj", 1000.0, {TID}))
+
     def test_fallback_without_originator_column_keeps_cli_only(self):
         with tempfile.TemporaryDirectory() as d:
             home = Path(d)
@@ -361,6 +370,25 @@ class LiveCodexTest(unittest.TestCase):
         snap = self.daemon_snap([self.thread(TID2), self.thread(TID3, originator="Codex Desktop"),
                                  self.thread(TID, cwd="/Users/u/other"),
                                  self.thread("01a14b62-0000-7d42-b701-89404b84ac99", status="notLoaded")], loaded=[TID2])
+        found, warnings = self.live(run, self.panes()[1:2], lambda home, run, now: snap)
+        self.assertEqual(found["%2"].thread_id, TID2)
+        self.assertEqual(warnings, [])
+
+    def test_live_codex_finds_sampan_originated_tui_thread_in_db(self):
+        now = 10_000.0
+        make_db(self.home, [(TID2, "/Users/u/proj", "vscode", 0, int(now - 298)),
+                            (TID3, "/Users/u/proj", "vscode", 0, int(now - 299))],
+                originators={TID2: "sampan", TID3: "Codex Desktop"})
+        run = self.runner({"211": "05:00"})
+        found, warnings = self.live(run, self.panes()[1:2], lambda *a, **k: None)
+        self.assertEqual(found["%2"].thread_id, TID2)
+        self.assertEqual(warnings, [])
+
+    def test_live_codex_daemon_fallback_picks_sampan_originated_tui_thread(self):
+        make_db(self.home, [])
+        run = self.runner({"211": "05:00"})
+        snap = self.daemon_snap([self.thread(TID2, originator="sampan"), self.thread(TID3, originator="Codex Desktop")],
+                                loaded=[TID2, TID3])
         found, warnings = self.live(run, self.panes()[1:2], lambda home, run, now: snap)
         self.assertEqual(found["%2"].thread_id, TID2)
         self.assertEqual(warnings, [])
