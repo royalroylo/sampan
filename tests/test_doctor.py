@@ -527,6 +527,19 @@ class TwoLoginsDoctorTest(unittest.TestCase):
         self.assertEqual(_two_logins(self.cfg, r, "linux"), [])
         self.assertEqual(r.called(["security"]), [])
 
+    def test_item_without_a_readable_time_still_warns(self):
+        self.file("work", NOW)
+        r = FakeRunner().on(["security", "find-generic-password"], cp(out='class: "genp"\n    "mdat"<timedate>=<NULL>\n'))
+        from sampan.doctor import _two_logins
+        [c] = _two_logins(self.cfg, r, "darwin")
+        self.assertIn("鑰匙圈、.credentials.json", c.title)
+
+    def test_hint_says_how_the_warning_goes_away(self):
+        self.items[self.svc("work")] = "20261030065605Z"
+        self.file("work", NOW)
+        [c] = self.checks()
+        self.assertIn("改名備份", c.detail)
+
     def test_unreadable_keychain_says_nothing(self):
         self.file("work", NOW)
         r = FakeRunner().on(["security", "find-generic-password"], cp(rc=51, err="user interaction is not allowed"))
@@ -558,10 +571,13 @@ class TmuxConfDoctorTest(unittest.TestCase):
         self.assertIn(".tmux.conf:2", c.detail)
 
     def test_every_set_form_is_read(self):
-        conf = ("set-option -gq allow-passthrough on\nset-window-option -g popup-border-lines rounded\n"
-                "set -ga menu-style 'bg=red'\n")
+        conf = ("set-option -g allow-passthrough on\nset-window-option -g popup-border-lines rounded\n"
+                "set -ga menu-style 'bg=red'\nset -t main:1 -g terminal-features ',xterm*:RGB'\n")
         [c] = self.checks(conf, version="tmux 3.2a")
         for name in ("allow-passthrough", "popup-border-lines", "menu-style"):
+            self.assertIn(name, c.title)
+        [c] = self.checks("set -t main:1 -g terminal-features ',xterm*:RGB'\n", version="tmux 3.1c")
+        for name in ("terminal-features",):
             self.assertIn(name, c.title)
 
     def test_supported_options_comments_and_unknown_versions_say_nothing(self):
@@ -571,6 +587,12 @@ class TmuxConfDoctorTest(unittest.TestCase):
         self.assertEqual(self.checks("set -s extended-keys-format csi-u\n", version="tmux master"), [])
         self.cfg = make_env(Path(tempfile.mkdtemp()))
         self.assertEqual(self.checks(None), [])  # no conf at all
+
+    def test_quiet_sets_and_version_guarded_blocks_are_not_judged(self):
+        # review: set -q loads silently on an old tmux; %if #{>=:...} is the usual version guard
+        conf = ("set -gq allow-passthrough on\nset -sq extended-keys-format csi-u\n"
+                "%if #{>=:#{version},3.5}\nset -s extended-keys-format csi-u\n%endif\n")
+        self.assertEqual(self.checks(conf, version="tmux 3.2a"), [])
 
     def test_xdg_conf_is_read_too(self):
         [c] = self.checks("set -s extended-keys-format csi-u\n", where=".config/tmux/tmux.conf")

@@ -173,6 +173,7 @@ def _auth(cfg, run):
 
 
 KEYCHAIN_SERVICE = "Claude Code-credentials"  # Claude adds "-" + sha256(CLAUDE_CONFIG_DIR)[:8] when the variable is set
+KEYCHAIN_UNKNOWN_TIME = datetime.min.replace(tzinfo=timezone.utc)  # the item exists but its time cannot be read
 _MDAT_RE = re.compile(r'"mdat"<timedate>=\S*\s+"(\d{14})Z')
 
 
@@ -184,9 +185,11 @@ def _keychain_service(p):
 def _keychain_mtime(run, service):
     """When the login keychain item was last written; None when there is none or it cannot be read. Only the item's
     attributes are read (never -w / -g: no secret, and no permission dialog)."""
-    r = run(["security", "find-generic-password", "-s", service])
-    m = _MDAT_RE.search(r.stdout or "") if r.returncode == 0 else None
-    return datetime.strptime(m.group(1), "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc) if m else None
+    r = run(["security", "find-generic-password", "-s", service], timeout=5)  # a locked keychain may ask to unlock
+    if r.returncode != 0:
+        return None
+    m = _MDAT_RE.search(r.stdout or "")
+    return datetime.strptime(m.group(1), "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc) if m else KEYCHAIN_UNKNOWN_TIME
 
 
 def _two_logins(cfg, run, platform):
@@ -197,6 +200,8 @@ def _two_logins(cfg, run, platform):
         return []
     out = []
     for p in _present(cfg):
+        if p.agent != "claude":
+            continue
         f = Path(p.config_dir) / ".credentials.json"
         if not f.is_file():
             continue
@@ -205,9 +210,12 @@ def _two_logins(cfg, run, platform):
             continue
         ft = datetime.fromtimestamp(f.stat().st_mtime, timezone.utc)
         newer = "，檔案比較新（鑰匙圈那份可能已經過期）" if ft > kc else ""
-        out.append(Check("warn", f"{p.name}：登入資訊有兩份（鑰匙圈 {fmt_local(kc)}、.credentials.json {fmt_local(ft)}）",
+        when = "" if kc == KEYCHAIN_UNKNOWN_TIME else f" {fmt_local(kc)}"
+        out.append(Check("warn", f"{p.name}：登入資訊有兩份（鑰匙圈{when}、.credentials.json {fmt_local(ft)}）",
                          f"Claude 能開鑰匙圈時（tmux 從桌面的終端機開）用鑰匙圈那份，不能時（從 SSH 開）用檔案那份{newer}；"
-                         f"兩份不同步，重開機後可能變成未登入。處理：在桌面（不是 SSH）開的終端機裡，於 {p.name} 的 session 執行 /login"))
+                         f"兩份不同步，重開機後可能變成未登入。處理：從桌面開的終端機啟動 sampan（tmux 才開得了鑰匙圈），"
+                         f"在 {p.name} 的 session 執行 /login；確認登入正常後，把 {f} 改名備份，這個提醒才會消失"
+                         f"（之後從 SSH 開的 tmux 裡，這個 profile 會要求重新登入）"))
     return out
 
 
@@ -403,7 +411,7 @@ def _version(current, latest_fn):
 # options a .tmux.conf may use that older tmux builds reject (the version that added them, from tmux's CHANGES). An
 # unknown option makes tmux show an error screen on every attach; distributions often ship an older tmux than Homebrew.
 TMUX_OPTION_SINCE = {
-    "extended-keys": (3, 2), "pane-border-lines": (3, 2),
+    "extended-keys": (3, 2), "pane-border-lines": (3, 2), "terminal-features": (3, 2),
     "allow-passthrough": (3, 3), "pane-border-indicators": (3, 3),
     "popup-style": (3, 3), "popup-border-style": (3, 3), "popup-border-lines": (3, 3),
     "menu-style": (3, 4), "menu-selected-style": (3, 4), "menu-border-style": (3, 4), "menu-border-lines": (3, 4),
@@ -427,11 +435,23 @@ def _tmux_conf(cfg, run):
             lines = conf.read_text(errors="replace").splitlines()
         except OSError:
             continue
+        depth = 0  # inside %if … %endif: usually a version guard, not judged
         for no, line in enumerate(lines, 1):
             words = line.split("#", 1)[0].split()
-            if not words or words[0] not in _SET_COMMANDS:
+            if words and words[0] == "%if":
+                depth += 1
+            elif words and words[0] == "%endif":
+                depth = max(0, depth - 1)
+            if depth or not words or words[0] not in _SET_COMMANDS:
                 continue
-            name = next((w for w in words[1:] if not w.startswith("-")), None)
+            flags, rest = [], words[1:]
+            while rest and rest[0].startswith("-"):
+                flags.append(rest.pop(0))
+                if flags[-1] == "-t" and rest:  # -t takes a target
+                    rest.pop(0)
+            if any("q" in f for f in flags):  # set -q: tmux stays quiet about an option it does not know
+                continue
+            name = rest[0] if rest else None
             since = TMUX_OPTION_SINCE.get(name)
             if since and since > have:
                 found.append((name, since, f"{conf.name}:{no}"))

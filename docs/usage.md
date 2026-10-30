@@ -96,7 +96,7 @@
 
 **為什麼網址裡不能放 token**：sampan 會把來源寫進設定檔，也會原樣傳給 `claude`（指令列與日誌都看得到）。帶帳號或 token 的網址會被拒絕（「網址裡不要放帳號或 token，認證交給 git 的 credential helper」）。私有的 repo 請先設好 git 的 credential helper，來源寫乾淨的網址即可。
 
-**操作紀錄**：畫面上的訊息區只留最後一次操作的結果。真正執行了的操作，它印出的訊息都記在狀態目錄的 `actions.log`（預設 `~/.local/state/sampan/actions.log`，`SAMPAN_STATE_DIR` 可改；只有你讀得到），每行開頭是時間和操作名稱，例如 `[plugin 存檔 …]`、`[重開]`、`[接回]`、`[接手]`、`[new …]`、`[stop]`、`[move …]`、`[來源 …]`、`[forget …]`、`[switch …]`、`[資料夾]`。儲存、`u`／`U`、`r`、來源的新增移除與更新、`R` 重開的每一步（包括「還在跑舊版」的名單）、`X`／`sampan forget`、`P`／`sampan switch`、`R`／`sampan restore` 接回（先記選了哪些）、`A`／`sampan adopt` 接手、`n`／`sampan new`、`s`／`sampan stop`、`m`／`sampan move` 都會記，這些操作途中遇到啟動提示（信任目錄等）時你選了什麼也會記（一個操作裡帶著另一個時，例如重開裡的停止與接回，記在外層的名稱下）；`--dry-run` 不記；`sampan doctor` 會列出檔案位置和最後一筆的時間；預覽、「確定？」和取消的操作不記。網址裡的帳號、GitHub token 和 `…TOKEN=` 這類寫法會先遮成 `***`。檔案超過 1 MB 時，舊的會改名成 `actions.log.1`。
+**操作紀錄**：畫面上的訊息區只留最後一次操作的結果。真正執行了的操作，它印出的訊息都記在狀態目錄的 `actions.log`（預設 `~/.local/state/sampan/actions.log`，`SAMPAN_STATE_DIR` 可改；只有你讀得到），每行開頭是時間和操作名稱，例如 `[plugin 存檔 …]`、`[重開]`、`[接回]`、`[接手]`、`[new …]`、`[stop]`、`[move …]`、`[來源 …]`、`[forget …]`、`[switch …]`、`[資料夾]`。儲存、`u`／`U`、`r`、來源的新增移除與更新、`R` 重開的每一步（包括「還在跑舊版」的名單）、`X`／`sampan forget`、`P`／`sampan switch`、`R`／`sampan restore`／在已停止的那一列按 Enter 接回（先記選了哪些）、`A`／`sampan adopt` 接手、`n`／`sampan new`、`s`／`sampan stop`、`m`／`sampan move` 都會記，這些操作途中遇到啟動提示（信任目錄等）時你選了什麼也會記（一個操作裡帶著另一個時，例如重開裡的停止與接回，記在外層的名稱下）；`--dry-run` 不記；`sampan doctor` 會列出檔案位置和最後一筆的時間；預覽、「確定？」和取消的操作不記。網址裡的帳號、GitHub token 和 `…TOKEN=` 這類寫法會先遮成 `***`。檔案超過 1 MB 時，舊的會改名成 `actions.log.1`。
 
 腳本或排程不要用這個畫面，繼續用 `sampan plugins sync`（見「指令一覽」）。
 

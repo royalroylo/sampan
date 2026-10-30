@@ -61,7 +61,7 @@ callable (`runner.py`). That is what makes the suite fast and safe: tests pass a
 | `outbox/<id>.txt` | the exact text of a dispatch, handed to tmux through a buffer file |
 | `history/registry-*.json` | previous registries (newest 20 by modification time) |
 | `save.log` | one line per `sampan save` run; `sampan doctor` reads it |
-| `actions.log` (`.1`, `.lock`) | messages of the plugin, marketplace, restart, forget, switch and profile actions that ran, with time and action; credentials masked (`actionlog.py`) |
+| `actions.log` (`.1`, `.lock`) | messages of the plugin, marketplace, restart, restore, adopt, new, stop, move, forget, switch, folder and profile actions that ran, plus dispatches, with time and action; credentials masked (`actionlog.py`) |
 | `usage/<profile>.json` | latest Claude 5h / weekly quota written by `sampan statusline` (Codex is read from its own rollout files, never copied here) |
 | `hooks/<pid>.json` | written by the optional SessionStart hook |
 | `update-check.json` | cached newest version tag (6 hours) |
