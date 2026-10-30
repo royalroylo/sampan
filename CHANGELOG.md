@@ -5,6 +5,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.13.10] - 2026-10-30
+
+### Fixed
+- `sampan mcp install` / `uninstall` no longer run `claude mcp get` to see whether a Claude profile has sampan: they read `mcpServers.sampan` from the profile's `.claude.json`, and run `claude` only to add or remove it. Each `claude` run can renew the login, and from a shell that cannot open the keychain (an SSH login) that rewrote every profile's `.credentials.json`. When the file cannot be read or has another shape, `claude mcp get` is still asked.
+- `sampan doctor` no longer warns because `.credentials.json` is newer than the keychain copy: Claude renews whichever copy it used, so any `claude` run where the keychain cannot be opened makes the file newer. It warns only when the keychain copy has not been renewed for over 7 days (an estimate; such a copy went unused and may have lapsed), with the fix: a desktop terminal outside tmux, `sampan claude <profile>`, `/login`. Otherwise it is a note that says a newer file is normal.
+
 ## [0.13.9] - 2026-10-30
 
 ### Fixed
