@@ -181,8 +181,10 @@ are left alone and reported). After the reboot type `sampan`, press `R`, confirm
 conversations come back one by one. sampan **never resumes on its own**; you always press the key. On macOS a
 Claude inside a tmux started over SSH cannot open the keychain and keeps its login in `.credentials.json`; when the
 sessions come back from a desktop terminal after the reboot, Claude uses the keychain copy, which may be stale, and the
-profile reads as logged out (Remote Control cannot connect either). `sampan doctor` warns when a profile has both copies;
-the fix is `/login` in a session of that profile, from a terminal opened on the desktop.
+profile reads as logged out (Remote Control cannot connect either). `sampan doctor` reports a profile with both copies:
+a warning when the file is newer (a desktop start would use the stale copy); start sampan from a desktop terminal and
+run `/login` in a session of that profile, the keychain copy becomes the newer one and the warning turns into a note.
+sampan never reads the logins themselves, only compares the two modification times.
 
 **You have several Claude agents running in terminals outside tmux and want them in one place**: type `sampan`, press `A`.
 

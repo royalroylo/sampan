@@ -500,14 +500,23 @@ class TwoLoginsDoctorTest(unittest.TestCase):
         self.assertIn("work", c.title)
         self.assertIn("兩份", c.title)
         self.assertIn("/login", c.detail)
-        self.assertIn("檔案比較新", c.detail)
+        self.assertIn("檔案比較新", c.title)
+        self.assertIn("降成", c.detail)
 
-    def test_both_present_keychain_newer_still_warns(self):
+    def test_keychain_newer_is_only_info(self):
+        # PM: a profile that works must not carry a warning nobody can clear
         self.items[self.svc("work")] = "20261030065605Z"
         self.file("work", datetime(2026, 10, 30, 6, 33, tzinfo=timezone(timedelta(hours=8))))
         [c] = self.checks()
-        self.assertEqual(c.level, "warn")
-        self.assertNotIn("檔案比較新", c.detail)
+        self.assertEqual(c.level, "info")
+        self.assertIn("改名備份", c.detail)
+
+    def test_login_from_the_desktop_turns_the_warning_into_info(self):
+        self.file("work", datetime(2026, 10, 30, 6, 33, tzinfo=timezone(timedelta(hours=8))))
+        self.items[self.svc("work")] = "20260920134341Z"
+        self.assertEqual([c.level for c in self.checks()], ["warn"])
+        self.items[self.svc("work")] = "20261030010000Z"  # /login from a desktop-started session rewrote the keychain
+        self.assertEqual([c.level for c in self.checks()], ["info"])
 
     def test_only_one_copy_is_fine(self):
         self.items[self.svc("work")] = "20261030065605Z"  # keychain only
@@ -534,11 +543,6 @@ class TwoLoginsDoctorTest(unittest.TestCase):
         [c] = _two_logins(self.cfg, r, "darwin")
         self.assertIn("鑰匙圈、.credentials.json", c.title)
 
-    def test_hint_says_how_the_warning_goes_away(self):
-        self.items[self.svc("work")] = "20261030065605Z"
-        self.file("work", NOW)
-        [c] = self.checks()
-        self.assertIn("改名備份", c.detail)
 
     def test_unreadable_keychain_says_nothing(self):
         self.file("work", NOW)

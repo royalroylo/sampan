@@ -209,13 +209,19 @@ def _two_logins(cfg, run, platform):
         if kc is None:
             continue
         ft = datetime.fromtimestamp(f.stat().st_mtime, timezone.utc)
-        newer = "，檔案比較新（鑰匙圈那份可能已經過期）" if ft > kc else ""
         when = "" if kc == KEYCHAIN_UNKNOWN_TIME else f" {fmt_local(kc)}"
-        out.append(Check("warn", f"{p.name}：登入資訊有兩份（鑰匙圈{when}、.credentials.json {fmt_local(ft)}）",
-                         f"Claude 能開鑰匙圈時（tmux 從桌面的終端機開）用鑰匙圈那份，不能時（從 SSH 開）用檔案那份{newer}；"
-                         f"兩份不同步，重開機後可能變成未登入。處理：從桌面開的終端機啟動 sampan（tmux 才開得了鑰匙圈），"
-                         f"在 {p.name} 的 session 執行 /login；確認登入正常後，把 {f} 改名備份，這個提醒才會消失"
-                         f"（之後從 SSH 開的 tmux 裡，這個 profile 會要求重新登入）"))
+        title = f"{p.name}：登入資訊有兩份（鑰匙圈{when}、.credentials.json {fmt_local(ft)}）"
+        why = "Claude 能開鑰匙圈時（tmux 從桌面的終端機開）用鑰匙圈那份，不能時（從 SSH 開）用檔案那份。"
+        if ft > kc:  # the copy a desktop start would use is the older one: after a reboot this profile may be logged out
+            out.append(Check("warn", title + "，檔案比較新",
+                             why + "鑰匙圈那份可能已經過期，從桌面接回時這個 profile 會變成未登入（Remote Control 也連不上）。"
+                             f"處理：從桌面開的終端機啟動 sampan（tmux 才開得了鑰匙圈），在 {p.name} 的 session 執行 /login；"
+                             "鑰匙圈那份變成比較新的，這裡就降成 ℹ️"))
+        else:  # contents cannot be compared without reading the secrets: only the times are
+            out.append(Check("info", title,
+                             why + "鑰匙圈那份比較新，從桌面接回沒問題；只有從 SSH 開 tmux 時會用到檔案那份。"
+                             f"不想留兩份：確認從桌面開的 session 登入正常後，把 {f} 改名備份"
+                             "（之後從 SSH 開的 tmux 裡，這個 profile 會要求登入）"))
     return out
 
 
