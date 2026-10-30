@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 FMT = "#{session_name}\t#{pane_id}\t#{pane_pid}\t#{pane_current_command}\t#{pane_current_path}"
 SHELLS = frozenset({"zsh", "bash", "sh", "fish", "-zsh"})
@@ -40,6 +41,20 @@ class Tmux:
         r = self._tmux("list-sessions", "-F", "#{pid}-#{start_time}")
         lines = r.stdout.split()
         return lines[0] if r.returncode == 0 and lines else None
+
+    def attach_times(self):
+        """{session: (clients attached now, when a client last attached | None)}; None when tmux is unreadable."""
+        r = self._tmux("list-sessions", "-F", "#{session_name}\t#{session_attached}\t#{session_last_attached}")
+        if r.returncode != 0:
+            return {} if _no_server(r.stderr or "") else None
+        out = {}
+        for line in r.stdout.splitlines():
+            parts = line.split("\t")
+            if len(parts) != 3 or not parts[1].isdigit():
+                continue
+            last = datetime.fromtimestamp(int(parts[2]), timezone.utc) if parts[2].isdigit() else None
+            out[parts[0]] = (int(parts[1]), last)
+        return out
 
     def panes(self):
         r = self._tmux("list-panes", "-a", "-F", FMT)
