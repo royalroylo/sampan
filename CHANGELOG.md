@@ -5,6 +5,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.13.7] - 2026-10-30
+
+### Added
+- `sampan doctor` (macOS) warns when a Claude profile's login is both in the keychain and in `.credentials.json`. Claude uses the keychain when it can open it (a tmux started from a desktop terminal) and the file when it cannot (one started over SSH), so one copy goes stale; after a reboot the profile can read as logged out, and Remote Control cannot connect. Only the keychain item's attributes are read, never the secret, with a 5 second limit.
+- `sampan doctor` warns about `~/.tmux.conf` (or `~/.config/tmux/tmux.conf`) options the installed tmux is too old for, such as 3.5's `extended-keys-format` on Ubuntu's 3.4, which put an error screen on every attach. Nothing is started; `set -q` lines and `%if` blocks are not judged.
+- restore / `R` / Enter on a stopped row, `adopt`, `new`, `stop` and `move` write what they did to `actions.log`, like a restart, including the answers to startup prompts; an action inside another is logged once under the outer name, and dry runs are not logged.
+
+### Docs
+- Rebooting: why a profile can come back logged out (keychain vs `.credentials.json`) and what to do. WSL: an older tmux and a `.tmux.conf` brought from a Mac.
+
 ## [0.13.6] - 2026-10-29
 
 ### Added
