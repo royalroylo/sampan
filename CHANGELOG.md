@@ -7,6 +7,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [0.13.7] - 2026-10-30
 
+### Fixed
+- A Claude startup menu (the trust prompt above all) is answered only once the cursor is on the chosen option: after moving, sampan reads the screen again and presses Enter only when ❯ is there, sending the move again up to 3 times and otherwise pressing no Enter and saying so. An arrow key sent the moment the trust prompt drew was lost, Enter landed on "No, exit" and Claude quit, while MCP `new_session` reported the folder as trusted. `new` and `move` now say 已信任 only after the prompt has left the screen.
+
 ### Added
 - `sampan doctor` (macOS) reports a Claude profile whose login is both in the keychain and in `.credentials.json`: a warning when the file is newer (a desktop start would use the stale keychain copy), otherwise only a note; `/login` from a desktop-started session makes the keychain copy the newer one and the warning becomes a note. Claude uses the keychain when it can open it (a tmux started from a desktop terminal) and the file when it cannot (one started over SSH), so one copy goes stale; after a reboot the profile can read as logged out, and Remote Control cannot connect. Only the keychain item's attributes are read, never the secret, with a 5 second limit.
 - `sampan doctor` warns about `~/.tmux.conf` (or `~/.config/tmux/tmux.conf`) options the installed tmux is too old for, such as 3.5's `extended-keys-format` on Ubuntu's 3.4, which put an error screen on every attach. Nothing is started; `set -q` lines and `%if` blocks are not judged.
