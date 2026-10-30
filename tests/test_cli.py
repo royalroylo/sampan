@@ -391,6 +391,36 @@ class CliTest(unittest.TestCase):
             self.assertEqual((cd.call_count, cc.call_count), (0, 0))
             self.assertEqual(buf.getvalue().strip(), "❌ --wait 只能跟 show 一起用：sampan dispatches show <編號> --wait 秒")
 
+    def test_send_batch_passes_names_message_and_flags(self):
+        with mock.patch("sampan.send.cmd_send_batch", return_value=124) as cs, \
+                mock.patch("sampan.runner.run", FakeRunner(strict=True)), \
+                mock.patch("sampan.send.command_caller", return_value=TERMINAL):
+            self.assertEqual(cli.main(["send-batch", "a", "b", "-m", "/compact", "--raw", "--wait", "--timeout", "30"]),
+                             124)
+        self.assertEqual(cs.call_args.args[3:5], (["a", "b"], "/compact"))
+        self.assertEqual({k: cs.call_args.kwargs[k] for k in ("raw", "wait", "timeout", "caller")},
+                         {"raw": True, "wait": True, "timeout": 30, "caller": TERMINAL})
+
+    def test_send_batch_folder_expands_to_sessions_under_it(self):
+        from sampan import folders
+        folders.save(self.cfg.state_dir, folders.Tree({"客戶": False, "客戶/甲": False, "其他": False},
+                                                      {"b": "客戶/甲", "a": "客戶", "c": "其他"}))
+        buf = io.StringIO()
+        with mock.patch("sampan.send.cmd_send_batch", return_value=0) as cs, redirect_stdout(buf), \
+                mock.patch("sampan.runner.run", FakeRunner(strict=True)), \
+                mock.patch("sampan.send.command_caller", return_value=TERMINAL):
+            self.assertEqual(cli.main(["send-batch", "--folder", "客戶", "-m", "hi"]), 0)
+            self.assertEqual(cs.call_args.args[3], ["a", "b"])
+            self.assertEqual(cli.main(["send-batch", "--folder", "/客戶/甲/", "-m", "hi"]), 0)
+            self.assertEqual(cs.call_args.args[3], ["b"])
+            self.assertEqual(cs.call_count, 2)
+            self.assertEqual(cli.main(["send-batch", "--folder", "沒有", "-m", "hi"]), 2)
+            self.assertEqual(cli.main(["send-batch", "--folder", "/", "-m", "hi"]), 2)
+            self.assertEqual(cli.main(["send-batch", "a", "--folder", "客戶", "-m", "hi"]), 2)
+            self.assertEqual(cli.main(["send-batch", "-m", "hi"]), 2)
+        self.assertEqual(cs.call_count, 2)
+        self.assertEqual(len([x for x in buf.getvalue().splitlines() if x.startswith("❌")]), 4)
+
     def test_send_dash_reads_stdin(self):
         with mock.patch("sampan.send.cmd_send", return_value=0) as cs, mock.patch("sys.stdin", io.StringIO("from\nstdin $x `y`\n")), \
                 mock.patch("sampan.send.command_caller", return_value=TERMINAL):
@@ -553,6 +583,17 @@ class AgentRefusedTest(unittest.TestCase):
             rc, text, _ = self.run_cli(["dispatches", "cancel", "ab12"], self.SESSION)
         self.assertEqual((rc, cc.call_count), (2, 0))
         self.assertIn(AGENT_REFUSED, text)
+
+    def test_send_batch_refused_for_agent_when_confirm_on(self):
+        from sampan.send import AGENT_REFUSED
+        with mock.patch("sampan.send.cmd_send_batch") as cs:
+            rc, text, _ = self.run_cli(["send-batch", "a", "b", "-m", "hi"], self.SESSION)
+        self.assertEqual((rc, cs.call_count), (2, 0))
+        self.assertIn(AGENT_REFUSED, text)
+        self.set_confirm(False)
+        with mock.patch("sampan.send.cmd_send_batch", return_value=0) as cs:
+            rc, _, _ = self.run_cli(["send-batch", "a", "b", "-m", "hi"], self.SESSION)
+        self.assertEqual((rc, cs.call_count), (0, 1))
 
     def test_terminal_caller_still_sends(self):
         with mock.patch("sampan.send.cmd_send", return_value=0) as cs:

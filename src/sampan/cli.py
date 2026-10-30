@@ -71,6 +71,17 @@ def build_parser():
     sd.add_argument("--timeout", type=int, default=600, help="--wait 最多等幾秒（預設 600；逾時結束碼 124，派工照樣留著）")
     sd.add_argument("--raw", action="store_true",
                     help="直接送：不加轉送標頭，讓對方的 Claude 當作指令執行（例如 /compact）；只限 Claude，一行、以 / 開頭")
+    sb = sub.add_parser("send-batch",
+                        usage="sampan send-batch <名稱>... -m 訊息 [--raw] [--wait] [--timeout 秒] | "
+                              "sampan send-batch --folder <路徑> -m 訊息 [...]",
+                        help="同一則訊息送給多個 session：只送給執行中而且閒著的，其他的跳過並列出（不排隊）")
+    sb.add_argument("names", nargs="*", metavar="name")
+    sb.add_argument("--folder", help="送給這個資料夾裡（含子資料夾）的 session")
+    sb.add_argument("-m", "--message", required=True, help="訊息；- 從 stdin 讀")
+    sb.add_argument("--wait", action="store_true", help="等整批做完，把每個回覆印出來")
+    sb.add_argument("--timeout", type=int, default=600, help="--wait 最多等幾秒（預設 600；逾時結束碼 124，派工照樣留著）")
+    sb.add_argument("--raw", action="store_true",
+                    help="直接送：不加轉送標頭，讓對方的 Claude 當作指令執行（例如 /compact）；只限 Claude，一行、以 / 開頭")
     ds = sub.add_parser("dispatches", usage="sampan dispatches [--all] | sampan dispatches show <編號> [--wait 秒] | sampan dispatches cancel <編號>",
                         help="列派工（預設只列排隊中與等回覆的）；show <編號> 看狀態與完整回覆；cancel <編號> 取消排隊中的、或不再等已送出的")
     ds.add_argument("action", nargs="?", choices=["cancel", "show"], help=argparse.SUPPRESS)
@@ -344,6 +355,22 @@ def _agent_refused(cfg, caller, out):
     return True
 
 
+def _folder_sessions(cfg, folder):
+    """The sessions in folder and its subfolders (sorted), or why not (str)."""
+    from . import folders
+    path = folder.strip().strip("/")
+    if not path:
+        return "--folder 要給資料夾路徑（最上層的 session 請直接列名稱）"
+    try:
+        tree = folders.load(cfg.state_dir)
+    except folders.FoldersError as e:
+        return str(e)
+    if path not in tree.folders:
+        return f"沒有資料夾「{path}」（sampan folder list 看）"
+    names = sorted(folders.sessions_under(tree, path))
+    return names or f"資料夾「{path}」裡沒有 session"
+
+
 def _go_in(run, want, rc):
     """"Go in and handle it myself" was chosen: attach to that session (switch-client inside tmux, exec tmux attach outside)."""
     if not want:
@@ -421,6 +448,21 @@ def _dispatch(cfg, args):
         message = sys.stdin.read() if args.message == "-" else args.message
         return cmd_send(cfg, run, out, args.name, message, wait=args.wait, timeout=args.timeout, caller=caller,
                         raw=args.raw)
+    if cmd == "send-batch":
+        from .send import cmd_send_batch, command_caller
+        if bool(args.names) == (args.folder is not None):
+            out("❌ 給 session 名稱，或用 --folder 給資料夾，二選一")
+            return 2
+        names = list(args.names) if args.folder is None else _folder_sessions(cfg, args.folder)
+        if isinstance(names, str):
+            out(f"❌ {names}")
+            return 2
+        caller = command_caller(cfg, run, os.getpid())
+        if _agent_refused(cfg, caller, out):
+            return 2
+        message = sys.stdin.read() if args.message == "-" else args.message
+        return cmd_send_batch(cfg, run, out, names, message, raw=args.raw, wait=args.wait, timeout=args.timeout,
+                              caller=caller)
     if cmd == "dispatches":
         from .send import cmd_cancel, cmd_dispatches, cmd_show
         if args.wait is not None and args.action != "show":

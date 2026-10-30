@@ -144,12 +144,12 @@ class ProtocolTest(Base):
                 self.assertEqual(r["capabilities"], {"tools": {}})
                 self.assertEqual(r["serverInfo"]["name"], "sampan")
 
-    def test_tools_list_has_six_tools_with_schemas(self):
+    def test_tools_list_has_seven_tools_with_schemas(self):
         c = self.serve(Client([init(1), json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n",
                                req(2, "tools/list")]))
         tools = {t["name"]: t for t in c.response(2)["result"]["tools"]}
         self.assertEqual(set(tools), {"list_sessions", "send", "new_session", "dispatch_result", "cancel_dispatch",
-                                      "folder_move"})
+                                      "folder_move", "send_batch"})
         for t in tools.values():
             self.assertEqual(t["inputSchema"]["type"], "object")
             self.assertTrue(t["description"])
@@ -1060,3 +1060,115 @@ class IdentifyCallerTest(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SendBatchToolTest(Base):
+    def setUp(self):
+        super().setUp()
+        self.rows["b"] = dataclasses.replace(self.rows["b"], agent_status="busy")
+        self.rows["d"] = status_row("d", sid="sd", pane="%4")
+
+    def test_send_batch_is_an_acting_tool(self):
+        self.assertIn("send_batch", mcp_server.ACTING_TOOLS)
+        tools = {t["name"]: t for t in mcp_server.tools_list(True)}
+        self.assertEqual(tools["send_batch"]["_meta"], {"anthropic/requiresUserInteraction": True})
+        schema = tools["send_batch"]["inputSchema"]
+        self.assertEqual(schema["properties"]["sessions"]["minItems"], 1)
+        self.assertEqual(schema["properties"]["sessions"]["items"], {"type": "string"})
+        self.assertEqual(schema["properties"]["raw"]["type"], "boolean")
+        self.assertEqual(schema["properties"]["wait"]["type"], "boolean")
+        self.assertEqual(sorted(schema["required"]), ["message", "sessions"])
+        c = self.serve(Client([init(1, client="other"), call(2, "send_batch", {"sessions": ["d"], "message": "hi"})]))
+        self.assertTrue(c.response(2)["result"]["isError"])  # a client that does not ask is refused
+        self.assertEqual(self.dispatches(), [])
+
+    def test_send_batch_rejects_duplicate_or_empty_names(self):
+        bad = [{"sessions": [], "message": "hi"}, {"sessions": ["d", "d"], "message": "hi"},
+               {"sessions": ["d", ""], "message": "hi"}, {"sessions": "d", "message": "hi"},
+               {"sessions": ["d\n"], "message": "hi"}, {"sessions": ["d"], "message": ""},
+               {"sessions": ["d"], "message": "hi", "wait": "yes"}, {"sessions": ["d"], "message": "hi", "raw": 1}]
+        c = self.serve(Client([init(1)] + [call(i + 2, "send_batch", a) for i, a in enumerate(bad)]), confirm=False)
+        for i in range(len(bad)):
+            self.assertTrue(c.response(i + 2)["result"]["isError"], bad[i])
+        self.assertIn("重複", tool_text(c.response(3)))
+        self.assertEqual(self.dispatches(), [])
+
+    def test_send_batch_sends_and_lists_the_skipped(self):
+        c = self.serve(Client([init(1), call(2, "send_batch", {"sessions": ["b", "d"], "message": "hi"})]),
+                       run=tmux_runner(), confirm=False)
+        body = tool_json(c.response(2))
+        [d] = self.dispatches()
+        self.assertEqual(body, {"batch": d.batch, "items": [{"session": "d", "dispatch": d.id, "state": "sent"}],
+                                "skipped": [{"session": "b", "reason": "對方正在忙"}]})
+        self.assertTrue(d.notify)
+
+    def test_send_batch_nobody_to_send_is_an_error(self):
+        c = self.serve(Client([init(1), call(2, "send_batch", {"sessions": ["b", "a"], "message": "hi"})]),
+                       confirm=False)
+        self.assertTrue(c.response(2)["result"]["isError"])
+        self.assertIn("對方正在忙", tool_text(c.response(2)))
+        self.assertEqual(self.dispatches(), [])
+
+    def test_send_batch_wait_returns_the_replies(self):
+        self.rows["e"] = status_row("e", sid="se", pane="%5")
+        with mock.patch.object(send, "_reply", lambda cfg, row, text: send.Reply(True, True, f"答 {row.name}")):
+            c = self.serve(Client([init(1), call(2, "send_batch", {"sessions": ["d", "e"], "message": "hi",
+                                                                   "wait": True})]),
+                           run=tmux_runner(), confirm=False)
+        body = tool_json(c.response(2))
+        self.assertEqual([(i["session"], i["state"], i["reply"]) for i in body["items"]],
+                         [("d", "done", "答 d"), ("e", "done", "答 e")])
+        self.assertEqual(body["skipped"], [])
+        self.assertFalse(any(d.notify for d in self.dispatches()))  # the tool result told the caller
+
+    def test_send_batch_wait_that_runs_out_turns_the_notice_on(self):
+        t = [0.0]
+
+        def sleep(s):
+            t[0] += s
+        c = self.serve(Client([init(1), call(2, "send_batch", {"sessions": ["d"], "message": "hi", "wait": True})]),
+                       run=tmux_runner(), confirm=False, sleep=sleep, clock=lambda: t[0])
+        body = tool_json(c.response(2))
+        self.assertEqual(body["items"][0]["state"], "sent")
+        self.assertGreaterEqual(t[0], 60)
+        self.assertTrue(all(d.notify for d in self.dispatches()))
+
+    def test_dispatch_result_accepts_batch_id(self):
+        b = send.submit_batch(self.cfg, FakeRunner(strict=True), CALLER_A, ["b", "d"], "hi", raw=False, notify=True,
+                              now=NOW, status_fn=self.status_fn)
+        [d] = b.items
+        with mock.patch.object(send, "_reply", lambda cfg, row, text: send.Reply(True, True, "答")):
+            c = self.serve(Client([init(1), call(2, "dispatch_result", {"id": b.id}),
+                                   call(3, "dispatch_result", {"id": b.id})]), run=tmux_runner())
+        self.assertEqual(tool_json(c.response(2)), {"batch": b.id, "items": [
+            {"session": "d", "dispatch": d.id, "state": "sent"}], "skipped": 1})
+        self.assertEqual(tool_json(c.response(3)), {"batch": b.id, "items": [
+            {"session": "d", "dispatch": d.id, "state": "done", "reply": "答"}], "skipped": 1})
+        self.assertFalse(self.dispatches()[0].notify)  # the whole batch was reported: no notice
+
+    def test_send_batch_only_owner_reads_it(self):
+        b = send.submit_batch(self.cfg, FakeRunner(strict=True), Caller("c", "codex", "codex", "%3"), ["b", "d"],
+                              "secret", raw=False, notify=False, now=NOW, status_fn=self.status_fn)
+        with mock.patch.object(send, "advance", side_effect=AssertionError("must not advance")):
+            c = self.serve(Client([init(1), call(2, "dispatch_result", {"id": b.id}),
+                                   call(3, "dispatch_result", {"id": "b0000"})]))
+        self.assertTrue(c.response(2)["result"]["isError"])
+        self.assertNotIn("secret", tool_text(c.response(2)))
+        self.assertIn(b.id, tool_text(c.response(2)))
+        self.assertEqual(tool_text(c.response(2)).replace(b.id, "b0000"), tool_text(c.response(3)))
+
+    def test_watch_once_advances_a_batch_this_caller_sent(self):
+        b = send.submit_batch(self.cfg, FakeRunner(strict=True), CALLER_A, ["d"], "hi", raw=False, notify=True,
+                              now=NOW, status_fn=self.status_fn)
+        server = mcp_server.Server(self.cfg, tmux_runner(), io.StringIO(), io.StringIO(), caller=CALLER_A,
+                                   status_fn=self.status_fn, now_fn=lambda: NOW, sleep=lambda _s: None)
+        server.watch_once()
+        self.assertEqual(send.batch_items(self.cfg, b.id)[0].state, "sent")
+
+    def test_cancel_dispatch_with_a_batch_id_is_refused(self):
+        b = send.submit_batch(self.cfg, FakeRunner(strict=True), CALLER_A, ["d"], "hi", raw=False, notify=False,
+                              now=NOW, status_fn=self.status_fn)
+        c = self.serve(Client([init(1), call(2, "cancel_dispatch", {"id": b.id})]), confirm=False)
+        self.assertTrue(c.response(2)["result"]["isError"])
+        self.assertIn("逐筆", tool_text(c.response(2)))
+        self.assertEqual(self.dispatches()[0].state, "queued")

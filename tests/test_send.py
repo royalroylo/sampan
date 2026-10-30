@@ -1232,3 +1232,178 @@ class DispatchesTableTest(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+SID_ME = "66666666-7777-8888-9999-aaaaaaaaaaaa"  # Claude caller "me" of a batch
+SID_C2 = "77777777-8888-9999-aaaa-bbbbbbbbbbbb"  # Claude target "c" of a batch
+CALLER_ME = Caller("me", "alice", "claude", "%9")
+
+
+class BatchBase(Base):
+    def setUp(self):
+        super().setUp()
+        self.rows = {
+            "me": status_row("me", sid=SID_ME, pane="%9"),
+            "a": status_row("a", sid=SID_A, pane="%1"),
+            "b": status_row("b", sid=SID_B, pane="%2", agent_status="busy"),
+            "c": status_row("c", sid=SID_C2, pane="%3"),
+            "x": status_row("x", agent="codex", profile="codex", sid=TID_C, pane="%4"),
+        }
+
+    def batch(self, names, message="hello", *, notify=True, raw=False, caller=CALLER_ME):
+        return send.submit_batch(self.cfg, FakeRunner(strict=True), caller, names, message, raw=raw, notify=notify,
+                                 now=NOW, status_fn=self.status_fn)
+
+    def sent(self, names=("a", "b", "c")):
+        """A batch to a, b (busy), c with a and c delivered."""
+        b = self.batch(list(names))
+        for d in b.items:
+            self.assertEqual(self.advance(tmux_runner(), d.id).state, "sent")
+        return b
+
+
+class BatchTest(BatchBase):
+    def test_batch_sends_to_idle_and_skips_busy(self):
+        b = self.batch(["a", "b", "c"])
+        self.assertIsInstance(b, send.Batch)
+        self.assertRegex(b.id, r"^b[0-9a-f]{4}$")
+        self.assertEqual([d.to_name for d in b.items], ["a", "c"])
+        self.assertTrue(all(d.state in ("queued", "sent") for d in b.items))
+        self.assertEqual(b.skipped, [("b", "對方正在忙")])
+        stored = dispatch.load(self.cfg.state_dir)
+        self.assertEqual([(d.to_name, d.batch) for d in stored], [("a", b.id), ("c", b.id)])
+        self.assertEqual([d.batch_skipped for d in stored], [1, 0])  # only on the first item
+        self.assertEqual(send.batch_items(self.cfg, b.id), stored)
+
+    def test_batch_skips_stopped_and_unknown_with_reasons(self):
+        self.rows["s"] = status_row("s", State.STOPPED, sid="s")
+        self.rows["w"] = status_row("w", sid="w", pane="%6", agent_status="waiting")
+        b = self.batch(["a", "s", "nope", "me", "w", "a"])
+        self.assertEqual([d.to_name for d in b.items], ["a"])  # a name given twice is sent once
+        self.assertEqual(b.skipped, [
+            ("s", send.target_problem(self.rows["s"], "s")),
+            ("nope", send.target_problem(None, "nope")),
+            ("me", "不能送給自己（me）"),
+            ("w", "對方在等使用者回應"),
+        ])
+
+    def test_batch_raw_skips_codex(self):
+        b = self.batch(["a", "x"], "/compact", raw=True)
+        self.assertEqual(b.skipped, [("x", "直接送目前只支援 Claude")])
+        self.assertEqual([(d.to_name, d.raw, d.text) for d in b.items], [("a", True, "/compact")])
+        self.assertEqual(self.batch(["a"], "hello", raw=True), send.raw_problem("hello"))
+
+    def test_batch_with_nobody_to_send_returns_why(self):
+        r = self.batch(["b", "nope"])
+        self.assertIsInstance(r, str)
+        self.assertIn("對方正在忙", r)
+        self.assertIn("nope", r)
+        self.assertEqual(dispatch.load(self.cfg.state_dir), [])
+        self.assertEqual(self.batch(["a"], "  "), "訊息是空的")
+
+    def test_batch_notice_once_after_all_finish(self):
+        b = self.sent()
+        a, c = b.items
+        self.transcript(SID_A, [user(self.stored(a.id).text), assistant("from a")])
+        run = FakeRunner(strict=True)
+        self.assertEqual(self.advance(run, a.id, later(5)).state, "done")
+        self.assertEqual(run.calls, [])  # c is not done yet: no notice
+        self.assertNotIn(a.id, send.pending(self.cfg))
+        self.transcript(SID_C2, [user(self.stored(c.id).text), assistant("from c")])
+        run = tmux_runner()
+        self.assertEqual(self.advance(run, c.id, later(10)).state, "done")
+        writes = tmux_writes(run)
+        self.assertEqual([w[2] for w in writes], ["load-buffer", "paste-buffer", "send-keys"])
+        self.assertEqual(writes[2][-2:], ["%9", "Enter"])
+        items = send.batch_items(self.cfg, b.id)
+        text = send.batch_notice_text(b.id, items, 1)
+        self.assertEqual(text, f"〔sampan：批次 {b.id} 完成：2 完成、0 失敗、1 跳過，用 dispatch_result 看〕")
+        self.assertEqual(Path(writes[0][-1]).read_text(), text)
+        self.assertTrue(all(d.notified for d in items))
+        self.assertEqual(send.pending(self.cfg), [])
+        for d in items:
+            run = FakeRunner(strict=True)
+            self.advance(run, d.id, later(20))
+            self.assertEqual(run.calls, [])  # once only
+
+    def test_batch_finishes_with_a_cancelled_item(self):  # Review Focus 4
+        b = self.sent()
+        a, c = b.items
+        self.assertEqual(send.cancel(self.cfg, c.id, now=later(1)).state, "cancelled")
+        self.transcript(SID_A, [user(self.stored(a.id).text), assistant("from a")])
+        run = tmux_runner()
+        self.advance(run, a.id, later(5))
+        writes = tmux_writes(run, "%9")
+        self.assertEqual(len(writes), 2)  # paste + Enter
+        notice = Path(tmux_writes(run)[0][-1]).read_text()
+        self.assertEqual(notice, f"〔sampan：批次 {b.id} 完成：1 完成、1 失敗、1 跳過，用 dispatch_result 看〕")
+        self.assertEqual(send.pending(self.cfg), [])
+
+    def test_batch_whose_last_item_is_cancelled_is_noticed_by_the_watcher(self):
+        b = self.sent()
+        a, c = b.items
+        self.transcript(SID_A, [user(self.stored(a.id).text), assistant("from a")])
+        self.advance(FakeRunner(strict=True), a.id, later(5))
+        send.cancel(self.cfg, c.id, now=later(6))
+        self.assertEqual(send.pending(self.cfg), [a.id])  # the first item owes the batch notice
+        run = tmux_runner()
+        self.advance(run, a.id, later(7))
+        self.assertEqual(len(tmux_writes(run, "%9")), 2)
+        self.assertEqual(send.pending(self.cfg), [])
+
+    def test_batch_without_notify_never_tells(self):
+        b = self.batch(["a"], notify=False)
+        self.advance(tmux_runner(), b.items[0].id)
+        self.transcript(SID_A, [user(self.stored(b.items[0].id).text), assistant("from a")])
+        run = FakeRunner(strict=True)
+        self.advance(run, b.items[0].id, later(5))
+        self.assertEqual(run.calls, [])
+        self.assertEqual(send.pending(self.cfg), [])
+
+    def test_set_notify_takes_a_batch_id(self):
+        b = self.batch(["a", "c"], notify=False)
+        send.set_notify(self.cfg, b.id, True)
+        self.assertTrue(all(d.notify for d in send.batch_items(self.cfg, b.id)))
+
+    def test_is_batch_id(self):
+        self.assertTrue(send.is_batch_id("b0f3a"))
+        for s in ("b0f3", "beef", "bxyzw", "a0f3a", "b0f3a1"):
+            self.assertFalse(send.is_batch_id(s), s)
+
+
+class CmdSendBatchTest(BatchBase):
+    def cmd(self, run, names, *, wait, timeout=600, message="hi"):
+        self.lines = []
+        clock = iter(range(0, 10_000, 2))
+        return send.cmd_send_batch(self.cfg, run, self.lines.append, names, message, wait=wait, timeout=timeout,
+                                   sleep=self.sleeps.append, clock=lambda: next(clock), status_fn=self.status_fn,
+                                   now_fn=lambda: NOW, caller=CALLER_ME)
+
+    def test_no_wait_prints_the_batch_and_the_skipped(self):
+        self.assertEqual(self.cmd(tmux_runner(), ["a", "b"], wait=False), 0)
+        [d] = dispatch.load(self.cfg.state_dir)
+        self.assertEqual(d.state, "sent")
+        text = "\n".join(self.lines)
+        self.assertIn(d.batch, text)
+        self.assertIn(d.id, text)
+        self.assertIn("b：對方正在忙", text)
+
+    def test_wait_prints_each_reply(self):
+        def capture(args):
+            for d in dispatch.load(self.cfg.state_dir):
+                sid = SID_A if d.to_name == "a" else SID_C2
+                self.transcript(sid, [user(d.text), assistant(f"reply of {d.to_name}")])
+            return cp()
+        run = tmux_runner().on(["tmux", "-u", "send-keys"], capture)
+        self.assertEqual(self.cmd(run, ["a", "c"], wait=True), 0)
+        text = "\n".join(self.lines)
+        self.assertIn("reply of a", text)
+        self.assertIn("reply of c", text)
+
+    def test_wait_timeout_is_124(self):
+        self.set_row("a", agent_status="idle")
+        self.assertEqual(self.cmd(tmux_runner(), ["a"], wait=True, timeout=10), 124)
+
+    def test_nobody_to_send_is_2(self):
+        self.assertEqual(self.cmd(FakeRunner(strict=True), ["b"], wait=False), 2)
+        self.assertTrue(self.lines[-1].startswith("❌"))

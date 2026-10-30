@@ -257,23 +257,127 @@ def _create(cfg, caller, to, to_agent, to_profile, message, state, now, *, notif
     strip: drop trailing newlines from the text (a startup prompt goes through `$(cat …)`, which drops them)."""
     try:
         with dispatch.transaction(cfg.state_dir) as items:
-            did = dispatch.new_id({d.id for d in items})
-            text = message if raw else deliver.compose(caller_label(caller), caller.profile, did, message)
-            if strip or state == "queued":  # a trailing newline (stdin) is never part of the message
-                text = text.rstrip("\n")
-            dispatch.write_outbox(cfg.state_dir, did, text)
-            d = dispatch.Dispatch(
-                did, caller_label(caller), caller.profile, caller.agent,
-                to, to_agent, to_profile, text, state, _iso(now),
-                sent_at=_iso(now) if state == "sent" else None,
-                notify=bool(notify and caller.name is not None), thread_id=thread_id, from_kind=caller_kind(caller),
-                startup=startup, raw=raw, batch=batch)
-            kept = dispatch.prune(items, now)
-            _drop_outboxes(cfg, {x.id for x in items} - {x.id for x in kept})
-            items[:] = kept + [d]
+            d = _record(cfg, caller, to, to_agent, to_profile, message, state, now, {d.id for d in items},
+                        notify=notify, thread_id=thread_id, strip=strip, startup=startup, raw=raw, batch=batch)
+            _keep(cfg, items, now, [d])
     except (dispatch.DispatchError, OSError) as e:
         return str(e)
     return replace(d)
+
+
+def _record(cfg, caller, to, to_agent, to_profile, message, state, now, taken, *, notify, thread_id=None, strip=False,
+            startup=False, raw=False, batch=None):
+    """A new Dispatch with an id not in taken, its outbox written (call inside dispatch.transaction)."""
+    did = dispatch.new_id(taken)
+    text = message if raw else deliver.compose(caller_label(caller), caller.profile, did, message)
+    if strip or state == "queued":  # a trailing newline (stdin) is never part of the message
+        text = text.rstrip("\n")
+    dispatch.write_outbox(cfg.state_dir, did, text)
+    return dispatch.Dispatch(
+        did, caller_label(caller), caller.profile, caller.agent,
+        to, to_agent, to_profile, text, state, _iso(now),
+        sent_at=_iso(now) if state == "sent" else None,
+        notify=bool(notify and caller.name is not None), thread_id=thread_id, from_kind=caller_kind(caller),
+        startup=startup, raw=raw, batch=batch)
+
+
+def _keep(cfg, items, now, new):
+    """Prune items (dropping the outboxes of what goes) and add the new dispatches at the end."""
+    kept = dispatch.prune(items, now)
+    _drop_outboxes(cfg, {x.id for x in items} - {x.id for x in kept})
+    items[:] = kept + new
+
+
+@dataclass
+class Batch:
+    """One batch send: the dispatches it created (in the order given) and the sessions it skipped, (name, reason)."""
+    id: str
+    items: list
+    skipped: list
+
+
+def is_batch_id(text):
+    """"b" + four lowercase hex digits. A dispatch id is four hex digits, so one that starts with b is not a batch."""
+    return len(text) == 5 and text[0] == "b" and all(c in "0123456789abcdef" for c in text[1:])
+
+
+def _new_batch_id(items):
+    return "b" + dispatch.new_id({d.batch[1:] for d in items if d.batch})
+
+
+def _skip_reason(caller, name, row, raw):
+    """Why a batch does not send to name (its StatusRow, or None) now, or None. Only a running, idle session is sent
+    to: a batch never queues."""
+    if caller.name is not None and caller.name == name:
+        return f"不能送給自己（{name}）"
+    problem = target_problem(row, name)
+    if problem:
+        return problem
+    if raw and row.agent == "codex":
+        return REASON_RAW_CODEX
+    if row.agent_status != "idle":
+        return BUSY.get(row.agent_status, "看不出對方是否閒著")
+    return None
+
+
+def submit_batch(cfg, run, caller, names, message, *, raw, notify, now, snapshot_fn=None, status_fn=None):
+    """Send the same message to several sessions: a queued dispatch for each running, idle one (one transaction, one
+    batch id); the others are skipped with why, never queued. A name given twice counts once. Batch, or why not
+    (str: a bad message, or nobody to send to; nothing is recorded). notify: one notice for the whole batch, when
+    every item is finished (see _owes_notice)."""
+    if not message.strip():
+        return "訊息是空的"
+    if raw:
+        message = message.strip()
+        if problem := raw_problem(message):
+            return problem
+    try:
+        rows = _rows(cfg, run, snapshot_fn, status_fn)
+    except RegistryError as e:
+        return str(e)
+    targets, skipped = [], []
+    for name in dict.fromkeys(names):
+        why = _skip_reason(caller, name, rows.get(name), raw)
+        if why:
+            skipped.append((name, why))
+        else:
+            targets.append(rows[name])
+    if not targets:
+        return "沒有可以送的 session：" + "；".join(f"{n}：{why}" for n, why in skipped)
+    try:
+        with dispatch.transaction(cfg.state_dir) as items:
+            bid, taken, made = _new_batch_id(items), {d.id for d in items}, []
+            for row in targets:
+                d = _record(cfg, caller, row.name, row.agent, row.profile, message, "queued", now, taken,
+                            notify=notify, thread_id=(row.sid or None) if row.agent == "codex" else None, raw=raw,
+                            batch=bid)
+                taken.add(d.id)
+                made.append(d)
+            made[0].batch_skipped = len(skipped)
+            _keep(cfg, items, now, made)
+    except (dispatch.DispatchError, OSError) as e:
+        return str(e)
+    for d in made:
+        kind = f"{d.to_agent}，直接送" if raw else d.to_agent
+        _log(cfg, "send", f"派工 {d.id}：{_who(d)} → {d.to_name}（{kind}，批次 {bid}）：{_preview(message)}")
+    if skipped:
+        _log(cfg, "send", f"批次 {bid}：跳過 " + "、".join(f"{n}（{why}）" for n, why in skipped))
+    return Batch(bid, [replace(d) for d in made], skipped)
+
+
+def batch_items(cfg, bid):
+    """The dispatches of batch bid, in the order they were created (the first one carries batch_skipped)."""
+    return [d for d in dispatch.load(cfg.state_dir) if d.batch == bid]
+
+
+def _group(items, bid):
+    return [x for x in items if x.batch == bid]
+
+
+def batch_notice_text(bid, items, skipped_n):
+    done = sum(d.state == "done" for d in items)
+    failed = sum(d.state in ("failed", "cancelled") for d in items)
+    return f"〔sampan：批次 {bid} 完成：{done} 完成、{failed} 失敗、{skipped_n} 跳過，用 dispatch_result 看〕"
 
 
 def submit_new(cfg, caller, to, to_agent, to_profile, message, *, notify, now):
@@ -315,36 +419,67 @@ def _notice_id(did):
     return f"{did}-notice"
 
 
-def _owes_notice(d):
-    return d.state in ("done", "failed") and d.notify and not d.notified
+def _owes_notice(d, items=()):
+    """Whether d's caller is still owed a notice. A batch item never owes one of its own: the batch's first item owes
+    the one batch notice, once every item of the batch (looked up in items) is finished, cancelled ones included."""
+    if not d.notify or d.notified:
+        return False
+    if d.batch is None:
+        return d.state in ("done", "failed")
+    group = _group(items, d.batch)
+    return bool(group) and group[0] is d and all(x.state in dispatch.FINISHED for x in group)
 
 
-def advance(cfg, run, did, *, sleep, snapshot_fn=None, status_fn=None, now=None, report=False):
+def advance(cfg, run, did, *, sleep, snapshot_fn=None, status_fn=None, now=None, report=False, report_batch=False):
     """Move one dispatch forward as far as it can go now; returns a copy of it. Finished ones are left alone.
     report: the caller gets the returned copy right away (an MCP tool result): if it is finished, its notice is
-    dropped in the same transaction, so the caller is never told twice.
+    dropped in the same transaction, so the caller is never told twice. For a batch item: report_batch drops the
+    batch notice once the whole batch is finished (the caller gets every item); the batch notice is sent from here
+    when this advance finishes the batch.
     Raises DispatchError for an unknown id or an unreadable dispatches.json, RegistryError for a bad registry."""
     now = now or _utcnow()
     with dispatch.transaction(cfg.state_dir) as items:
         d = next((x for x in items if x.id == did), None)
         if d is None:
             raise dispatch.DispatchError(f"沒有派工 {did}")
-        if d.state in ("queued", "sent") or _owes_notice(d):
-            rows = _rows(cfg, run, snapshot_fn, status_fn)
+        seen = {}
 
-            def save():
-                dispatch.checkpoint(cfg.state_dir, items)
-            if d.state == "queued":
-                _deliver(cfg, run, d, rows.get(d.to_name), sleep, now, save)
-                _expire(cfg, d, now)
-            elif d.state == "sent":
-                _check(cfg, d, rows.get(d.to_name), now, run)
+        def rows():
+            if "rows" not in seen:
+                seen["rows"] = _rows(cfg, run, snapshot_fn, status_fn)
+            return seen["rows"]
+
+        def save():
+            dispatch.checkpoint(cfg.state_dir, items)
+        if d.state == "queued":
+            _deliver(cfg, run, d, rows().get(d.to_name), sleep, now, save)
+            _expire(cfg, d, now)
+        elif d.state == "sent":
+            _check(cfg, d, rows().get(d.to_name), now, run)
+        if d.batch is None:
             if report and d.state in dispatch.FINISHED:
                 d.notify = False  # the tool result tells the caller
-            if _owes_notice(d):
-                notify_caller(cfg, run, d, sleep, rows=rows, save=save)
+            owed = d
+        else:
+            group = _group(items, d.batch)
+            if report_batch and all(x.state in dispatch.FINISHED for x in group):
+                for x in group:
+                    x.notify = False  # the tool result tells the caller about every item
+            owed = group[0]
+        if _owes_notice(owed, items):
+            notify_caller(cfg, run, owed, sleep, rows=rows(), save=save, items=items)
         result = replace(d)
     return result
+
+
+def advance_batch(cfg, run, bid, *, sleep, snapshot_fn=None, status_fn=None, now=None, report=False):
+    """advance every item of batch bid once (report: report_batch). Copies of the items; DispatchError when the
+    batch has none."""
+    ids = [d.id for d in batch_items(cfg, bid)]
+    if not ids:
+        raise dispatch.DispatchError(f"沒有批次 {bid}")
+    return [advance(cfg, run, i, sleep=sleep, snapshot_fn=snapshot_fn, status_fn=status_fn, now=now,
+                    report_batch=report) for i in ids]
 
 
 def _deliver(cfg, run, d, row, sleep, now, save):
@@ -533,14 +668,35 @@ def _check_raw(cfg, d, row, now, run):
         d.reason = REASON_NOT_SEEN
 
 
-def notify_caller(cfg, run, d, sleep, *, rows=None, snapshot_fn=None, status_fn=None, save=None):
+def notify_caller(cfg, run, d, sleep, *, rows=None, snapshot_fn=None, status_fn=None, save=None, items=()):
     """Send the completion (or failure) notice to the caller (with Enter) if it is a running sampan session that can
     take it. Changes d (notified; notified plus a reason when the notice may have arrived but Enter failed or
     `codex queue` timed out, never sent twice; notify=False when the caller is gone); call it inside
     dispatch.transaction. save: write the record now, before any key (notified is set first, so a crash in the middle
-    never sends the notice again). True if sent."""
-    if not _owes_notice(d):
+    never sends the notice again). items: the transaction's list, for a batch's first item (the batch notice; every
+    item then gets the first one's notify / notified). True if sent."""
+    if not _owes_notice(d, items):
         return False
+    if d.batch is None:
+        return _notify(cfg, run, d, notice_text(d), f"派工 {d.id}", sleep, rows, snapshot_fn, status_fn, save)
+    group = _group(items, d.batch)
+
+    def mirror():
+        for x in group:
+            x.notify, x.notified = d.notify, d.notified
+
+    def save_all():
+        mirror()
+        if save is not None:
+            save()
+    try:
+        return _notify(cfg, run, d, batch_notice_text(d.batch, group, d.batch_skipped), f"批次 {d.batch}", sleep,
+                       rows, snapshot_fn, status_fn, save_all)
+    finally:
+        mirror()
+
+
+def _notify(cfg, run, d, text, what, sleep, rows, snapshot_fn, status_fn, save):
     if d.from_kind != "session":
         d.notify = False  # the terminal or an unregistered agent: there is no session to tell
         return False
@@ -551,7 +707,6 @@ def notify_caller(cfg, run, d, sleep, *, rows=None, snapshot_fn=None, status_fn=
         return False
     if row.state != State.RUNNING or (row.agent == "codex" and not row.sid):
         return False
-    text = notice_text(d)
     if row.agent != "codex" and (row.agent_status != "idle" or row.pane is None):
         return False
     d.notified = True
@@ -565,31 +720,33 @@ def notify_caller(cfg, run, d, sleep, *, rows=None, snapshot_fn=None, status_fn=
     if isinstance(why, deliver.Unsure):  # the notice may be with the caller: count it as given, never send it again
         note = f"完成通知{REASON_PASTED}：{why}" if isinstance(why, deliver.Pasted) else f"完成通知{why}"
         d.reason = f"{d.reason}；{note}" if d.state == "failed" and d.reason else note
-        _log(cfg, "send", f"派工 {d.id}：{note}")
+        _log(cfg, "send", f"{what}：{note}")
         return False
     if why is not None:
         d.notified = False  # nothing was sent: try again later
         return False
     d.notified = True
-    _log(cfg, "send", f"派工 {d.id}：已通知 {d.from_name}")
+    _log(cfg, "send", f"{what}：已通知 {d.from_name}")
     return True
 
 
 def set_notify(cfg, did, on):
     """Turn the completion notice of a dispatch from a sampan session on or off (an MCP tool that waited: off while
-    it waits, on again when it gives up; off once the caller has read the reply). Never for one already notified."""
+    it waits, on again when it gives up; off once the caller has read the reply). Never for one already notified.
+    did may be a batch id: every item of the batch."""
     try:
         with dispatch.transaction(cfg.state_dir) as items:
-            d = next((x for x in items if x.id == did), None)
-            if d is not None and not d.notified and d.from_kind == "session":
-                d.notify = bool(on)
+            for d in items:
+                if (d.id == did or d.batch == did) and not d.notified and d.from_kind == "session":
+                    d.notify = bool(on)
     except (dispatch.DispatchError, OSError):
         pass
 
 
 def pending(cfg):
     """Ids a watcher should keep advancing: queued, sent, and finished ones whose notice is still owed."""
-    return [d.id for d in dispatch.load(cfg.state_dir) if d.state in ("queued", "sent") or _owes_notice(d)]
+    items = dispatch.load(cfg.state_dir)
+    return [d.id for d in items if d.state in ("queued", "sent") or _owes_notice(d, items)]
 
 
 def cancel_refusal(d):
@@ -680,6 +837,59 @@ def cmd_send(cfg, run, out, to, message, *, wait, timeout=600, sleep=time.sleep,
         return 124
     except KeyboardInterrupt:
         out(f"\n不等了，派工 {did} 照樣留著（sampan dispatches show {did} 看狀態）")
+        return 130
+
+
+def _advance_batch_until(cfg, run, bid, wait_s, *, sleep, clock, snapshot_fn, status_fn, now_fn, report=False):
+    """advance_batch once, then every 2 s while an item is not finished and wait_s has not passed. The last copies."""
+    start = clock()
+    while True:
+        items = advance_batch(cfg, run, bid, sleep=sleep, snapshot_fn=snapshot_fn, status_fn=status_fn, now=now_fn(),
+                              report=report)
+        if all(d.state in dispatch.FINISHED for d in items) or clock() - start >= wait_s:
+            return items
+        sleep(POLL_S)
+
+
+def cmd_send_batch(cfg, run, out, names, message, *, wait, timeout=600, raw=False, sleep=time.sleep,
+                   clock=time.monotonic, snapshot_fn=None, status_fn=None, now_fn=_utcnow, caller=TERMINAL):
+    """`sampan send-batch`: the same message to every running, idle session of names (the others are skipped and
+    listed). Without wait: try once, print each item (rc 0). With wait: advance every 2 s; every item done → the
+    replies (rc 0), any failed / cancelled → rc 1, timeout → rc 124, Ctrl-C → rc 130 (the dispatches stay); nobody to
+    send to → rc 2."""
+    b = submit_batch(cfg, run, caller, names, message, raw=raw, notify=False, now=now_fn(), snapshot_fn=snapshot_fn,
+                     status_fn=status_fn)
+    if isinstance(b, str):
+        out(f"❌ {b}")
+        return 2
+    out(f"批次 {b.id}：送給 {len(b.items)} 個 session" + (f"，跳過 {len(b.skipped)} 個" if b.skipped else ""))
+    for name, why in b.skipped:
+        out(f"  跳過 {name}：{why}")
+    try:
+        try:
+            items = _advance_batch_until(cfg, run, b.id, timeout if wait else 0, sleep=sleep, clock=clock,
+                                         snapshot_fn=snapshot_fn, status_fn=status_fn, now_fn=now_fn)
+        except (dispatch.DispatchError, RegistryError) as e:
+            out(f"❌ {e}")
+            return 2
+        if not wait:
+            for d in items:
+                out(f"  派工 {d.id} → {d.to_name}：{STATE_LABELS[d.state]}" + (f"（{d.reason}）" if d.reason else ""))
+            out("sampan dispatches show <編號> 看回覆")
+            return 0
+        for d in items:
+            if d.state == "done":
+                out(f"──── {d.to_name}（派工 {d.id}）────")
+                out(d.reply or "")
+            elif d.state in ("failed", "cancelled"):
+                out(f"❌ {d.to_name}（派工 {d.id}）{STATE_LABELS[d.state]}：{d.reason}")
+            else:
+                out(f"還在做：{d.to_name}（派工 {d.id}，sampan dispatches show {d.id} 看狀態）")
+        if any(d.state not in dispatch.FINISHED for d in items):
+            return 124
+        return 1 if any(d.state != "done" for d in items) else 0
+    except KeyboardInterrupt:
+        out(f"\n不等了，批次 {b.id} 的派工照樣留著（sampan dispatches 看狀態）")
         return 130
 
 

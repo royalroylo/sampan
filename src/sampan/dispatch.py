@@ -52,6 +52,7 @@ class Dispatch:
     startup: bool = False  # the startup prompt of `sampan new --message`: the session may not be registered yet
     raw: bool = False  # a direct send: text is the bare message (no source line), a slash command for the target itself
     batch: str | None = None  # id of the batch send this dispatch belongs to
+    batch_skipped: int = 0  # on the first item of a batch only: how many sessions the batch skipped
 
     def __post_init__(self):
         if self.from_kind is None:

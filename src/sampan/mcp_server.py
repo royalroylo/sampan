@@ -29,7 +29,7 @@ PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26")  # the first is answered when t
 WATCH_S = 3
 WAIT_MAX_S = 60  # a tool call may not block longer than this (MCP clients time tool calls out themselves)
 INTERACTION_META = "anthropic/requiresUserInteraction"
-ACTING_TOOLS = ("send", "new_session", "cancel_dispatch", "folder_move")
+ACTING_TOOLS = ("send", "send_batch", "new_session", "cancel_dispatch", "folder_move")
 # clientInfo.name of the clients known to ask the user for a tool marked INTERACTION_META (checked 2026-10-27:
 # Claude Code 2.1.287 sends "claude-code", Codex 0.164.0 sends "codex-mcp-client")
 ASKING_CLIENTS = {"claude-code", "codex-mcp-client"}  # Codex: only with approval_mode = "prompt" (codex_approval)
@@ -65,6 +65,19 @@ TOOLS = [
                  "description": "直接送：不加 sampan 的轉送標頭，讓對方的 Claude 當作指令執行（例如 /compact）；"
                                 "只限 Claude，一行、以 / 開頭、最多 500 字"}},
          "required": ["session", "message"]}},
+    {"name": "send_batch",
+     "description": "同一則訊息一次送給多個 session。只送給執行中而且閒著的；忙的、沒在跑的（還有 raw 給 Codex 的）"
+                    "不排隊，列在 skipped 附原因。回傳批次編號與每一筆派工；wait=true 時最多等 60 秒等整批做完。"
+                    "沒等到的，整批做完時會在你的 session 送出一則通知，或用 dispatch_result 帶批次編號查。",
+     "inputSchema": {"type": "object", "properties": {
+         "sessions": {"type": "array", "items": {"type": "string"}, "minItems": 1,
+                      "description": "對方的 session 名稱（list_sessions 看；不能重複）"},
+         "message": _str("要送的訊息"),
+         "raw": {"type": "boolean", "default": False,
+                 "description": "直接送：不加 sampan 的轉送標頭，讓對方的 Claude 當作指令執行（例如 /compact）；"
+                                "只限 Claude，一行、以 / 開頭、最多 500 字"},
+         "wait": {"type": "boolean", "description": "等整批做完（最多 60 秒）", "default": False}},
+         "required": ["sessions", "message"]}},
     {"name": "new_session",
      "description": "開一個新的 sampan session，並把 message 當作它的第一個 prompt。回傳派工編號，之後用 dispatch_result 看回覆。",
      "inputSchema": {"type": "object", "properties": {
@@ -83,9 +96,10 @@ TOOLS = [
          "folder": _str("目的資料夾路徑，例如 客戶/甲；\"/\" 是最上層")},
          "required": ["sessions", "folder"]}},
     {"name": "dispatch_result",
-     "description": "看一筆派工的狀態（queued／sent／done／failed／cancelled）、回覆與原因；wait 秒數內（最多 60）等它做完。唯讀。",
+     "description": "看一筆派工的狀態（queued／sent／done／failed／cancelled）、回覆與原因；wait 秒數內（最多 60）等它做完。"
+                    "id 給批次編號（b 開頭、5 碼）時看整批。唯讀。",
      "inputSchema": {"type": "object", "properties": {
-         "id": _str("派工編號"),
+         "id": _str("派工編號，或 send_batch 的批次編號"),
          "wait": {"type": "integer", "description": "最多等幾秒（0–60）", "minimum": 0, "maximum": WAIT_MAX_S,
                   "default": 0}},
          "required": ["id"]}},
@@ -173,6 +187,15 @@ def _folder(text):
         except folders.FoldersError as e:
             raise ToolError(str(e)) from e
     return path
+
+
+def _batch_item(d):
+    out = {"session": d.to_name, "dispatch": d.id, "state": d.state}
+    if d.state == "done":
+        out["reply"] = d.reply or ""
+    elif d.reason:
+        out["reason"] = d.reason
+    return out
 
 
 class Server:
@@ -337,10 +360,12 @@ class Server:
 
     def _own(self, did):
         """The record of a dispatch this caller may see or cancel (sent by this server, or from this caller's
-        session); ToolError otherwise, with the same text whether it exists or not."""
+        session); ToolError otherwise, with the same text whether it exists or not. For a batch id: the batch's
+        first item, under the same rule."""
         caller = self._refresh_caller()
+        batch = send.is_batch_id(did)
         try:
-            d = next((x for x in dispatch.load(self.cfg.state_dir) if x.id == did), None)
+            d = next((x for x in dispatch.load(self.cfg.state_dir) if (x.batch if batch else x.id) == did), None)
         except dispatch.DispatchError as e:
             raise ToolError(str(e)) from e
         if d is None or not (did in self.mine or send.from_session(d, caller.name)):
@@ -368,6 +393,19 @@ class Server:
             d = self._advance(did)
             if d.state in dispatch.FINISHED or self.clock() - start >= seconds:
                 return d
+            self.sleep(send.POLL_S)
+
+    def _wait_batch(self, bid, seconds):
+        """_wait for a whole batch (report: a batch finished in the result owes no notice). The last copies."""
+        start = self.clock()
+        while True:
+            try:
+                items = send.advance_batch(self.cfg, self.run, bid, sleep=self.sleep, snapshot_fn=self.snapshot_fn,
+                                           status_fn=self.status_fn, now=self.now_fn(), report=True)
+            except (dispatch.DispatchError, RegistryError) as e:
+                raise ToolError(str(e)) from e
+            if all(d.state in dispatch.FINISHED for d in items) or self.clock() - start >= seconds:
+                return items
             self.sleep(send.POLL_S)
 
     def tool_list_sessions(self, args):
@@ -447,6 +485,33 @@ class Server:
             raise ToolError(f"派工 {d.id} 失敗：{d.reason}")
         return out
 
+    def tool_send_batch(self, args):
+        names, message = args.get("sessions"), _arg_str(args, "message")
+        if not isinstance(names, list) or not names or not all(isinstance(n, str) and n for n in names):
+            raise ToolError("參數 sessions 要是 session 名稱的清單（至少一個）")
+        twice = sorted({n for n in names if names.count(n) > 1})
+        if twice:
+            raise ToolError(f"參數 sessions 裡有重複的名稱：{'、'.join(twice)}")
+        for n in names:
+            if session_run.has_control(n):
+                raise ToolError(f"session 名稱不能含換行或控制字元：{n!r}")
+        wait, raw = args.get("wait", False), args.get("raw", False)
+        if not isinstance(wait, bool):
+            raise ToolError("參數 wait 要是 true 或 false")
+        if not isinstance(raw, bool):
+            raise ToolError("參數 raw 要是 true 或 false")
+        caller = self._refresh_caller()
+        b = send.submit_batch(self.cfg, self.run, caller, names, message, raw=raw, notify=not wait, now=self.now_fn(),
+                              snapshot_fn=self.snapshot_fn, status_fn=self.status_fn)
+        if isinstance(b, str):
+            raise ToolError(b)
+        self.mine.update([b.id] + [d.id for d in b.items])
+        items = self._wait_batch(b.id, WAIT_MAX_S if wait else 0)
+        if wait and not all(d.state in dispatch.FINISHED for d in items) and caller.name is not None:
+            send.set_notify(self.cfg, b.id, True)  # nobody has every reply yet: tell the caller when the batch is done
+        return {"batch": b.id, "items": [_batch_item(d) for d in items],
+                "skipped": [{"session": n, "reason": why} for n, why in b.skipped]}
+
     def tool_new_session(self, args):
         name, target = _arg_str(args, "name"), _arg_str(args, "target")
         cwd, message = _arg_str(args, "cwd"), _arg_str(args, "message")
@@ -504,7 +569,10 @@ class Server:
         wait = args.get("wait", 0)
         if isinstance(wait, bool) or not isinstance(wait, (int, float)) or not 0 <= wait <= WAIT_MAX_S:
             raise ToolError(f"參數 wait 要是 0 到 {WAIT_MAX_S} 的秒數")
-        self._own(did)  # before advancing anything
+        first = self._own(did)  # before advancing anything
+        if send.is_batch_id(did):
+            items = self._wait_batch(did, wait)
+            return {"batch": did, "items": [_batch_item(d) for d in items], "skipped": first.batch_skipped}
         d = self._wait(did, wait)
         out = {"dispatch": d.id, "state": d.state, "label": send.STATE_LABELS[d.state], "to": d.to_name,
                "reply": d.reply, "reason": d.reason}
@@ -513,6 +581,8 @@ class Server:
     def tool_cancel_dispatch(self, args):
         did = _arg_str(args, "id")
         d = self._own(did)
+        if send.is_batch_id(did):
+            raise ToolError(f"{did} 是批次編號：請用 dispatch_result 看各筆的派工編號，逐筆取消")
         refusal = send.cancel_refusal(d)
         if refusal:
             raise ToolError(refusal)
