@@ -506,6 +506,17 @@ class RawCheckTest(Base):
         self.assertEqual(self.advance(run, d.id, later(23)).reason, send.REASON_MENU)
         self.assertEqual(tmux_writes(run), [])
 
+    def test_raw_busy_screen_without_a_box_is_not_a_menu(self):  # /compact's spinner may hide the box
+        d = self.sent()
+        self.set_row("b", agent_status="busy")
+        run = tmux_runner(MENU)
+        for t in (20, 23, 26, 29):
+            d = self.advance(run, d.id, later(t))
+            self.assertEqual((d.state, d.reason), ("sent", ""), t)
+        self.assertEqual(tmux_writes(run), [])
+        self.set_row("b", agent_status="idle")  # a busy look in between started the menu count over
+        self.assertEqual(self.advance(run, d.id, later(32)).state, "sent")
+
     def test_raw_menu_then_gone_starts_over(self):
         d = self.sent("/model")
         self.advance(tmux_runner(MENU), d.id, later(20))

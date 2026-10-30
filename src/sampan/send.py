@@ -515,6 +515,9 @@ def _check_raw(cfg, d, row, now, run):
         return
     if early:
         return
+    if row.agent_status == "busy":  # still working (/compact's spinner may hide the box): never a menu, start over
+        d.reason = ""
+        return
     screen = Tmux(run).capture(row.pane, escapes=True) if run is not None and row.pane else ""
     if screen.strip() and claude_input_state(screen) not in ("empty", "draft"):
         if d.reason == REASON_MENU_SEEN:
