@@ -104,6 +104,7 @@ On Windows, install and use sampan inside WSL (for example Ubuntu), as for Linux
 - Run the installer in a WSL terminal. In the Windows command prompt or Git Bash it stops (`unsupported system MINGW…`).
 - Claude Code in WSL is a separate install (the Linux one) with its own login: WSL's `~/.claude` is not Windows'.
 - Keep sessions in WSL's own directories (under `~`); `/mnt/c/…` is slow.
+- Ubuntu's tmux is often older than Homebrew's (3.4, say). A `~/.tmux.conf` brought from a Mac that uses newer options (3.5's `extended-keys-format`, for example) shows an error screen on every attach; `sampan doctor` names the lines. The error screen goes away only after the tmux server restarts.
 - For auto-save use the systemd user timer above: first add `[boot]` `systemd=true` to `/etc/wsl.conf`, then restart WSL.
 - Restart WSL with `wsl.exe --shutdown` (`wsl --shutdown` typed inside WSL is not found). Then open a new terminal tab, enter with `wsl ~` and run `sampan restore`; going back into WSL in the old tab can garble every key in some terminals (for example WezTerm).
 - When Windows restarts or WSL shuts down, tmux and every session end; run `sampan restore` yourself to bring them back.

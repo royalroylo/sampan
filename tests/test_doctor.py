@@ -532,3 +532,46 @@ class TwoLoginsDoctorTest(unittest.TestCase):
         r = FakeRunner().on(["security", "find-generic-password"], cp(rc=51, err="user interaction is not allowed"))
         from sampan.doctor import _two_logins
         self.assertEqual(_two_logins(self.cfg, r, "darwin"), [])
+
+
+class TmuxConfDoctorTest(unittest.TestCase):
+    """WSL report: Ubuntu's tmux 3.4 does not know 3.5's extended-keys-format, and every attach showed an error screen."""
+
+    def setUp(self):
+        self.cfg = make_env(Path(tempfile.mkdtemp()))
+
+    def checks(self, conf, version="tmux 3.4", where=".tmux.conf"):
+        from sampan.doctor import _tmux_conf
+        if conf is not None:
+            f = self.cfg.home / where
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(conf)
+        r = FakeRunner().on(["tmux", "-V"], cp(out=version + "\n"))
+        return _tmux_conf(self.cfg, r)
+
+    def test_option_newer_than_this_tmux_warns(self):
+        [c] = self.checks("set -g mouse on\nset -s extended-keys-format csi-u  # 3.5\nsetw -g mode-keys vi\n")
+        self.assertEqual(c.level, "warn")
+        self.assertIn("extended-keys-format", c.title)
+        self.assertIn("3.5", c.title)
+        self.assertIn("3.4", c.title)
+        self.assertIn(".tmux.conf:2", c.detail)
+
+    def test_every_set_form_is_read(self):
+        conf = ("set-option -gq allow-passthrough on\nset-window-option -g popup-border-lines rounded\n"
+                "set -ga menu-style 'bg=red'\n")
+        [c] = self.checks(conf, version="tmux 3.2a")
+        for name in ("allow-passthrough", "popup-border-lines", "menu-style"):
+            self.assertIn(name, c.title)
+
+    def test_supported_options_comments_and_unknown_versions_say_nothing(self):
+        self.assertEqual(self.checks("set -s extended-keys-format csi-u\n", version="tmux 3.6a"), [])
+        self.assertEqual(self.checks("set -s extended-keys-format csi-u\n", version="tmux next-3.6"), [])
+        self.assertEqual(self.checks("# set -s extended-keys-format csi-u\n", version="tmux 3.4"), [])
+        self.assertEqual(self.checks("set -s extended-keys-format csi-u\n", version="tmux master"), [])
+        self.cfg = make_env(Path(tempfile.mkdtemp()))
+        self.assertEqual(self.checks(None), [])  # no conf at all
+
+    def test_xdg_conf_is_read_too(self):
+        [c] = self.checks("set -s extended-keys-format csi-u\n", where=".config/tmux/tmux.conf")
+        self.assertIn("tmux.conf:1", c.detail)

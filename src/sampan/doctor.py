@@ -400,6 +400,49 @@ def _version(current, latest_fn):
     return [Check("ok", f"sampan 版本：{current}（已是最新）")]
 
 
+# options a .tmux.conf may use that older tmux builds reject (the version that added them, from tmux's CHANGES). An
+# unknown option makes tmux show an error screen on every attach; distributions often ship an older tmux than Homebrew.
+TMUX_OPTION_SINCE = {
+    "extended-keys": (3, 2), "pane-border-lines": (3, 2),
+    "allow-passthrough": (3, 3), "pane-border-indicators": (3, 3),
+    "popup-style": (3, 3), "popup-border-style": (3, 3), "popup-border-lines": (3, 3),
+    "menu-style": (3, 4), "menu-selected-style": (3, 4), "menu-border-style": (3, 4), "menu-border-lines": (3, 4),
+    "extended-keys-format": (3, 5),
+}
+_SET_COMMANDS = {"set", "set-option", "setw", "set-window-option"}
+_TMUX_VERSION_RE = re.compile(r"tmux (?:next-)?(\d+)\.(\d+)")
+
+
+def _tmux_conf(cfg, run):
+    """Options in ~/.tmux.conf (or ~/.config/tmux/tmux.conf) newer than the tmux installed here. Read only: nothing is
+    started (no tmux server is run to try the file); a version tmux -V does not show as N.N is not judged."""
+    r = run(["tmux", "-V"])
+    m = _TMUX_VERSION_RE.search(r.stdout or "") if r.returncode == 0 else None
+    if not m:
+        return []
+    have = (int(m.group(1)), int(m.group(2)))
+    found = []
+    for conf in (cfg.home / ".tmux.conf", cfg.home / ".config/tmux/tmux.conf"):
+        try:
+            lines = conf.read_text(errors="replace").splitlines()
+        except OSError:
+            continue
+        for no, line in enumerate(lines, 1):
+            words = line.split("#", 1)[0].split()
+            if not words or words[0] not in _SET_COMMANDS:
+                continue
+            name = next((w for w in words[1:] if not w.startswith("-")), None)
+            since = TMUX_OPTION_SINCE.get(name)
+            if since and since > have:
+                found.append((name, since, f"{conf.name}:{no}"))
+    if not found:
+        return []
+    names = "、".join(dict.fromkeys(f"{n}（{a}.{b}）" for n, (a, b), _ in found))
+    return [Check("warn", f"tmux 設定用到這台 tmux {have[0]}.{have[1]} 不認得的選項：{names}",
+                  f"每次接上 tmux 都會跳錯誤畫面。拿掉或註解掉這幾行（{'、'.join(w for _, _, w in found)}），"
+                  f"或升級 tmux；改完要重開 tmux server 錯誤畫面才會消失")]
+
+
 def _detach_key(cfg, run):
     """The jump-out key ([ui] detach_key) clashes with a tmux binding sampan did not write."""
     from .detach_key import conflict
@@ -414,7 +457,7 @@ def run_checks(cfg, run, *, now, uid, sampan_path=None, proc_root=PROC_ROOT, whi
     current = current or update_mod.current_version()
     latest_fn = latest_fn or (lambda: update_mod.check(cfg.state_dir, run=run)[0])
     return (_version(current, latest_fn) + _deps(cfg, which, env, platform) + _profile_dirs(cfg) + _owners(cfg, uid) + _plugins(cfg) + _auth(cfg, run) + _two_logins(cfg, run, platform) + _stale(cfg, run)
-            + _hooks(cfg) + _statusline(cfg, now) + _codex(cfg) + _codex_daemon(cfg, run, daemon_fn) + _mcp(cfg) + _detach_key(cfg, run) + _multi_agent(cfg, run, proc_root) + _action_log(cfg)
+            + _hooks(cfg) + _statusline(cfg, now) + _codex(cfg) + _codex_daemon(cfg, run, daemon_fn) + _mcp(cfg) + _detach_key(cfg, run) + _tmux_conf(cfg, run) + _multi_agent(cfg, run, proc_root) + _action_log(cfg)
             + (_launchd(cfg, run, sampan_path) + _save_log(cfg, now) if platform == "darwin" else
                [Check("info", "這台不是 macOS，沒有自動存檔排程（需要時自己跑 sampan save，或用 cron／systemd timer）")]))
 
