@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.13.9] - 2026-10-30
+
+### Fixed
+- `sampan doctor` judged a profile's keychain login by the first item of that name, whatever its account. Claude reads and writes only the item under your user name (`$USER`), and a keychain can hold another item of the same name under another account (left by a Claude run as another user); doctor then compared a weeks-old copy with `.credentials.json` and warned, and `/login` never cleared it. Doctor now looks up the item under Claude's account, names an item under another account as a note Claude never uses, with the `security delete-generic-password` command to remove it (yours to run), and its texts no longer say where Claude can open the keychain.
+
 ## [0.13.8] - 2026-10-30
 
 ### Fixed
