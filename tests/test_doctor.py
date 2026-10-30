@@ -542,7 +542,8 @@ class TwoLoginsDoctorTest(unittest.TestCase):
         self.others.append(("Claude Code-credentials", "root", "20261015221907Z"))
         self.items["Claude Code-credentials"] = "20261030031016Z"
         self.file(default.name, datetime(2026, 10, 30, 6, 1, tzinfo=timezone(timedelta(hours=8))))
-        levels = {c.title: c.level for c in self.checks()}
+        with local_tz("Asia/Taipei"):  # the times are shown in the machine's timezone
+            levels = {c.title: c.level for c in self.checks()}
         two = next(t for t in levels if "兩份" in t)
         self.assertEqual(levels[two], "info")
         self.assertIn("11:10", two)
