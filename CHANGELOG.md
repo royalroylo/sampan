@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.13.8] - 2026-10-30
+
+### Fixed
+- A Codex in tmux on the shared Codex daemon was never registered once sampan had been polling that daemon: its new threads are stamped originator `sampan` instead of `codex-tui`, and sampan only took `codex-tui` (or source `cli`) as a TUI thread. `save` added nothing, `status` showed no conversation id, and a dispatch to that session stayed at 還在啟動. Threads stamped `sampan` now count as the TUI's, in the threads table and in the daemon's loaded threads; Codex Desktop threads still never match.
+
 ## [0.13.7] - 2026-10-30
 
 ### Fixed
