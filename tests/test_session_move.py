@@ -89,6 +89,8 @@ class MoveFixture(unittest.TestCase):
                     path=self.trust_shows)
             else:
                 self.has_file = True
+        elif keys == ["Down"] and " ❯ No, exit" in self.screen:  # the real menu redraws with ❯ on the next option
+            self.screen = self.screen.replace(" ❯ No, exit\n   Yes,", "   No, exit\n ❯ Yes,")
         elif keys == ["Enter"] and self.screen and (self.keys[-2:-1] == [["Down"]] or self.cursor_on_yes):
             self.has_file, self.screen = True, ""
         self.sync_files()

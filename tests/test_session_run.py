@@ -313,6 +313,8 @@ class NewAndStateTest(Base):
 
         def send(a):
             sent.append(a[4:])
+            if a[5:] == ["Down"]:  # the real menu redraws with ❯ on the next option
+                screen[0] = screen[0].replace(" ❯ No, exit\n   Yes,", "   No, exit\n ❯ Yes,")
             if a[5:] == ["Enter"] and sent[-2:-1] == [["%50", "Down"]]:
                 screen[0] = ""
                 self.panes = [pane_line("new-x", "%50", 100, "claude", str(self.cwd))]
@@ -335,6 +337,8 @@ class NewAndStateTest(Base):
 
         def send(a):
             sent.append(a[4:])
+            if a[5:] == ["Down"]:  # the real menu redraws with ❯ on the next option
+                screen[0] = screen[0].replace(" ❯ No, exit\n   Yes,", "   No, exit\n ❯ Yes,")
             if a[5:] == ["Enter"] and sent[-2:-1] == [["%50", "Down"]]:
                 screen[0] = ""
                 self.panes = [pane_line("new-x", "%50", 100, "claude", str(self.cwd))]
@@ -381,7 +385,8 @@ class NewAndStateTest(Base):
                 self.procs = [ps_line(100, 1, "-zsh", "-zsh"), ps_line(900, 100, "claude", "claude")]
                 write_session(self.cfg, "work", 900, sid=B, cwd=str(self.cwd), tmux="new-x:@1.%50")
                 return cp(out="")
-            return cp(out=trust)
+            moved = [k for k in sent[1:] if k[1:] == ["Down"]]
+            return cp(out=trust.replace(" ❯ No, exit\n   Yes,", "   No, exit\n ❯ Yes,") if moved else trust)
         r.on(["tmux", "-u", "send-keys"], send)
         r.on(["tmux", "-u", "capture-pane"], capture)
         asked = []
@@ -395,8 +400,10 @@ class NewAndStateTest(Base):
         r, sent = self.trust_runner(str(self.cwd.resolve()))
         other = CLAUDE_TRUST.replace("/private/tmp/…/scratchpad/claude-trust-probe", "/another/dir")
         r.on(["tmux", "-u", "send-keys"], lambda a: sent.append(a[4:]) or cp())
-        screens = [CLAUDE_TRUST.replace("/private/tmp/…/scratchpad/claude-trust-probe", str(self.cwd.resolve())), other]
-        r.on(["tmux", "-u", "capture-pane"], lambda a: cp(out=screens[0] if not sent[1:] else screens[1]))
+        mine = CLAUDE_TRUST.replace("/private/tmp/…/scratchpad/claude-trust-probe", str(self.cwd.resolve()))
+        on_yes = mine.replace(" ❯ No, exit\n   Yes,", "   No, exit\n ❯ Yes,")
+        r.on(["tmux", "-u", "capture-pane"], lambda a: cp(out=mine if not sent[1:] else on_yes if sent[-1][1:] == ["Down"]
+                                                         else other))
         asked = []
         rc = cmd_new(self.cfg, r, self.msgs.append, "new-x", "work", str(self.cwd), sleep=lambda _: None,
                      uuid4=lambda: B, timeout=5, trust=True, on_prompt=lambda n, a, p: asked.append(p.trust_path) or SKIP)
@@ -422,6 +429,23 @@ class NewAndStateTest(Base):
         from sampan.session_run import cmd_move
         cmd_move(self.cfg, self.runner(), self.msgs.append, "nope", str(self.cwd))
         self.assertTrue(any("[move nope]" in x for x in action_lines(self.cfg)), action_lines(self.cfg))
+
+    def test_new_trust_whose_arrow_key_never_lands_presses_no_enter_and_claims_nothing(self):
+        # 2026-10-30: the Down was lost, Enter chose "No, exit", and the tool said 已信任
+        from tests.test_prompts import CLAUDE_TRUST
+        r = self.runner()
+        r.on(["tmux", "-u", "list-panes"], lambda a: cp(out="\n".join(self.panes) + "\n"))
+        sent = []
+        r.on(["tmux", "-u", "send-keys"], lambda a: sent.append(a[4:]) or cp())
+        trust = CLAUDE_TRUST.replace("/private/tmp/…/scratchpad/claude-trust-probe", str(self.cwd.resolve()))
+        r.on(["tmux", "-u", "capture-pane"], lambda a: cp(out=trust))  # ❯ never moves off "No, exit"
+        stuck = []
+        rc = cmd_new(self.cfg, r, self.msgs.append, "new-x", "work", str(self.cwd), sleep=lambda _: None,
+                     uuid4=lambda: B, timeout=5, trust=True, on_prompt=lambda *a: stuck.append(a) or SKIP)
+        self.assertEqual(rc, 1)
+        self.assertNotIn(["Enter"], [k[1:] for k in sent[1:]])
+        self.assertFalse(any("已信任" in m for m in self.msgs), self.msgs)
+        self.assertTrue(any("沒有按 Enter" in m for m in self.msgs), self.msgs)
 
     def test_new_without_trust_relays_the_trust_prompt(self):
         r, sent = self.trust_runner(str(self.cwd.resolve()))

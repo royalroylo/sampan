@@ -15,7 +15,7 @@ from .dispatch import outbox_path
 from .launch import disabled_problem, launch_line, send_line
 from .observe import PROC_ROOT, SPLIT_HINT, live_by_pane, multi_agent_sessions
 from .procs import descendant_claude, is_descendant, list_procs
-from .prompts import ATTACH, SKIP, Relay
+from .prompts import ANSWERED, ATTACH, SKIP, Relay
 from .registry import STATES, RegistryError, Row, id_problem, load_rows, lock, set_state, write_rows
 from .screens import CLAUDE_TRUST_OPTION, CODEX_TRUST_YES, bottom_trust_path, codex_activity
 from .send import TERMINAL, TERMINAL_NAME, UNREGISTERED_NAME, abort_new, submit_new
@@ -225,8 +225,7 @@ def _cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.slee
             return None
         yes = _trust_yes(p, cwd)
         if yes is not None:
-            trusted.append(1)
-            out(f"  已信任 {cwd}")
+            trusted.append(1)  # said only once the prompt has gone (the keys may not land)
         return yes
     relay = Relay(on_prompt, tmux, out, sleep, auto=auto if trust else None) if on_prompt is not None else None
     idle_ticks = 0
@@ -238,6 +237,8 @@ def _cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.slee
             continue
         la = _agents(cfg, run, panes, list_procs(run))[0].get(pane)
         if agent == "claude" and la is not None and la.agent == "claude":
+            if trusted == [1]:
+                out(f"  已信任 {cwd}")
             return 0
         if agent == "codex" and la is not None and la.agent == "codex" and la.session_id:
             row = Row(name, "codex", cfg.codex.profile, la.session_id, cwd, "active", now_iso(), tmux.server_id() or "", la.pid)
@@ -247,6 +248,9 @@ def _cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.slee
             return 0
         screen = tmux.capture(pane) if relay is not None or agent == "codex" else None
         res = relay.check(name, agent, pane, screen) if relay is not None else None
+        if res in (ANSWERED, None) and trusted == [1]:  # pressed, and the prompt is gone
+            trusted.append(1)
+            out(f"  已信任 {cwd}")
         if res == SKIP and waiting:
             relay.skipped.clear()  # our keys are sent and the screen has not caught up: keep watching
             continue
@@ -721,7 +725,7 @@ def cmd_move(cfg, run, out, name, dest, *, dry_run=False, sleep=time.sleep, time
     tmux.send_keys(pane.pane_id, "C-u")
     send_line(tmux, pane.pane_id, agent, cmd, sleep)
     out(f"▶ {name}：{f'用 {new_prof}' if switching else f'在 {target}'} 接回 {session_id[:8]}")
-    trusted, redraw_left = False, None
+    trusted, announced, redraw_left = False, False, None
     waiting = []  # filled when auto itself answered SKIP (slow redraw), so a SKIP chosen by the user is never mistaken for it
 
     def auto(p):  # automatically trust only a trust prompt that "shows exactly the new directory", once
@@ -734,8 +738,7 @@ def cmd_move(cfg, run, out, name, dest, *, dry_run=False, sleep=time.sleep, time
             return None
         yes = _trust_yes(p, target)
         if yes is not None:
-            trusted = True
-            out(f"  已信任 {target}")
+            trusted = True  # said only once the prompt has gone (the keys may not land)
         return yes
     stuck = []
 
@@ -752,6 +755,8 @@ def cmd_move(cfg, run, out, name, dest, *, dry_run=False, sleep=time.sleep, time
         if hit is not None and hit.agent == agent and ((agent == "claude" and not switching) or
                                                        hit.session_id == session_id and
                                                        (agent == "claude" or hit.status == "idle")):
+            if trusted and not announced:
+                out(f"  已信任 {target}")
             cmd_save(cfg, run, lambda _m: None, quiet=True, proc_root=proc_root)  # report only the move result
             now = next((r for r in load_rows(cfg.registry_path, codex_profile=cfg.codex.profile) if r.tmux == name), None)
             if switching:
@@ -761,6 +766,9 @@ def cmd_move(cfg, run, out, name, dest, *, dry_run=False, sleep=time.sleep, time
             return 0
         waiting.clear()
         res = relay.check(name, agent, pane.pane_id, tmux.capture(pane.pane_id))
+        if res in (ANSWERED, None) and trusted and not announced:  # pressed, and the prompt is gone
+            announced = True
+            out(f"  已信任 {target}")
         if res == SKIP and waiting:
             relay.skipped.clear()  # not a refusal: keep watching (a different prompt is still relayed)
             redraw_left = 4 if redraw_left is None else redraw_left - 1  # about 5 s in all with the settle second

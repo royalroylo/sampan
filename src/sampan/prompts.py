@@ -6,6 +6,9 @@ on panes this sampan action has just started (the waits of new, restore, move); 
 
 Keys (confirmed on real codex-cli 0.147 and Claude Code 2.1.287): in Codex's menu, sending the number selects and advances (no Enter needed);
 Claude's options have no numbers and the ❯ cursor starts on "No, exit", so move to the target with Down/Up and press Enter, sending each key separately with a 0.3 s pause.
+An arrow key sent the moment the menu draws can be lost (seen 2026-10-30: Enter then landed on "No, exit"), so after moving
+the screen is read again and Enter is pressed only with the cursor on the chosen option; otherwise the move is sent again,
+and after MOVE_TRIES no Enter is pressed at all.
 """
 from dataclasses import replace
 
@@ -14,6 +17,7 @@ from .screens import Prompt, parse_prompt  # noqa: F401  (re-exported: callers i
 ATTACH = "attach"  # go in and handle it myself
 SKIP = "skip"  # leave it for now, deal with it later
 ANSWERED = "answered"
+MOVE_TRIES = 3
 
 
 class Relay:
@@ -28,11 +32,30 @@ class Relay:
         self.attach = None  # session where "go in and handle it myself" was chosen
 
     def send(self, pane_id, p, choice):
-        """Keys to pick option number choice; each group is sent separately with a gap-second pause between."""
-        for k, keys in enumerate(p.keys_for(choice)):
-            if k:
-                self.sleep(self.gap)
-            self.tmux.send_keys(pane_id, *keys)
+        """Keys to pick option number choice; each group is sent separately with a gap-second pause between. A menu
+        moved with arrows (Claude) is read again before Enter: False when the cursor never reached choice (no Enter)."""
+        groups = p.keys_for(choice)
+        if groups[-1] != ["Enter"]:  # Codex: the number selects by itself
+            for k, keys in enumerate(groups):
+                if k:
+                    self.sleep(self.gap)
+                self.tmux.send_keys(pane_id, *keys)
+            return True
+        now = p
+        for _ in range(MOVE_TRIES):
+            moves = now.keys_for(choice)[:-1]
+            for k, keys in enumerate(moves):
+                if k:
+                    self.sleep(self.gap)
+                self.tmux.send_keys(pane_id, *keys)
+            self.sleep(self.gap)
+            now = parse_prompt(self.tmux.capture(pane_id), p.agent) if moves else now
+            if now is None or not now.same(p):
+                return False  # the menu changed under us: press nothing more
+            if now.current == choice:
+                self.tmux.send_keys(pane_id, "Enter")
+                return True
+        return False
 
     def check(self, name, agent, pane_id, screen, prompt=None):
         """None: no prompt (or this session was already set to leave it); ANSWERED: answered and the screen is no longer a menu; SKIP; ATTACH."""
@@ -55,7 +78,10 @@ class Relay:
             if isinstance(choice, bool) or not isinstance(choice, int) or not 0 <= choice < len(p.options):
                 self.skipped.append(name)
                 return SKIP
-            self.send(pane_id, p, choice)
+            if not self.send(pane_id, p, choice):
+                self.out(f"⚠ {name}：游標沒有移到「{p.options[choice]}」，沒有按 Enter，請進去處理")
+                self.skipped.append(name)
+                return SKIP
             self.sleep(self.settle)
             nxt = parse_prompt(self.tmux.capture(pane_id), agent)
             if nxt is None:

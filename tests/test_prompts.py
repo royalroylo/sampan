@@ -46,6 +46,8 @@ CLAUDE_TRUST = """\
    Yes, I trust this folder
  Enter to confirm · Esc to cancel
 """
+CLAUDE_TRUST_ON_YES = CLAUDE_TRUST.replace(" ❯ No, exit\n   Yes, I trust", "   No, exit\n ❯ Yes, I trust")
+assert CLAUDE_TRUST_ON_YES != CLAUDE_TRUST
 IDLE = (FIXTURES / "codex_idle.txt").read_text()
 
 
@@ -203,10 +205,24 @@ class RelayTest(unittest.TestCase):
         self.assertEqual(self.sleeps, [1, 1, 1])
 
     def test_claude_arrow_keys_are_separate_with_a_gap(self):
-        r, tmux = self.relay([1], [""])
+        # the screen is read again after moving: Enter only once the cursor is on the chosen option
+        r, tmux = self.relay([1], [CLAUDE_TRUST_ON_YES, ""])
         self.assertEqual(r.check("x", "claude", "%1", CLAUDE_TRUST), "answered")
         self.assertEqual(tmux.sent, [("%1", ["Down"]), ("%1", ["Enter"])])
         self.assertEqual(self.sleeps, [0.3, 1])
+
+    def test_claude_lost_arrow_key_is_sent_again_never_enter_on_the_wrong_option(self):
+        # 10/30: Down was lost right after the trust prompt drew, Enter landed on "No, exit" and Claude quit
+        r, tmux = self.relay([1], [CLAUDE_TRUST, CLAUDE_TRUST_ON_YES, ""])
+        self.assertEqual(r.check("x", "claude", "%1", CLAUDE_TRUST), "answered")
+        self.assertEqual(tmux.sent, [("%1", ["Down"]), ("%1", ["Down"]), ("%1", ["Enter"])])
+
+    def test_claude_cursor_that_never_arrives_gets_no_enter(self):
+        r, tmux = self.relay([1], [CLAUDE_TRUST] * 5)
+        self.assertEqual(r.check("x", "claude", "%1", CLAUDE_TRUST), SKIP)
+        self.assertNotIn(("%1", ["Enter"]), tmux.sent)
+        self.assertIn("沒有按 Enter", "\n".join(self.msgs))
+        self.assertEqual(r.skipped, ["x"])
 
     def test_same_menu_after_sending_offers_only_attach_or_skip(self):
         r, tmux = self.relay([0, SKIP], [CODEX_TRUST])
