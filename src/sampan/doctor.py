@@ -177,6 +177,10 @@ def _auth(cfg, run):
 KEYCHAIN_SERVICE = "Claude Code-credentials"  # Claude adds "-" + sha256(CLAUDE_CONFIG_DIR)[:8] when the variable is set
 KEYCHAIN_UNKNOWN_TIME = datetime.min.replace(tzinfo=timezone.utc)  # the item exists but its time cannot be read
 KEYCHAIN_FALLBACK_ACCOUNT = "claude-code-user"
+# An estimate, not a documented limit: a Claude that can open the keychain rewrites its copy whenever it renews the
+# login (about every 8 hours of use), so a copy unwritten this long has gone unused and its login may have lapsed
+# (one last written 9/20 had by 10/30). How long a Claude login really lasts unused is not published.
+KEYCHAIN_STALE = timedelta(days=7)
 _MDAT_RE = re.compile(r'"mdat"<timedate>=\S*\s+"(\d{14})Z')
 _ACCT_RE = re.compile(r'"acct"<blob>="([^"]*)"')
 _ACCOUNT_OK = re.compile(r"^[a-zA-Z0-9._-]+$")
@@ -211,14 +215,17 @@ def _keychain_item(run, service, account=None):
     return (a.group(1) if a else None), when
 
 
-def _two_logins(cfg, run, platform, account=None):
+def _two_logins(cfg, run, platform, account=None, now=None):
     """macOS: a profile with a login both in the keychain and in .credentials.json. Claude uses the keychain copy (the
-    item under its account) and the file only when the keychain cannot be opened, so one copy goes stale; whichever
-    start picks the stale one finds the profile logged out. The keychain can also hold an item of the same name under
-    another account (left by a Claude run as another user): Claude never reads it, so it is not judged, only named."""
+    item under its account) and the file only when the keychain cannot be opened, renewing whichever it used; so the
+    file being newer is normal (any `claude` run where the keychain cannot be opened renews it). The risk is a keychain
+    copy nothing has renewed for KEYCHAIN_STALE: a start that uses it may find the profile logged out. The keychain can
+    also hold an item of the same name under another account (left by a Claude run as another user): Claude never
+    reads it, so it is not judged, only named."""
     if platform != "darwin":
         return []
     account = account or _keychain_account(os.environ)
+    now = now or datetime.now(timezone.utc)
     out = []
     for p in _present(cfg):
         if p.agent != "claude":
@@ -239,15 +246,18 @@ def _two_logins(cfg, run, platform, account=None):
         ft = datetime.fromtimestamp(f.stat().st_mtime, timezone.utc)
         when = "" if kc == KEYCHAIN_UNKNOWN_TIME else f" {fmt_local(kc)}"
         title = f"{p.name}：登入資訊有兩份（鑰匙圈{when}、.credentials.json {fmt_local(ft)}）"
-        why = f"Claude 先用鑰匙圈那份（帳號 {account}），鑰匙圈打不開時才用檔案那份。"
-        if ft > kc:  # the copy Claude normally uses is the older one: it may have expired
-            out.append(Check("warn", title + "，檔案比較新",
-                             why + "鑰匙圈那份比較舊，可能已經過期，Claude 用到它時這個 profile 會變成未登入（Remote Control 也連不上）。"
-                             f"處理：在 {p.name} 執行 /login（例如 sampan claude {p.name}）；"
-                             "鑰匙圈那份變成比較新的，這裡就降成 ℹ️"))
+        why = f"Claude 先用鑰匙圈那份（帳號 {account}），鑰匙圈打不開時才用檔案那份，用到哪份就更新哪份。"
+        if kc != KEYCHAIN_UNKNOWN_TIME and now - kc > KEYCHAIN_STALE:
+            days = (now - kc).days
+            out.append(Check("warn", title + f"，鑰匙圈那份 {days} 天沒更新",
+                             why + "鑰匙圈那份很久沒人用，可能已經失效，Claude 用到它時這個 profile 會變成未登入"
+                             "（Remote Control 也連不上）。"
+                             f"處理：在桌面開的終端機、不進 tmux，跑 sampan claude {p.name} 再 /login；"
+                             "鑰匙圈那份更新後，這裡就降成 ℹ️"))
         else:  # contents cannot be compared without reading the secrets: only the times are
             out.append(Check("info", title,
-                             why + "鑰匙圈那份比較新，沒有問題。"
+                             why + "在 SSH 的 shell 裡跑 claude（包括 sampan 的 doctor、plugins 指令）會更新檔案那份，"
+                             "這是正常的。"
                              f"不想留兩份：確認登入正常後，把 {f} 改名備份"
                              "（之後鑰匙圈打不開時，這個 profile 會要求登入）"))
     return out

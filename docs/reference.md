@@ -118,7 +118,7 @@ stdio MCP server（每行一則 JSON-RPC 2.0；協定版本 `2025-06-18`，clien
 
 ### 安裝與核准方式
 
-`sampan mcp install` 對每個啟用的 Claude profile 跑 `claude mcp add --scope user sampan -- <sampan 路徑> mcp serve`（帶該 profile 的 `CLAUDE_CONFIG_DIR`），Codex 啟用時跑 `codex mcp add sampan -- <sampan 路徑> mcp serve`（Codex 家目錄不是 `~/.codex` 時帶 `CODEX_HOME`）；已經裝了的略過。`sampan mcp uninstall` 對應 `remove`。兩者都有 `--dry-run`，也都可用 `--profile <名稱>`（可重複，Codex 用它的 profile 名稱）只處理指定的 profile，名稱不存在時什麼都不做、結束碼 2；每行結果記在 `actions.log`（標籤 `mcp`）。裝好後要重開該 profile 的 session 才看得到工具。`sampan doctor` 用一行顯示裝在哪些 profile（都沒裝時不顯示）。
+`sampan mcp install` 對每個啟用的 Claude profile 跑 `claude mcp add --scope user sampan -- <sampan 路徑> mcp serve`（帶該 profile 的 `CLAUDE_CONFIG_DIR`），Codex 啟用時跑 `codex mcp add sampan -- <sampan 路徑> mcp serve`（Codex 家目錄不是 `~/.codex` 時帶 `CODEX_HOME`）；已經裝了的略過。Claude profile 裝了沒，是讀它的 `.claude.json`（default profile 是 `~/.claude.json`）裡的 `mcpServers.sampan`，不為了檢查去跑 `claude`（跑一次就可能更新登入資訊）；檔案讀不到或格式不對時才改用 `claude mcp get`。`sampan mcp uninstall` 對應 `remove`。兩者都有 `--dry-run`，也都可用 `--profile <名稱>`（可重複，Codex 用它的 profile 名稱）只處理指定的 profile，名稱不存在時什麼都不做、結束碼 2；每行結果記在 `actions.log`（標籤 `mcp`）。裝好後要重開該 profile 的 session 才看得到工具。`sampan doctor` 用一行顯示裝在哪些 profile（都沒裝時不顯示）。
 
 `[mcp] confirm = true` 的做法（失敗就關）：
 

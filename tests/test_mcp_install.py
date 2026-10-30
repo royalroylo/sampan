@@ -117,6 +117,44 @@ class McpInstallTest(unittest.TestCase):
                          [["claude", "mcp", "remove", "--scope", "user", "sampan"], ["codex", "mcp", "remove", "sampan"]])
         self.assertTrue(any("work" in s and "沒裝" in s for s in self.out), self.out)
 
+    def write_claude_json(self, name, text):
+        f = self.cfg.profiles[name].claude_json
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(text)
+
+    def test_installed_in_the_config_file_runs_no_claude(self):
+        # 10/30: `claude mcp get` from an SSH shell refreshed each profile's login into .credentials.json
+        self.write_claude_json("alice", '{"mcpServers": {"sampan": {"command": "x"}}}')
+        self.write_claude_json("work", '{"mcpServers": {"sampan": {"command": "x"}}}')
+        r = self.runner()
+        self.assertEqual(mcp_install.install(self.cfg, r, self.o, sampan_path=SP), 0)
+        self.assertEqual([c["args"][0] for c in r.calls], ["codex", "codex"])  # Codex as before: get, add
+        self.assertEqual(sum("已裝，略過" in s for s in self.out), 2, self.out)
+
+    def test_config_file_without_sampan_adds_without_asking_claude(self):
+        self.write_claude_json("alice", '{"mcpServers": {"other": {}}}')
+        self.write_claude_json("work", '{"numStartups": 3}')
+        r = self.runner()
+        self.assertEqual(mcp_install.install(self.cfg, r, self.o, sampan_path=SP), 0)
+        claude = [c["args"][:3] for c in r.calls if c["args"][0] == "claude"]
+        self.assertEqual(claude, [["claude", "mcp", "add"]] * 2)
+
+    def test_unreadable_config_file_falls_back_to_claude_mcp_get(self):
+        self.write_claude_json("alice", "{not json")
+        self.write_claude_json("work", '{"mcpServers": ["sampan"]}')
+        r = self.runner(installed={"default"})
+        mcp_install.install(self.cfg, r, self.o, sampan_path=SP)
+        gets = [c["env"].get("CLAUDE_CONFIG_DIR", "default") for c in self.calls(r, "get") if c["args"][0] == "claude"]
+        self.assertEqual(gets, ["default", str(self.cfg.profiles["work"].config_dir)])
+        self.assertTrue(any("alice" in s and "已裝" in s for s in self.out), self.out)
+
+    def test_uninstall_reads_the_config_file_too(self):
+        self.write_claude_json("alice", '{"mcpServers": {"sampan": {}}}')
+        self.write_claude_json("work", '{"mcpServers": {}}')
+        r = self.runner()
+        mcp_install.uninstall(self.cfg, r, self.o, profiles=("alice", "work"))
+        self.assertEqual([c["args"][:3] for c in r.calls], [["claude", "mcp", "remove"]])
+
     def test_status_reads_the_config_files_without_running_anything(self):
         p = self.cfg.profiles["alice"]
         p.claude_json.parent.mkdir(parents=True, exist_ok=True)

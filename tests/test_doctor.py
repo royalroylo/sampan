@@ -467,6 +467,7 @@ class TwoLoginsDoctorTest(unittest.TestCase):
     def setUp(self):
         self.cfg = make_env(Path(tempfile.mkdtemp()))
         self.items = {}  # service -> mdat, for account "u" (the account Claude uses here)
+        self.now = datetime(2026, 10, 30, 15, 0, tzinfo=timezone(timedelta(hours=8)))
         self.others = []  # (service, account, mdat): items of the same name under other accounts, found first
 
     def runner(self):
@@ -496,18 +497,40 @@ class TwoLoginsDoctorTest(unittest.TestCase):
 
     def checks(self, platform="darwin"):
         from sampan.doctor import _two_logins
-        return _two_logins(self.cfg, self.runner(), platform, account="u")
+        return _two_logins(self.cfg, self.runner(), platform, account="u", now=self.now)
 
-    def test_keychain_and_newer_file_warns_with_the_fix(self):
+    def test_keychain_unwritten_for_weeks_warns_with_the_fix(self):
+        # 10/30 reboot: a profile's keychain copy was last written 9/20 and had stopped working
         self.items[self.svc("work")] = "20260920134341Z"
         self.file("work", datetime(2026, 10, 30, 6, 33, tzinfo=timezone(timedelta(hours=8))))
-        [c] = self.checks()
+        with local_tz("Asia/Taipei"):
+            [c] = self.checks()
         self.assertEqual(c.level, "warn")
         self.assertIn("work", c.title)
         self.assertIn("兩份", c.title)
+        self.assertIn("39 天", c.title)  # 9/20 21:43 → 10/30 15:00
+        self.assertIn("不進 tmux", c.detail)
+        self.assertIn("sampan claude work", c.detail)
         self.assertIn("/login", c.detail)
-        self.assertIn("檔案比較新", c.title)
-        self.assertIn("降成", c.detail)
+
+    def test_file_newer_but_keychain_written_today_is_only_info(self):
+        # 10/30 14:45: `claude` run from an SSH shell refreshed the file copy; the keychain copy was written at 14:41
+        self.items[self.svc("work")] = "20261030064100Z"
+        self.file("work", datetime(2026, 10, 30, 14, 45, tzinfo=timezone(timedelta(hours=8))))
+        with local_tz("Asia/Taipei"):
+            [c] = self.checks()
+        self.assertEqual(c.level, "info")
+        self.assertIn("SSH", c.detail)
+        self.assertIn("正常", c.detail)
+
+    def test_seven_days_is_the_line(self):
+        from sampan.doctor import KEYCHAIN_STALE
+        self.assertEqual(KEYCHAIN_STALE, timedelta(days=7))
+        self.file("work", self.now)
+        self.items[self.svc("work")] = (self.now - timedelta(days=6, hours=23)).astimezone(timezone.utc).strftime("%Y%m%d%H%M%SZ")
+        self.assertEqual([c.level for c in self.checks()], ["info"])
+        self.items[self.svc("work")] = (self.now - timedelta(days=7, hours=1)).astimezone(timezone.utc).strftime("%Y%m%d%H%M%SZ")
+        self.assertEqual([c.level for c in self.checks()], ["warn"])
 
     def test_keychain_newer_is_only_info(self):
         # PM: a profile that works must not carry a warning nobody can clear
@@ -568,15 +591,6 @@ class TwoLoginsDoctorTest(unittest.TestCase):
         self.assertFalse(any("兩份" in c.title for c in checks), checks)
         self.assertEqual([c.level for c in checks], ["info"])  # only the note about the unused item
 
-    def test_texts_do_not_guess_about_tmux_or_ssh(self):
-        self.items[self.svc("work")] = "20260920134341Z"
-        self.file("work", NOW)
-        self.items[self.svc("alice")] = "20261030065605Z"
-        self.file("alice", datetime(2026, 10, 30, 6, 33, tzinfo=timezone(timedelta(hours=8))))
-        for c in self.checks():
-            self.assertNotIn("SSH", c.title + c.detail)
-            self.assertNotIn("tmux", c.title + c.detail)
-
     def test_account_follows_claude(self):
         from sampan.doctor import _keychain_account
         self.assertEqual(_keychain_account({"USER": "pat.lee"}), "pat.lee")
@@ -590,12 +604,13 @@ class TwoLoginsDoctorTest(unittest.TestCase):
         self.assertEqual(_two_logins(self.cfg, r, "linux", account="u"), [])
         self.assertEqual(r.called(["security"]), [])
 
-    def test_item_without_a_readable_time_still_warns(self):
+    def test_item_without_a_readable_time_is_only_info(self):
         self.file("work", NOW)
         r = FakeRunner().on(["security", "find-generic-password"], cp(out='class: "genp"\n    "mdat"<timedate>=<NULL>\n'))
         from sampan.doctor import _two_logins
-        [c] = _two_logins(self.cfg, r, "darwin", account="u")
+        [c] = _two_logins(self.cfg, r, "darwin", account="u", now=self.now)
         self.assertIn("鑰匙圈、.credentials.json", c.title)
+        self.assertEqual(c.level, "info")
 
 
     def test_unreadable_keychain_says_nothing(self):

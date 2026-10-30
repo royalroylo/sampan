@@ -15,17 +15,34 @@ NAME = "sampan"
 
 
 def _targets(cfg):
-    """(label, agent, env) for every enabled Claude profile and for Codex when enabled."""
-    out = [(p.name, "claude", p.env(os.environ)) for p in cfg.profiles.values()]
+    """(label, agent, env, profile | None) for every enabled Claude profile and for Codex when enabled."""
+    out = [(p.name, "claude", p.env(os.environ), p) for p in cfg.profiles.values()]
     if cfg.codex.enabled:
         env = {**os.environ, **codex_env(cfg)}
         if not codex_env(cfg):  # the configured home is ~/.codex: an ambient CODEX_HOME would point codex elsewhere
             env.pop("CODEX_HOME", None)
-        out.append((cfg.codex.profile or "codex", "codex", env))
+        out.append((cfg.codex.profile or "codex", "codex", env, None))
     return out
 
 
-def _installed(run, agent, env):
+def _claude_entry(profile):
+    """Whether the profile's .claude.json has the user-scope sampan entry; None when that cannot be told (missing,
+    unreadable or not the expected shape)."""
+    try:
+        data = json.loads(Path(profile.claude_json).read_text())
+    except (OSError, ValueError):
+        return None
+    servers = data.get("mcpServers", {}) if isinstance(data, dict) else None
+    return NAME in servers if isinstance(servers, dict) else None
+
+
+def _installed(run, agent, env, profile=None):
+    """A Claude profile is read from its .claude.json: running `claude` only to look renews the login, and from a shell
+    that cannot open the keychain it writes .credentials.json (10/30). `claude mcp get` only when the file cannot tell."""
+    if agent == "claude" and profile is not None:
+        known = _claude_entry(profile)
+        if known is not None:
+            return known
     return run([agent, "mcp", "get", NAME], env=env).returncode == 0
 
 
@@ -70,8 +87,8 @@ def _apply(cfg, run, out, build, *, want_installed, dry_run, done, skip, codex_c
         targets = [t for t in targets if t[0] in profiles]
     out = actionlog.tee(cfg, "mcp", out)
     rc = 0
-    for name, agent, env in targets:
-        need = _installed(run, agent, env) == want_installed
+    for name, agent, env, profile in targets:
+        need = _installed(run, agent, env, profile) == want_installed
         if agent == "codex" and codex_first:
             rc |= _codex_approval(cfg, out, codex_confirm, dry_run)
         ok = True
@@ -108,12 +125,7 @@ def uninstall(cfg, run, out, *, dry_run=False, profiles=()):
 
 
 def _claude_has(profile):
-    try:
-        data = json.loads(Path(profile.claude_json).read_text())
-    except (OSError, ValueError):
-        return False
-    servers = data.get("mcpServers") if isinstance(data, dict) else None
-    return isinstance(servers, dict) and NAME in servers
+    return _claude_entry(profile) is True
 
 
 def _codex_has(cfg):

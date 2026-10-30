@@ -180,10 +180,13 @@ the same conversation and takes you in.
 are left alone and reported). After the reboot type `sampan`, press `R`, confirm the checked ones, and the original
 conversations come back one by one. sampan **never resumes on its own**; you always press the key. On macOS a
 Claude login can exist twice: in the keychain and in `.credentials.json`. Claude uses the keychain copy (filed under
-your user name) and the file only when the keychain cannot be opened, so one copy goes stale; when Claude picks the stale
-one the profile reads as logged out (Remote Control cannot connect either). `sampan doctor` reports a profile with both
-copies: a warning when the file is newer; run `/login` in that profile (for example `sampan claude <profile>`), the
-keychain copy becomes the newer one and the warning turns into a note. A keychain item of the same name under another
+your user name) and the file only when the keychain cannot be opened, renewing whichever it used. A newer file is
+normal: running claude in an SSH shell (sampan's doctor and plugins commands included) renews the file copy. What
+matters is a keychain copy nothing has used for long: it may have lapsed, and a start that uses it finds the profile
+logged out (Remote Control cannot connect either). `sampan doctor` reports a profile with both copies, as a warning only
+when the keychain copy has not been renewed for over 7 days (an estimate: Claude does not publish how long an unused
+login lasts); then open a desktop terminal, stay out of tmux, run `sampan claude <profile>` and `/login`. Otherwise it is
+a note. A keychain item of the same name under another
 account (left by Claude run as another user) is never used by Claude: doctor does not judge by it, only lists it as a
 note with the command to delete it, which is yours to run. sampan never reads the logins themselves, only the keychain
 items' attributes and the two modification times.
