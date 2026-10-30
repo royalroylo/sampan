@@ -203,6 +203,51 @@ class ToClaudeTest(unittest.TestCase):
                 self.assertLess(len(a), 200)
 
 
+class ToClaudeRawTest(unittest.TestCase):
+    """A direct send: after the paste Claude opens its completion menu, so the screen is "blocked", not "draft"."""
+
+    def setUp(self):
+        self.state = Path(tempfile.mkdtemp())
+        self.outbox = write_outbox(self.state, "ab12", "/compact")
+        self.sleeps = []
+        self.menu = screen("claude_slash_menu.ansi").replace("\u276f\xa0/\n", "\u276f\xa0/compact\n")
+        assert self.menu != screen("claude_slash_menu.ansi")
+
+    def deliver(self, tmux, raw=True):
+        return to_claude(tmux, "%3", self.outbox, "ab12", self.sleeps.append, raw=raw)
+
+    def test_raw_paste_with_menu_open_is_not_counted_as_sent(self):  # Review Focus 1
+        run, tmux = tmux_with("")
+        run.on(["tmux", "-u", "capture-pane"], screens_then(screen("claude_empty_placeholder.ansi"), [self.menu]))
+        r = self.deliver(tmux)
+        self.assertIsInstance(r, Pasted)
+        self.assertEqual(writes(run), [
+            ["tmux", "-u", "load-buffer", "-b", "sampan-ab12", str(self.outbox)],
+            ["tmux", "-u", "paste-buffer", "-p", "-d", "-b", "sampan-ab12", "-t", "%3"],
+            ["tmux", "-u", "send-keys", "-t", "%3", "Enter"],
+            ["tmux", "-u", "send-keys", "-t", "%3", "Enter"],  # the nudge after 5 looks; never Escape
+        ])
+
+    def test_raw_menu_then_empty_is_sent(self):
+        run, tmux = tmux_with("")
+        empty = screen("claude_empty_placeholder.ansi")
+        run.on(["tmux", "-u", "capture-pane"], screens_then(empty, [self.menu, self.menu, empty]))
+        self.assertIsNone(self.deliver(tmux))
+        self.assertEqual(len(run.called(["tmux", "-u", "send-keys"])), 1)
+
+    def test_raw_command_echoed_as_a_suggestion_is_sent(self):
+        dim = f"{RULE}\n\u276f\xa0\x1b[2m/compact\x1b[0m\n{RULE}\n  footer"  # Claude offers the last command again
+        run, tmux = tmux_with("")
+        run.on(["tmux", "-u", "capture-pane"], screens_then(screen("claude_empty_placeholder.ansi"), [dim]))
+        self.assertIsNone(self.deliver(tmux))
+
+    def test_non_raw_ignores_a_menu(self):  # unchanged: only a draft holding our text counts as pending
+        run, tmux = tmux_with("")
+        run.on(["tmux", "-u", "capture-pane"], screens_then(screen("claude_empty_placeholder.ansi"), [self.menu]))
+        self.assertIsNone(self.deliver(tmux, raw=False))
+        self.assertEqual(len(run.called(["tmux", "-u", "send-keys"])), 1)
+
+
 class ToCodexTest(unittest.TestCase):
     def setUp(self):
         self.cfg = make_env(Path(tempfile.mkdtemp()))

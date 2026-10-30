@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from .clock import parse_iso
 from .fsutil import cache_by_stat, reverse_lines
 from .procs import is_uuid
 
@@ -204,6 +205,19 @@ def reply_to(path, sent):
         return Reply(False, False, "")
 
 
+def _window_reply(after):
+    """Reply for a bound record, given the records after it (newest first): the last assistant text before the next
+    message the user typed."""
+    window, closed = [], False
+    for later in reversed(after):  # oldest first, up to the next typed message
+        if _user_content(later, join=True) is not None:
+            closed = True
+            break
+        window.append(later)
+    texts = [t for t in map(_assistant_text, window) if t]
+    return Reply(True, True, texts[-1], closed) if texts else Reply(True, False, "", closed)
+
+
 def _reply_to(path, sent):
     after = []  # records after the candidate, newest first
     for line in reverse_lines(path):
@@ -215,15 +229,52 @@ def _reply_to(path, sent):
             continue
         content = _user_content(rec, join=True)
         if content is not None and _bound_text(content) == sent.rstrip("\n"):
-            window, closed = [], False
-            for later in reversed(after):  # oldest first, up to the next typed message
-                if _user_content(later, join=True) is not None:
-                    closed = True
-                    break
-                window.append(later)
-            texts = [t for t in map(_assistant_text, window) if t]
-            return Reply(True, True, texts[-1], closed) if texts else Reply(True, False, "", closed)
+            return _window_reply(after)
         after.append(rec)
+    return Reply(False, False, "")
+
+
+def command_reply(path, sent, after):
+    """The reply to a direct send (sent: one line starting with /, typed as is so Claude runs it): bound to the last
+    record at or after the datetime after that is either a user record whose text is sent, or a user record or a
+    `system`/`local_command` record that holds <command-name>{first word of sent}</command-name> (a skill, /model,
+    /compact; /context writes only the system one). The reply text follows reply_to's rules."""
+    try:
+        return _command_reply(path, sent, after)
+    except OSError:
+        return Reply(False, False, "")
+
+
+def _command_record(rec, sent, mark, after):
+    if rec.get("type") == "system" and rec.get("subtype") == "local_command":
+        text = rec.get("content")
+    elif rec.get("type") == "user" and not (rec.get("isCompactSummary") or rec.get("isVisibleInTranscriptOnly")):
+        msg = rec.get("message")
+        text = msg.get("content") if isinstance(msg, dict) else None
+        if isinstance(text, list):
+            text = "".join(c.get("text") for c in text if isinstance(c, dict) and isinstance(c.get("text"), str))
+    else:
+        return False
+    if not isinstance(text, str) or not (text.strip() == sent or mark in text):
+        return False
+    ts = parse_iso(rec.get("timestamp"))
+    return ts is not None and ts >= after
+
+
+def _command_reply(path, sent, after):
+    sent = sent.strip()
+    mark = f"<command-name>{sent.split()[0] if sent else ''}</command-name>"
+    later = []  # records after the candidate, newest first
+    for line in reverse_lines(path):
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        if _command_record(rec, sent, mark, after):
+            return _window_reply(later)
+        later.append(rec)
     return Reply(False, False, "")
 
 

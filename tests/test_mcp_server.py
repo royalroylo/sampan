@@ -573,6 +573,26 @@ class SendToolTest(Base):
         self.assertTrue(c.response(4)["result"]["isError"])  # wait above 60 is refused
         self.assertIn("60", tool_text(c.response(4)))
 
+    def test_send_raw_schema_and_refusals(self):
+        [tool] = [t for t in mcp_server.TOOLS if t["name"] == "send"]
+        self.assertEqual(tool["inputSchema"]["properties"]["raw"]["type"], "boolean")
+        self.assertNotIn("raw", tool["inputSchema"]["required"])
+        c = self.serve(Client([init(1), call(2, "send", {"session": "b", "message": "hello", "raw": True}),
+                               call(3, "send", {"session": "c", "message": "/compact", "raw": True}),
+                               call(4, "send", {"session": "b", "message": "/compact", "raw": "yes"})]), confirm=False)
+        for rid, text in ((2, send.raw_problem("hello")), (3, "直接送目前只支援 Claude"), (4, "raw")):
+            self.assertTrue(c.response(rid)["result"]["isError"], rid)
+            self.assertIn(text, tool_text(c.response(rid)))
+        self.assertEqual(self.dispatches(), [])
+
+    def test_send_raw_creates_a_raw_dispatch(self):
+        run = tmux_runner()
+        c = self.serve(Client([init(1), call(2, "send", {"session": "b", "message": "/compact", "raw": True})]),
+                       run=run, confirm=False)
+        self.assertFalse(c.response(2)["result"]["isError"])
+        [d] = self.dispatches()
+        self.assertEqual((d.raw, d.text, d.state), (True, "/compact", "sent"))
+
     def test_send_failing_in_its_first_round_is_reported_once(self):  # re-review: no second failure notice
         run = tmux_runner().on(["tmux", "-u", "send-keys"], cp(1, "", "lost pane"))  # pasted, Enter failed
         c = self.serve(Client([init(1), call(2, "send", {"session": "b", "message": "hi"})]), run=run, confirm=False)

@@ -43,11 +43,13 @@ def compose(from_name, from_profile, did, message):
     return source_line(from_name, from_profile, did) + "\n" + message
 
 
-def to_claude(tmux, pane_id, outbox, did, sleep):
+def to_claude(tmux, pane_id, outbox, did, sleep, raw=False):
     """Paste the outbox file into an empty prompt and press Enter, then look again until the box no longer holds our
     text (Enter can be lost while the paste settles): one more Enter if it is still there after NUDGE_AFTER looks,
     never a second paste. None on success; else the reason, as a plain str when nothing was pasted, or as Pasted
-    when the text is in the box but Enter failed or did not send it."""
+    when the text is in the box but Enter failed or did not send it.
+    raw: the text is a / command typed as is; Claude shows its completion menu under it (a "blocked" screen), so the
+    prompt line alone tells whether it is still in the box."""
     state = claude_input_state(tmux.capture(pane_id, escapes=True))
     if state == "draft":
         return REASON_DRAFT
@@ -71,7 +73,7 @@ def to_claude(tmux, pane_id, outbox, did, sleep):
     first = _first_line(outbox)
     for look in range(1, VERIFY_LOOKS + 1):
         sleep(VERIFY_S)
-        if not _ours_pending(tmux.capture(pane_id, escapes=True), first):
+        if not _ours_pending(tmux.capture(pane_id, escapes=True), first, raw):
             # gone from the prompt line: sent. Also when the screen cannot be read or shows something else (a
             # dialog, Claude's suggestion, someone's draft): never press a key on what is not our paste; if it was
             # not sent after all, the reply check fails it later (找不到回覆), still at most once
@@ -92,10 +94,11 @@ def _first_line(outbox):
         return ""
 
 
-def _ours_pending(screen, first):
+def _ours_pending(screen, first, raw=False):
     """The input box holds typed (not suggested) text and its prompt line is our paste: Claude's paste marker, or the
-    start of our first line (as much of it as the line shows, at least OURS_MIN characters)."""
-    if claude_input_state(screen) != "draft":
+    start of our first line (as much of it as the line shows, at least OURS_MIN characters). raw: a typed / command
+    with its menu open ("blocked") counts too; an "empty" box (Claude suggesting the command again) never does."""
+    if claude_input_state(screen) not in (("draft", "blocked") if raw else ("draft",)):
         return False
     text = (claude_prompt_text(screen) or "").strip()
     if text.startswith(PASTE_MARK):

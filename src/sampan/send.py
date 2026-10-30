@@ -2,21 +2,24 @@
 
 Actions layer. Every state change happens inside dispatch.transaction: the latest record is read, judged and written
 back under one lock, so two watchers (an MCP server and the sampan screen) never deliver the same dispatch twice.
-The target's conversation id is read from status_rows on every advance; Dispatch.thread_id is only a cache.
+The target's conversation id is read from status_rows on every advance; Dispatch.thread_id is only a cache (for a
+direct send to Claude: the conversation it went to, so a /clear that starts a new one is told from a lost message).
 """
 import os
 import time
+import unicodedata
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
 from . import actionlog, deliver, dispatch
-from .claude_state import Reply, find_transcript
+from .claude_state import Reply, command_reply, find_transcript
 from .claude_state import reply_to as claude_reply_to
 from .clock import fmt_local, parse_iso
 from .codex_state import _is_codex, find_rollout
 from .codex_state import reply_to as codex_reply_to
 from .procs import is_descendant, list_procs
 from .registry import RegistryError, load_rows
+from .screens import claude_input_state
 from .status import State, status_rows
 from .textwidth import text_width
 from .tmux import Tmux
@@ -42,6 +45,10 @@ REASON_SKIPPED = "對方沒回這則就換了下一則"
 REASON_NO_TEXT_YET = "對方閒著，但還沒看到回覆文字"
 REASON_NO_TEXT = "對方這輪結束了，但沒有回覆文字"
 REASON_STOP_WATCHING = "不再等回覆"
+REASON_RAN = "指令已執行（沒有文字回覆）"  # a direct send done without reply text: its reply
+REASON_NEW_THREAD = "對方換成新對話（{sid8}）"  # a direct send (/clear…) after which the target's conversation id changed
+REASON_MENU = "指令打開了選單，請自己到那個 session 處理"
+REASON_MENU_SEEN = deliver.REASON_BLOCKED  # one look at a menu after a direct send (two in a row fail it)
 BUSY = {"busy": "對方正在忙", "working": "對方正在忙", "waiting": "對方在等使用者回應"}
 WAITING = {*BUSY.values(), REASON_NOT_RUNNING, REASON_NO_THREAD}  # queued reasons that clear by themselves: no limit
 RUNNING_VERSION = current_version()  # read once at import: the code this process runs, even after an upgrade on disk
@@ -196,11 +203,14 @@ REASON_RAW_CODEX = "直接送目前只支援 Claude"
 
 
 def raw_problem(message):
-    """Why message cannot be a direct send (one line starting with /, at most RAW_MAX characters), or None. It is
-    judged after strip, which is what gets sent."""
+    """Why message cannot be a direct send (one line starting with /, at most RAW_MAX characters, no control
+    characters: an ESC would end the bracketed paste early and the rest would be keys), or None. It is judged after
+    strip, which is what gets sent."""
     m = message.strip()
     if "\n" in m or "\r" in m:
         return "直接送只能是一行"
+    if any(unicodedata.category(c) == "Cc" for c in m):
+        return "直接送不能含控制字元（例如 Tab、Esc）"
     if not m.startswith("/"):
         return "直接送要以 / 開頭（例如 /compact）"
     if len(m) > RAW_MAX:
@@ -328,7 +338,7 @@ def advance(cfg, run, did, *, sleep, snapshot_fn=None, status_fn=None, now=None,
                 _deliver(cfg, run, d, rows.get(d.to_name), sleep, now, save)
                 _expire(cfg, d, now)
             elif d.state == "sent":
-                _check(cfg, d, rows.get(d.to_name), now)
+                _check(cfg, d, rows.get(d.to_name), now, run)
             if report and d.state in dispatch.FINISHED:
                 d.notify = False  # the tool result tells the caller
             if _owes_notice(d):
@@ -367,8 +377,10 @@ def _deliver(cfg, run, d, row, sleep, now, save):
         outbox = dispatch.outbox_path(cfg.state_dir, d.id)
         if not outbox.exists():
             outbox = dispatch.write_outbox(cfg.state_dir, d.id, d.text)
+        if d.raw:
+            d.thread_id = row.sid or None  # the conversation it went to: a /clear changes it
         _sending(d, now, save)
-        why = deliver.to_claude(Tmux(run), row.pane, outbox, d.id, sleep)
+        why = deliver.to_claude(Tmux(run), row.pane, outbox, d.id, sleep, raw=d.raw)
     if isinstance(why, deliver.Unsure):  # it may have reached the target: never send the same dispatch twice
         _finish(d, "failed", now, f"{REASON_PASTED}：{why}" if isinstance(why, deliver.Pasted) else str(why))
         _log(cfg, "send", f"派工 {d.id}：{d.reason}")
@@ -426,7 +438,7 @@ def _starting(d, row, now):
     return False
 
 
-def _check(cfg, d, row, now):
+def _check(cfg, d, row, now, run=None):
     was_starting = d.reason == REASON_STARTING
     if _starting(d, row, now) or (d.startup and row is not None and row.state == State.AWAIT_TRUST):
         d.reason = REASON_STARTING  # wait, do not judge
@@ -443,6 +455,9 @@ def _check(cfg, d, row, now):
         return
     if row.agent == "codex":
         d.thread_id = row.sid
+    if d.raw:
+        _check_raw(cfg, d, row, now, run)
+        return
     reply = _reply(cfg, row, d.text)
     idle = row.agent_status == "idle"  # Claude's reply.done only means "some assistant text exists"
     if not idle:  # a mark is about two idle looks in a row: a busy look in between starts over
@@ -470,6 +485,46 @@ def _check(cfg, d, row, now):
     if early:
         return
     if d.reason == REASON_NOT_SEEN:  # seen idle without the message twice in a row: it is not coming
+        _finish(d, "failed", now, REASON_NOT_FOUND)
+    else:
+        d.reason = REASON_NOT_SEEN
+
+
+def _check_raw(cfg, d, row, now, run):
+    """A direct send (a / command Claude ran itself): done when its record is in the transcript at or after sent_at
+    and the target was idle on two looks in a row (most commands write no reply text), or at once with reply text;
+    done too when the conversation id changed (/clear). Not seen, but a menu or dialog on the screen on two looks in a
+    row (e.g. /model with no argument): failed; sampan never presses a key on it."""
+    if d.thread_id and row.sid != d.thread_id:
+        _finish(d, "done", now, reply=REASON_NEW_THREAD.format(sid8=row.sid[:8]))
+        return
+    sent = parse_iso(d.sent_at)
+    path = find_transcript(cfg.profiles.values(), row.sid, prefer=row.profile)
+    reply = command_reply(path, d.text, sent) if path and sent else Reply(False, False, "")
+    idle = row.agent_status == "idle"
+    early = sent is not None and (now - sent).total_seconds() < NOT_SEEN_GRACE_S
+    if reply.found:
+        if reply.text and (reply.done or reply.closed) and idle:
+            _finish(d, "done", now, reply=reply.text)
+        elif not idle or early:
+            d.reason = ""
+        elif reply.closed or d.reason == REASON_NO_TEXT_YET:  # idle twice in a row: the command ran, no text
+            _finish(d, "done", now, reply=REASON_RAN)
+        else:
+            d.reason = REASON_NO_TEXT_YET
+        return
+    if early:
+        return
+    screen = Tmux(run).capture(row.pane, escapes=True) if run is not None and row.pane else ""
+    if screen.strip() and claude_input_state(screen) not in ("empty", "draft"):
+        if d.reason == REASON_MENU_SEEN:
+            _finish(d, "failed", now, REASON_MENU)
+        else:
+            d.reason = REASON_MENU_SEEN
+        return
+    if not idle:
+        d.reason = ""
+    elif d.reason == REASON_NOT_SEEN:
         _finish(d, "failed", now, REASON_NOT_FOUND)
     else:
         d.reason = REASON_NOT_SEEN
@@ -590,12 +645,13 @@ def _advance_until(cfg, run, did, wait_s, *, sleep, clock, snapshot_fn, status_f
 
 
 def cmd_send(cfg, run, out, to, message, *, wait, timeout=600, sleep=time.sleep, clock=time.monotonic,
-             snapshot_fn=None, status_fn=None, now_fn=_utcnow, caller=TERMINAL):
+             snapshot_fn=None, status_fn=None, now_fn=_utcnow, caller=TERMINAL, raw=False):
     """`sampan send`. caller: who runs it (command_caller: an agent running it through its shell tool is that session
     or an unregistered agent, never the terminal). Without wait: try once, print the id (rc 0, also when it is only
     queued). With wait: advance every 2 s; done → the reply (rc 0), failed → the reason (rc 1), timeout → rc 124
-    (the dispatch stays), Ctrl-C → rc 130 (the dispatch stays)."""
-    r = submit(cfg, run, caller, to, message, notify=False, now=now_fn(), snapshot_fn=snapshot_fn, status_fn=status_fn)
+    (the dispatch stays), Ctrl-C → rc 130 (the dispatch stays). raw: a direct send (see submit)."""
+    r = submit(cfg, run, caller, to, message, notify=False, now=now_fn(), snapshot_fn=snapshot_fn, status_fn=status_fn,
+               raw=raw)
     if isinstance(r, str):
         out(f"❌ {r}")
         return 2

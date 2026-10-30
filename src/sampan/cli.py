@@ -69,6 +69,8 @@ def build_parser():
     sd.add_argument("message", help="訊息；- 從 stdin 讀")
     sd.add_argument("--wait", action="store_true", help="等對方回覆，把回覆印出來")
     sd.add_argument("--timeout", type=int, default=600, help="--wait 最多等幾秒（預設 600；逾時結束碼 124，派工照樣留著）")
+    sd.add_argument("--raw", action="store_true",
+                    help="直接送：不加轉送標頭，讓對方的 Claude 當作指令執行（例如 /compact）；只限 Claude，一行、以 / 開頭")
     ds = sub.add_parser("dispatches", usage="sampan dispatches [--all] | sampan dispatches show <編號> [--wait 秒] | sampan dispatches cancel <編號>",
                         help="列派工（預設只列排隊中與等回覆的）；show <編號> 看狀態與完整回覆；cancel <編號> 取消排隊中的、或不再等已送出的")
     ds.add_argument("action", nargs="?", choices=["cancel", "show"], help=argparse.SUPPRESS)
@@ -417,7 +419,8 @@ def _dispatch(cfg, args):
         if _agent_refused(cfg, caller, out):
             return 2
         message = sys.stdin.read() if args.message == "-" else args.message
-        return cmd_send(cfg, run, out, args.name, message, wait=args.wait, timeout=args.timeout, caller=caller)
+        return cmd_send(cfg, run, out, args.name, message, wait=args.wait, timeout=args.timeout, caller=caller,
+                        raw=args.raw)
     if cmd == "dispatches":
         from .send import cmd_cancel, cmd_dispatches, cmd_show
         if args.wait is not None and args.action != "show":

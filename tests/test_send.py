@@ -121,6 +121,10 @@ class SubmitTest(Base):
         for bad in ("hello", "/a\n/b", "/" + "x" * 500):
             self.assertTrue(send.raw_problem(bad), bad)
 
+    def test_raw_problem_refuses_control_characters(self):  # an ESC could end the bracketed paste early
+        for bad in ("/compact\x1b[201~x", "/model\tsonnet", "/a\x00", "/a\x7f"):
+            self.assertTrue(send.raw_problem(bad), repr(bad))
+
     def test_raw_submit_stores_the_bare_text(self):
         d = self.submit(message=" /compact\n", raw=True)
         self.assertEqual(d.text, "/compact")
@@ -407,13 +411,121 @@ class AdvanceClaudeTest(Base):
             self.advance(FakeRunner(strict=True), "zzzz")
 
 
+MENU = (FIXTURES / "claude_slash_menu.ansi").read_text()
+SID_NEW = "55555555-6666-7777-8888-999999999999"
+
+
+def stamped(rec, seconds=1.5):
+    """rec with a transcript timestamp seconds after NOW (Claude writes UTC with a Z)."""
+    return {**rec, "timestamp": (NOW + timedelta(seconds=seconds)).isoformat().replace("+00:00", "Z")}
+
+
+class RawCheckTest(Base):
+    """A direct send: done once the command shows in the transcript (at or after sent_at) and the target is idle."""
+
+    def sent(self, message="/compact"):
+        d = self.submit(message=message, raw=True)
+        run = tmux_runner()
+        d = self.advance(run, d.id)
+        self.assertEqual(d.state, "sent")
+        self.assertEqual([a[2] for a in tmux_writes(run)], ["load-buffer", "paste-buffer", "send-keys"])
+        return d
+
+    def test_raw_command_seen_then_idle_twice_is_done_without_text(self):
+        d = self.sent()
+        self.transcript(SID_B, [stamped(user("/compact")), stamped(user("<command-name>/compact</command-name>")),
+                                stamped(user("<local-command-stdout>Compacted</local-command-stdout>"))])
+        d = self.advance(FakeRunner(strict=True), d.id, later(20))
+        self.assertEqual(d.state, "sent")
+        d = self.advance(FakeRunner(strict=True), d.id, later(23))
+        self.assertEqual((d.state, d.reply, d.reason), ("done", "指令已執行（沒有文字回覆）", ""))
+
+    def test_raw_command_found_within_the_grace_waits(self):
+        d = self.sent()
+        self.transcript(SID_B, [stamped(user("<command-name>/compact</command-name>"))])
+        self.assertEqual(self.advance(FakeRunner(strict=True), d.id, later(3)).state, "sent")
+        self.assertEqual(self.advance(FakeRunner(strict=True), d.id, later(6)).state, "sent")
+        self.assertEqual(self.advance(FakeRunner(strict=True), d.id, later(20)).state, "sent")
+        self.assertEqual(self.advance(FakeRunner(strict=True), d.id, later(23)).state, "done")
+
+    def test_raw_busy_look_starts_over(self):
+        d = self.sent()
+        self.transcript(SID_B, [stamped(user("<command-name>/compact</command-name>"))])
+        self.advance(FakeRunner(strict=True), d.id, later(20))
+        self.set_row("b", agent_status="busy")
+        self.advance(FakeRunner(strict=True), d.id, later(23))
+        self.set_row("b", agent_status="idle")
+        self.assertEqual(self.advance(FakeRunner(strict=True), d.id, later(26)).state, "sent")
+
+    def test_raw_command_with_text_is_done_with_that_text(self):
+        d = self.sent("/x:summary")
+        self.transcript(SID_B, [stamped(user("<command-name>/x:summary</command-name>")), assistant("summary saved")])
+        d = self.advance(FakeRunner(strict=True), d.id, later(5))
+        self.assertEqual((d.state, d.reply), ("done", "summary saved"))
+
+    def test_raw_command_before_sent_at_is_not_ours(self):
+        d = self.sent()
+        self.transcript(SID_B, [stamped(user("/compact"), -5), stamped(user("<command-name>/compact</command-name>"), -5)])
+        run = tmux_runner()
+        self.assertEqual(self.advance(run, d.id, later(20)).reason, send.REASON_NOT_SEEN)
+        d = self.advance(run, d.id, later(23))
+        self.assertEqual((d.state, d.reason), ("failed", send.REASON_NOT_FOUND))
+        self.assertEqual(tmux_writes(run), [])
+
+    def test_raw_local_command_record_counts(self):
+        d = self.sent("/context")
+        self.transcript(SID_B, [stamped({"type": "system", "subtype": "local_command",
+                                         "content": "<command-name>/context</command-name>"})])
+        self.advance(FakeRunner(strict=True), d.id, later(20))
+        d = self.advance(FakeRunner(strict=True), d.id, later(23))
+        self.assertEqual((d.state, d.reply), ("done", send.REASON_RAN))
+
+    def test_raw_new_conversation_id_is_done(self):  # Review Focus 3: /clear starts a new conversation
+        d = self.sent("/clear")
+        self.set_row("b", sid=SID_NEW)
+        d = self.advance(FakeRunner(strict=True), d.id, later(5))
+        self.assertEqual((d.state, d.reply), ("done", "對方換成新對話（55555555）"))
+
+    def test_raw_menu_on_screen_fails_without_keys(self):  # Review Focus 2: e.g. /model with no argument
+        d = self.sent("/model")
+        run = tmux_runner(MENU)
+        self.assertEqual(self.advance(run, d.id, later(5)).state, "sent")  # within the grace: no look
+        self.assertEqual(run.calls, [])
+        d = self.advance(run, d.id, later(20))
+        self.assertEqual(d.state, "sent")
+        d = self.advance(run, d.id, later(23))
+        self.assertEqual((d.state, d.reason), ("failed", "指令打開了選單，請自己到那個 session 處理"))
+        self.assertTrue(run.called(["tmux", "-u", "capture-pane"]))
+        self.assertEqual(tmux_writes(run), [])
+
+    def test_raw_menu_while_not_idle_also_fails(self):  # a menu may leave the status other than idle
+        d = self.sent("/model")
+        self.set_row("b", agent_status="waiting")
+        run = tmux_runner(MENU)
+        self.advance(run, d.id, later(20))
+        self.assertEqual(self.advance(run, d.id, later(23)).reason, send.REASON_MENU)
+        self.assertEqual(tmux_writes(run), [])
+
+    def test_raw_menu_then_gone_starts_over(self):
+        d = self.sent("/model")
+        self.advance(tmux_runner(MENU), d.id, later(20))
+        d = self.advance(tmux_runner(), d.id, later(23))  # the person closed it: one not-seen strike, not failed
+        self.assertEqual((d.state, d.reason), ("sent", send.REASON_NOT_SEEN))
+
+    def test_raw_unreadable_screen_is_not_a_menu(self):
+        d = self.sent("/model")
+        run = tmux_runner("")
+        self.advance(run, d.id, later(20))
+        self.assertNotEqual(self.advance(run, d.id, later(23)).reason, send.REASON_MENU)
+
+
 class ConcurrentAdvanceTest(Base):
     def test_two_watchers_deliver_once(self):  # Review Focus 3
         d = self.submit()
         second_started = threading.Event()
         calls = []
 
-        def slow_delivery(tmux, pane_id, outbox, did, sleep):
+        def slow_delivery(tmux, pane_id, outbox, did, sleep, raw=False):
             calls.append(did)
             self.assertTrue(second_started.wait(5))  # the other watcher is running before this delivery ends
             time.sleep(0.2)  # ... and has reached the lock
@@ -602,6 +714,17 @@ class CmdSendTest(Base):
         d = dispatch.load(self.cfg.state_dir)[0]
         self.assertEqual(d.state, "sent")
         self.assertIn(d.id, self.lines[-1])
+
+    def test_raw_creates_a_raw_dispatch(self):
+        self.lines = []
+        rc = send.cmd_send(self.cfg, tmux_runner(), self.lines.append, "b", "/compact", wait=False,
+                           status_fn=self.status_fn, now_fn=lambda: NOW, raw=True)
+        self.assertEqual(rc, 0)
+        d = dispatch.load(self.cfg.state_dir)[0]
+        self.assertEqual((d.raw, d.text, d.state), (True, "/compact", "sent"))
+        self.assertEqual(send.cmd_send(self.cfg, FakeRunner(strict=True), self.lines.append, "b", "hi", wait=False,
+                                       status_fn=self.status_fn, now_fn=lambda: NOW, raw=True), 2)
+        self.assertEqual(self.lines[-1], "❌ " + send.raw_problem("hi"))
 
     def test_wait_prints_the_reply(self):
         def capture(args):

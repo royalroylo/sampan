@@ -1,10 +1,12 @@
 import json
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sampan.claude_state import (
     Reply,
+    command_reply,
     find_transcript,
     last_user_text,
     read_session_files,
@@ -316,3 +318,68 @@ class ReplyToTest(unittest.TestCase):
         f = Path(tempfile.mkdtemp()) / "t.jsonl"
         f.write_text("not json\n" + json.dumps(u("hi")) + "\n[1]\n" + json.dumps(a(text("ok"))) + "\n")
         self.assertEqual(reply_to(f, "hi"), Reply(True, True, "ok"))
+
+
+AFTER = datetime(2026, 10, 31, 4, 0, 0, tzinfo=timezone.utc)  # sent_at of a direct send
+OLD, NEW = "2026-10-31T03:59:59.900Z", "2026-10-31T04:00:01.250Z"
+
+
+def sysrec(content, ts=NEW):
+    return {"type": "system", "subtype": "local_command", "content": content, "timestamp": ts}
+
+
+class CommandReplyTest(unittest.TestCase):
+    """A direct send (a / command typed as is): the records Claude 2.1.287 writes for it, at or after sent_at."""
+
+    def test_compact_records(self):
+        f = write_jsonl([u("/compact", timestamp=NEW), {"type": "system", "subtype": "compact_boundary", "timestamp": NEW},
+                         u("This session is being continued...", isCompactSummary=True, timestamp=NEW),
+                         u("<command-name>/compact</command-name>\n<command-message>compact</command-message>",
+                           timestamp=NEW),
+                         u("<local-command-stdout>Compacted</local-command-stdout>", timestamp=NEW)])
+        self.assertEqual(command_reply(f, "/compact", AFTER), Reply(True, False, ""))
+
+    def test_typed_line_alone_counts(self):
+        f = write_jsonl([u("/compact", timestamp=NEW)])
+        self.assertTrue(command_reply(f, "/compact", AFTER).found)
+
+    def test_command_name_with_args(self):
+        f = write_jsonl([u("<command-name>/model</command-name>\n<command-args>sonnet</command-args>", timestamp=NEW),
+                         u("<local-command-stdout>Set model</local-command-stdout>", timestamp=NEW)])
+        self.assertEqual(command_reply(f, "/model sonnet", AFTER), Reply(True, False, ""))
+        self.assertFalse(command_reply(f, "/mode", AFTER).found)  # the whole command word, not a prefix
+
+    def test_local_command_system_record_counts(self):
+        f = write_jsonl([sysrec("<command-name>/context</command-name>\n<command-message>context</command-message>"),
+                         sysrec("<local-command-stdout>ctx</local-command-stdout>")])
+        self.assertEqual(command_reply(f, "/context", AFTER), Reply(True, False, ""))
+
+    def test_other_system_records_do_not_count(self):
+        f = write_jsonl([{"type": "system", "subtype": "informational", "timestamp": NEW,
+                          "content": "<command-name>/context</command-name>"}])
+        self.assertFalse(command_reply(f, "/context", AFTER).found)
+
+    def test_before_after_is_not_ours(self):
+        f = write_jsonl([u("/compact", timestamp=OLD), u("<command-name>/compact</command-name>", timestamp=OLD),
+                         sysrec("<command-name>/compact</command-name>", ts=OLD)])
+        self.assertEqual(command_reply(f, "/compact", AFTER), Reply(False, False, ""))
+        f = write_jsonl([u("<command-name>/compact</command-name>")])  # no timestamp: never ours
+        self.assertFalse(command_reply(f, "/compact", AFTER).found)
+
+    def test_skill_reply_text(self):
+        f = write_jsonl([u("<command-message>x:summary</command-message>\n<command-name>/x:summary</command-name>",
+                           timestamp=NEW), SKILL, a(text("summary done"))])
+        self.assertEqual(command_reply(f, "/x:summary", AFTER), Reply(True, True, "summary done"))
+
+    def test_window_ends_at_the_next_typed_message(self):
+        f = write_jsonl([u("<command-name>/x:y</command-name>", timestamp=NEW), u("next", timestamp=NEW),
+                         a(text("for next"))])
+        self.assertEqual(command_reply(f, "/x:y", AFTER), Reply(True, False, "", closed=True))
+
+    def test_compaction_summary_is_never_the_command(self):
+        f = write_jsonl([u("<command-name>/compact</command-name>", isCompactSummary=True, timestamp=NEW)])
+        self.assertFalse(command_reply(f, "/compact", AFTER).found)
+
+    def test_missing_file(self):
+        self.assertEqual(command_reply(Path(tempfile.mkdtemp()) / "none.jsonl", "/compact", AFTER),
+                         Reply(False, False, ""))

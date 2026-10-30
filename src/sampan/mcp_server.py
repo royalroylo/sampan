@@ -60,7 +60,10 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {
          "session": _str("對方的 session 名稱（list_sessions 看）"),
          "message": _str("要送的訊息"),
-         "wait": {"type": "boolean", "description": "等回覆（最多 60 秒）", "default": False}},
+         "wait": {"type": "boolean", "description": "等回覆（最多 60 秒）", "default": False},
+         "raw": {"type": "boolean", "default": False,
+                 "description": "直接送：不加 sampan 的轉送標頭，讓對方的 Claude 當作指令執行（例如 /compact）；"
+                                "只限 Claude，一行、以 / 開頭、最多 500 字"}},
          "required": ["session", "message"]}},
     {"name": "new_session",
      "description": "開一個新的 sampan session，並把 message 當作它的第一個 prompt。回傳派工編號，之後用 dispatch_result 看回覆。",
@@ -413,9 +416,11 @@ class Server:
 
     def tool_send(self, args):
         to, message = _arg_str(args, "session"), _arg_str(args, "message")
-        wait = args.get("wait", False)
+        wait, raw = args.get("wait", False), args.get("raw", False)
         if not isinstance(wait, bool):
             raise ToolError("參數 wait 要是 true 或 false")
+        if not isinstance(raw, bool):
+            raise ToolError("參數 raw 要是 true 或 false")
         if session_run.has_control(to):
             raise ToolError(f"session 名稱不能含換行或控制字元：{to!r}")
         caller = self._refresh_caller()
@@ -426,7 +431,7 @@ class Server:
         if problem:
             raise ToolError(problem)
         d = send.submit(self.cfg, self.run, caller, to, message, notify=not wait, now=self.now_fn(),
-                        snapshot_fn=self.snapshot_fn, status_fn=self.status_fn)
+                        snapshot_fn=self.snapshot_fn, status_fn=self.status_fn, raw=raw)
         if isinstance(d, str):
             raise ToolError(d)
         self.mine.add(d.id)

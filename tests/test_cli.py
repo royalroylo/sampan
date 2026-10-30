@@ -351,11 +351,16 @@ class CliTest(unittest.TestCase):
                 mock.patch("sampan.send.command_caller", return_value=TERMINAL):
             self.assertEqual(cli.main(["send", "api", "多行\n訊息", "--wait", "--timeout", "30"]), 124)
         self.assertEqual(cs.call_args.args[3:], ("api", "多行\n訊息"))
-        self.assertEqual(cs.call_args.kwargs, {"wait": True, "timeout": 30, "caller": TERMINAL})
+        self.assertEqual(cs.call_args.kwargs, {"wait": True, "timeout": 30, "caller": TERMINAL, "raw": False})
         with mock.patch("sampan.send.cmd_send", return_value=0) as cs, \
                 mock.patch("sampan.send.command_caller", return_value=TERMINAL):
             self.assertEqual(cli.main(["send", "api", "hi"]), 0)
-        self.assertEqual(cs.call_args.kwargs, {"wait": False, "timeout": 600, "caller": TERMINAL})
+        self.assertEqual(cs.call_args.kwargs, {"wait": False, "timeout": 600, "caller": TERMINAL, "raw": False})
+        with mock.patch("sampan.send.cmd_send", return_value=0) as cs, \
+                mock.patch("sampan.send.command_caller", return_value=TERMINAL):
+            self.assertEqual(cli.main(["send", "api", "/compact", "--raw"]), 0)
+        self.assertEqual(cs.call_args.args[3:], ("api", "/compact"))
+        self.assertIs(cs.call_args.kwargs["raw"], True)
 
     def test_send_run_by_an_agent_is_labelled_as_that_session(self):  # final review 9
         import dataclasses
@@ -507,6 +512,13 @@ class AgentRefusedTest(unittest.TestCase):
         from sampan.send import AGENT_REFUSED
         with mock.patch("sampan.send.cmd_send") as cs:
             rc, text, _ = self.run_cli(["send", "api", "hi"], self.SESSION)
+        self.assertEqual((rc, cs.call_count), (2, 0))
+        self.assertIn(AGENT_REFUSED, text)
+
+    def test_send_raw_is_refused_for_an_agent_when_confirm_is_on(self):
+        from sampan.send import AGENT_REFUSED
+        with mock.patch("sampan.send.cmd_send") as cs:
+            rc, text, _ = self.run_cli(["send", "api", "/compact", "--raw"], self.SESSION)
         self.assertEqual((rc, cs.call_count), (2, 0))
         self.assertIn(AGENT_REFUSED, text)
 
