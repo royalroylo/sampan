@@ -1,5 +1,7 @@
+import hashlib
 import json
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -167,6 +169,45 @@ def _auth(cfg, run):
             out.append(Check("ok", f"{p.name}：已登入 {data.get('email', '')}".rstrip()))
         else:
             out.append(Check("fail", f"{p.name}：未登入", f"sampan claude {p.name} 後執行 /login"))
+    return out
+
+
+KEYCHAIN_SERVICE = "Claude Code-credentials"  # Claude adds "-" + sha256(CLAUDE_CONFIG_DIR)[:8] when the variable is set
+_MDAT_RE = re.compile(r'"mdat"<timedate>=\S*\s+"(\d{14})Z')
+
+
+def _keychain_service(p):
+    return KEYCHAIN_SERVICE if p.default else \
+        f"{KEYCHAIN_SERVICE}-{hashlib.sha256(str(p.config_dir).encode()).hexdigest()[:8]}"
+
+
+def _keychain_mtime(run, service):
+    """When the login keychain item was last written; None when there is none or it cannot be read. Only the item's
+    attributes are read (never -w / -g: no secret, and no permission dialog)."""
+    r = run(["security", "find-generic-password", "-s", service])
+    m = _MDAT_RE.search(r.stdout or "") if r.returncode == 0 else None
+    return datetime.strptime(m.group(1), "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc) if m else None
+
+
+def _two_logins(cfg, run, platform):
+    """macOS: a profile with a login both in the keychain and in .credentials.json. Claude uses the keychain when it
+    can open it (a tmux server started from the desktop) and the file when it cannot (one started over SSH), so one
+    copy goes stale; after a reboot the other kind of start picks the stale one and the profile reads as logged out."""
+    if platform != "darwin":
+        return []
+    out = []
+    for p in _present(cfg):
+        f = Path(p.config_dir) / ".credentials.json"
+        if not f.is_file():
+            continue
+        kc = _keychain_mtime(run, _keychain_service(p))
+        if kc is None:
+            continue
+        ft = datetime.fromtimestamp(f.stat().st_mtime, timezone.utc)
+        newer = "，檔案比較新（鑰匙圈那份可能已經過期）" if ft > kc else ""
+        out.append(Check("warn", f"{p.name}：登入資訊有兩份（鑰匙圈 {fmt_local(kc)}、.credentials.json {fmt_local(ft)}）",
+                         f"Claude 能開鑰匙圈時（tmux 從桌面的終端機開）用鑰匙圈那份，不能時（從 SSH 開）用檔案那份{newer}；"
+                         f"兩份不同步，重開機後可能變成未登入。處理：在桌面（不是 SSH）開的終端機裡，於 {p.name} 的 session 執行 /login"))
     return out
 
 
@@ -372,7 +413,7 @@ def run_checks(cfg, run, *, now, uid, sampan_path=None, proc_root=PROC_ROOT, whi
     sampan_path = sampan_path or current_sampan()
     current = current or update_mod.current_version()
     latest_fn = latest_fn or (lambda: update_mod.check(cfg.state_dir, run=run)[0])
-    return (_version(current, latest_fn) + _deps(cfg, which, env, platform) + _profile_dirs(cfg) + _owners(cfg, uid) + _plugins(cfg) + _auth(cfg, run) + _stale(cfg, run)
+    return (_version(current, latest_fn) + _deps(cfg, which, env, platform) + _profile_dirs(cfg) + _owners(cfg, uid) + _plugins(cfg) + _auth(cfg, run) + _two_logins(cfg, run, platform) + _stale(cfg, run)
             + _hooks(cfg) + _statusline(cfg, now) + _codex(cfg) + _codex_daemon(cfg, run, daemon_fn) + _mcp(cfg) + _detach_key(cfg, run) + _multi_agent(cfg, run, proc_root) + _action_log(cfg)
             + (_launchd(cfg, run, sampan_path) + _save_log(cfg, now) if platform == "darwin" else
                [Check("info", "這台不是 macOS，沒有自動存檔排程（需要時自己跑 sampan save，或用 cron／systemd timer）")]))

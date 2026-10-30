@@ -448,3 +448,87 @@ class DetachKeyDoctorTest(unittest.TestCase):
         self.assertIn("C-q", c.title)
         r = FakeRunner(strict=True).on(["tmux", "-u", "list-keys"], cp(rc=1))
         self.assertEqual(_detach_key(cfg, r), [])
+
+
+KEYCHAIN_ATTRS = """keychain: "/Users/u/Library/Keychains/login.keychain-db"
+class: "genp"
+attributes:
+    "acct"<blob>="u"
+    "cdat"<timedate>=0x32303236303932303133343334315A00  "20260920134341Z\\000"
+    "mdat"<timedate>=0x32303236303932303133343334315A00  "{mdat}\\000"
+    "svce"<blob>="{svce}"
+"""
+
+
+class TwoLoginsDoctorTest(unittest.TestCase):
+    """10/30 reboot: a profile had a keychain login (9/20) and a newer .credentials.json written from SSH-started sessions;
+    once the keychain was unlocked Claude used the stale copy and the profile read as logged out."""
+
+    def setUp(self):
+        self.cfg = make_env(Path(tempfile.mkdtemp()))
+        self.items = {}  # service -> mdat
+
+    def runner(self):
+        def security(a):
+            assert "-w" not in a and "-g" not in a, a  # never the secret
+            svc = a[a.index("-s") + 1]
+            return cp(out=KEYCHAIN_ATTRS.format(mdat=self.items[svc], svce=svc)) if svc in self.items else \
+                cp(rc=44, err="security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.")
+        return FakeRunner().on(["security", "find-generic-password"], security)
+
+    def svc(self, profile):
+        import hashlib
+        p = self.cfg.profiles[profile]
+        return "Claude Code-credentials" if p.default else \
+            "Claude Code-credentials-" + hashlib.sha256(str(p.config_dir).encode()).hexdigest()[:8]
+
+    def file(self, profile, when):
+        f = self.cfg.profiles[profile].config_dir / ".credentials.json"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("{}")
+        os.utime(f, (when.timestamp(), when.timestamp()))
+
+    def checks(self, platform="darwin"):
+        from sampan.doctor import _two_logins
+        return _two_logins(self.cfg, self.runner(), platform)
+
+    def test_keychain_and_newer_file_warns_with_the_fix(self):
+        self.items[self.svc("work")] = "20260920134341Z"
+        self.file("work", datetime(2026, 10, 30, 6, 33, tzinfo=timezone(timedelta(hours=8))))
+        [c] = self.checks()
+        self.assertEqual(c.level, "warn")
+        self.assertIn("work", c.title)
+        self.assertIn("兩份", c.title)
+        self.assertIn("/login", c.detail)
+        self.assertIn("檔案比較新", c.detail)
+
+    def test_both_present_keychain_newer_still_warns(self):
+        self.items[self.svc("work")] = "20261030065605Z"
+        self.file("work", datetime(2026, 10, 30, 6, 33, tzinfo=timezone(timedelta(hours=8))))
+        [c] = self.checks()
+        self.assertEqual(c.level, "warn")
+        self.assertNotIn("檔案比較新", c.detail)
+
+    def test_only_one_copy_is_fine(self):
+        self.items[self.svc("work")] = "20261030065605Z"  # keychain only
+        self.file("alice", NOW)  # file only
+        self.assertEqual(self.checks(), [])
+
+    def test_default_profile_uses_the_unsuffixed_service(self):
+        default = next(p for p in self.cfg.profiles.values() if p.default)
+        self.items["Claude Code-credentials"] = "20261030065605Z"
+        self.file(default.name, NOW)
+        self.assertEqual(len(self.checks()), 1)
+
+    def test_not_macos_reads_no_keychain(self):
+        self.file("work", NOW)
+        r = self.runner()
+        from sampan.doctor import _two_logins
+        self.assertEqual(_two_logins(self.cfg, r, "linux"), [])
+        self.assertEqual(r.called(["security"]), [])
+
+    def test_unreadable_keychain_says_nothing(self):
+        self.file("work", NOW)
+        r = FakeRunner().on(["security", "find-generic-password"], cp(rc=51, err="user interaction is not allowed"))
+        from sampan.doctor import _two_logins
+        self.assertEqual(_two_logins(self.cfg, r, "darwin"), [])
