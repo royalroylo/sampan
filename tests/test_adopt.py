@@ -374,6 +374,10 @@ class FlowTest(Base):
         self.assertIn("▶ 請到原本的終端機視窗（tmux 外）裡「~/proj.v2」那個 Claude 輸入 /exit", t)
         self.assertIn("  等待它結束…（按 Ctrl-C 取消，什麼都不會改）", t)
         self.assertLess(t.index("✔ 已結束"), t.index("✔ 開好 tmux session「proj-v2」，接回同一段對話（alice）"))
+        from tests.test_session_run import action_lines
+        lines = action_lines(self.cfg)
+        self.assertIn("[接手] 接手：claude ~/proj.v2（pid 600）", lines[0])
+        self.assertTrue(any("開好 tmux session「proj-v2」" in x for x in lines), lines)
 
     def test_reports_opened_sessions(self):
         self.iterm_claude(600)

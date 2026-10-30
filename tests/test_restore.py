@@ -488,6 +488,19 @@ class RestoreTest(Base):
         self.assertEqual(asked, [])
         self.assertEqual(opened, ["b"])
 
+    def test_reattach_is_logged_and_a_dry_run_is_not(self):
+        from tests.test_session_run import action_lines
+        self.transcript(B)
+        self.registry([Row("b", "claude", "alice", B, str(self.cwd))])
+        cmd_restore(self.cfg, self.runner(), self.msgs.append, lambda p: "", names=("b",), dry_run=True,
+                    sleep=self.sleep, now_fn=lambda: NOW, timeout=0, alive=dead)
+        self.assertEqual(action_lines(self.cfg), [])
+        cmd_restore(self.cfg, self.runner(), self.msgs.append, lambda p: "", names=("b",), confirm=False,
+                    sleep=self.sleep, now_fn=lambda: NOW, timeout=0, alive=dead)
+        lines = action_lines(self.cfg)
+        self.assertTrue(lines and all("[接回]" in x for x in lines), lines)
+        self.assertIn("[接回] 接回：b", lines[0])
+
     def test_no_wait_sends_resume_and_returns_without_watching(self):
         self.transcript(B)
         self.registry([Row("b", "claude", "alice", B, str(self.cwd))])

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import codex_daemon
+from . import actionlog, codex_daemon
 from .claude_state import transcript_problem
 from .codex_state import _is_codex, find_rollout
 from .launch import launch_line, send_line
@@ -269,6 +269,10 @@ def cmd_restore(cfg, run, out, ask, *, names=(), select_all=False, dry_run=False
         if picked is None:
             out("已取消，什麼都沒做")
             return 0
+    if not dry_run and picked:  # from here on what happens is logged (a restart's own label stays when it runs this)
+        out = actionlog.tee(cfg, "接回", out)
+        on_prompt = actionlog.logged_prompt(cfg, "接回", on_prompt)
+        out(f"接回：{'、'.join(dict.fromkeys(picked))}")
     by_name = {c.row.tmux: c for c in cands}
     tmux = Tmux(run)
     skipped = [(c.row.tmux, c.skip) for c in cands if c.skip]

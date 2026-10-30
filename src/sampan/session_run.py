@@ -132,7 +132,10 @@ def check_new(cfg, run, name, target, cwd):
 def cmd_new(cfg, run, out, name, target, cwd, *, folder=None, **kw):
     """cmd_new_session, then (only when it was not a dry run and returned 0, or returned 1 with the tmux session up:
     Codex is ready but not registered yet) put the session in the folder `folder` of folders.json, creating it.
-    A failed write is only a warning; the return code is the session's."""
+    A failed write is only a warning; the return code is the session's. Logged in actions.log (not a dry run)."""
+    if not kw.get("dry_run"):
+        out = actionlog.tee(cfg, f"new {name}", out)
+        kw["on_prompt"] = actionlog.logged_prompt(cfg, f"new {name}", kw.get("on_prompt"))
     if folder is not None:
         folder = folder.strip().strip("/")
         try:
@@ -353,6 +356,8 @@ def cmd_stop(cfg, run, out, *, names=(), profile=None, force=False, dry_run=Fals
     """stopped / left: when given lists, receive the names of sessions that ended, and of wanted sessions that were not stopped.
     why: when given a dict, receives {name: reason} for each one in left (shown next to the name by a restart)."""
     from .save import cmd_save
+    if not dry_run:
+        out = actionlog.tee(cfg, "stop", out)
 
     # save's lines are held back until we know tmux is readable: when it is not, save has said so already and
     # the stop message below says it again, so only that one is shown
@@ -556,6 +561,9 @@ def cmd_move(cfg, run, out, name, dest, *, dry_run=False, sleep=time.sleep, time
     profile (Claude only, used by cmd_switch): reattach under this profile instead of the registered one; a transcript the new
     profile cannot see is moved to it (never copied) after the agent has exited."""
     from .save import cmd_save
+    if not dry_run:  # switch has already wrapped both under its own label, which then stays
+        out = actionlog.tee(cfg, f"move {name}", out)
+        on_prompt = actionlog.logged_prompt(cfg, f"move {name}", on_prompt)
     rows = _load(cfg, out)
     if rows is None:
         return 2

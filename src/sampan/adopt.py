@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import claude_state, codex_daemon, codex_state
+from . import actionlog, claude_state, codex_daemon, codex_state
 from .claude_state import find_transcript, read_session_files, transcript_problem, transcript_stats
 from .clock import now_iso
 from .codex_state import (
@@ -417,6 +417,9 @@ def cmd_adopt(cfg, run, out, ask, *, dry_run=False, picker_fn=None, sleep=time.s
         return 0
     by_key = {c.key: c for c in cands}
     todo = [by_key[k] for k in dict.fromkeys(picked) if k in by_key and not by_key[k].skip]
+    if todo:
+        out = actionlog.tee(cfg, "接手", out)
+        out(f"接手：{'、'.join(f'{c.agent} {c.where}（pid {c.pid}）' for c in todo)}")
     problems, used = any(c.skip for c in cands), set()
     for c in todo:
         name = _ask_name(cfg, run, out, ask, c, used)

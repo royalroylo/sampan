@@ -96,6 +96,13 @@ class ActionLogTest(unittest.TestCase):
             f"{STAMP} [重開] a（claude）提示「Do you trust the files in this folder?」→ None"])
         self.assertIsNone(actionlog.logged_prompt(self.cfg, "重開", None))
 
+    def test_nested_prompt_logging_answers_once_under_the_outer_label(self):
+        p = NS(question="Q?", options=("A",))
+        outer = actionlog.logged_prompt(self.cfg, "重開", lambda *a: 0, now=lambda: STAMP)
+        self.assertIs(actionlog.logged_prompt(self.cfg, "接回", outer), outer)
+        outer("s1", "claude", p)
+        self.assertEqual(self.lines(), [f"{STAMP} [重開] s1（claude）提示「Q?」→ 1. A"])
+
     def test_restart_logs_prompt_answers(self):
         from sampan import plugin_apply as pa
         seen = {}

@@ -57,8 +57,8 @@ def append(cfg, label, lines, *, now=_now):
 
 def logged_prompt(cfg, label, on_prompt, *, now=_now):
     """on_prompt (prompts.Relay's question to the user) that also logs which answer was given; None stays None."""
-    if on_prompt is None or getattr(cfg, "state_dir", None) is None:
-        return on_prompt
+    if on_prompt is None or getattr(cfg, "state_dir", None) is None or getattr(on_prompt, "actionlog", False):
+        return on_prompt  # one already logging (an action inside another): answers are logged once, under the outer label
     from .prompts import prompt_choices  # lazy: prompts pulls in the screen parsers
 
     def ask(name, agent, p):
@@ -66,6 +66,7 @@ def logged_prompt(cfg, label, on_prompt, *, now=_now):
         answer = next((text for text, value in prompt_choices(p) if value == choice and choice is not None), str(choice))
         append(cfg, label, [f"{name}（{agent}）提示「{p.question or '（認不出問題）'}」→ {answer}"], now=now)
         return choice
+    ask.actionlog = True
     return ask
 
 

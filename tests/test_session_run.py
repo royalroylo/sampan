@@ -9,7 +9,7 @@ from sampan import actionlog, deliver, dispatch, folders
 from sampan.prompts import SKIP
 from sampan.registry import Row, load_rows, write_rows
 from sampan.send import Caller
-from sampan.session_run import check_new, cmd_forget, cmd_new, cmd_rename, cmd_set_state
+from sampan.session_run import check_new, cmd_forget, cmd_new, cmd_rename, cmd_set_state, cmd_stop
 from tests.fakes import FakeRunner, cp, pane_line, ps_line
 from tests.helpers import make_env
 from tests.test_claude_state import write_session
@@ -19,6 +19,12 @@ B = "bbbbbbbb-0000-4000-8000-000000000002"
 TID = "01a1568b-81c2-71f1-99f7-b7a590f4ed96"
 IDLE = (Path(__file__).resolve().parent / "fixtures" / "codex_idle.txt").read_text()
 
+
+
+def action_lines(cfg):
+    from sampan import actionlog
+    path = actionlog.log_path(cfg)
+    return path.read_text().splitlines() if path.exists() else []
 
 class Base(unittest.TestCase):
     def setUp(self):
@@ -396,6 +402,26 @@ class NewAndStateTest(Base):
                      uuid4=lambda: B, timeout=5, trust=True, on_prompt=lambda n, a, p: asked.append(p.trust_path) or SKIP)
         self.assertEqual((rc, asked), (1, ["/another/dir"]))
         self.assertEqual([k[1:] for k in sent[1:]], [["Down"], ["Enter"]])
+
+    def test_new_is_logged_with_its_prompt_answers_and_a_dry_run_is_not(self):
+        r, _ = self.trust_runner(str(self.cwd.resolve()))
+        cmd_new(self.cfg, r, self.msgs.append, "new-x", "work", str(self.cwd), dry_run=True)
+        self.assertEqual(action_lines(self.cfg), [])
+        cmd_new(self.cfg, r, self.msgs.append, "new-x", "work", str(self.cwd), sleep=lambda _: None,
+                uuid4=lambda: B, timeout=5, on_prompt=lambda *_a: 1)
+        lines = action_lines(self.cfg)
+        self.assertTrue(lines and all("[new new-x]" in x for x in lines), lines)
+        self.assertTrue(any("已登記" in x for x in lines), lines)
+        self.assertTrue(any("提示" in x and "→" in x for x in lines), lines)  # the trust answer the user gave
+
+    def test_stop_and_move_are_logged(self):
+        cmd_stop(self.cfg, self.runner(), self.msgs.append, names=("nope",), dry_run=True)
+        self.assertEqual(action_lines(self.cfg), [])
+        cmd_stop(self.cfg, self.runner(), self.msgs.append, names=("nope",))
+        self.assertTrue(any("[stop]" in x for x in action_lines(self.cfg)), action_lines(self.cfg))
+        from sampan.session_run import cmd_move
+        cmd_move(self.cfg, self.runner(), self.msgs.append, "nope", str(self.cwd))
+        self.assertTrue(any("[move nope]" in x for x in action_lines(self.cfg)), action_lines(self.cfg))
 
     def test_new_without_trust_relays_the_trust_prompt(self):
         r, sent = self.trust_runner(str(self.cwd.resolve()))
