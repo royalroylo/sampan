@@ -568,6 +568,92 @@ class ConcurrentAdvanceTest(Base):
         self.assertEqual(self.stored(d.id).state, "sent")
 
 
+def _bump(state_dir, did, rounds):
+    """A writer in its own process: rounds transactions, each adding 1 to dispatch did's batch_skipped."""
+    for _ in range(rounds):
+        with dispatch.transaction(state_dir) as items:
+            d = next(x for x in items if x.id == did)
+            d.batch_skipped += 1
+
+
+class IsolationTest(Base):
+    """A change to one dispatch never touches another record, and concurrent writers never lose an update."""
+
+    def done_and_notified(self, message):
+        d = self.submit(message=message, notify=True)
+        self.assertEqual(self.advance(tmux_runner(), d.id).state, "sent")
+        self.recs.extend([user(self.stored(d.id).text), assistant("answer")])
+        self.transcript(SID_B, self.recs)
+        run = tmux_runner()
+        d = self.advance(run, d.id, later(5))
+        self.assertEqual((d.state, d.notified), ("done", True))
+        return d
+
+    def test_cancel_of_a_queued_dispatch_leaves_finished_ones_alone(self):
+        self.recs = []
+        done = [self.done_and_notified(f"m{i}") for i in range(3)]
+        before = {d.id: self.stored(d.id) for d in done}
+        self.set_row("b", agent_status="busy")
+        q = self.submit(message="queued one", notify=True)
+        self.assertEqual(self.advance(FakeRunner(strict=True), q.id).state, "queued")
+        self.assertEqual(send.cancel(self.cfg, q.id, now=later(6)).state, "cancelled")
+        self.set_row("b", agent_status="idle")
+        self.assertEqual(send.pending(self.cfg), [])
+        for d in [*done, q]:
+            run = FakeRunner(strict=True)  # any tmux call would raise
+            self.advance(run, d.id, later(30))
+            self.assertEqual(run.calls, [])
+        self.assertEqual({d.id: self.stored(d.id) for d in done}, before)
+        self.assertEqual(self.stored(q.id).state, "cancelled")
+
+    def test_concurrent_processes_do_not_lose_updates(self):
+        import multiprocessing
+        d1, d2 = self.submit(message="one"), self.submit(message="two")
+        ctx = multiprocessing.get_context("spawn")
+        rounds = 40
+        procs = [ctx.Process(target=_bump, args=(self.cfg.state_dir, did, rounds)) for did in (d1.id, d2.id)]
+        for p in procs:
+            p.start()
+        for p in procs:
+            p.join(60)
+            self.assertEqual(p.exitcode, 0)
+        self.assertEqual((self.stored(d1.id).batch_skipped, self.stored(d2.id).batch_skipped), (rounds, rounds))
+
+    def test_concurrent_threads_do_not_lose_updates(self):
+        d1, d2 = self.submit(message="one"), self.submit(message="two")
+        threads = [threading.Thread(target=_bump, args=(self.cfg.state_dir, did, 100)) for did in (d1.id, d2.id)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(30)
+        self.assertEqual((self.stored(d1.id).batch_skipped, self.stored(d2.id).batch_skipped), (100, 100))
+
+    def test_cancel_racing_an_advance_of_another_dispatch(self):
+        d1, d2 = self.submit(message="one"), self.submit(message="two")
+        inside = threading.Event()
+
+        def slow_delivery(tmux, pane_id, outbox, did, sleep, raw=False):
+            inside.set()
+            time.sleep(0.2)  # the cancel below runs now and waits for the lock
+            return None
+
+        results = {}
+
+        def advancer():
+            results["advance"] = send.advance(self.cfg, FakeRunner(strict=True), d1.id, sleep=lambda s: None,
+                                              status_fn=self.status_fn, now=NOW)
+
+        with mock.patch.object(deliver, "to_claude", side_effect=slow_delivery):
+            t = threading.Thread(target=advancer)
+            t.start()
+            self.assertTrue(inside.wait(5))
+            results["cancel"] = send.cancel(self.cfg, d2.id, now=NOW)
+            t.join(10)
+        self.assertEqual(results["advance"].state, "sent")
+        self.assertEqual(results["cancel"].state, "cancelled")
+        self.assertEqual((self.stored(d1.id).state, self.stored(d2.id).state), ("sent", "cancelled"))
+
+
 class AdvanceCodexTest(Base):
     def codex_runner(self, rc=0, err=""):
         return FakeRunner(strict=True).on(["codex", "queue"], cp(rc, "", err))
