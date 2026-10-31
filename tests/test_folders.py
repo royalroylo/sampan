@@ -126,6 +126,25 @@ class StoreTest(unittest.TestCase):
         registry.write_rows(self.dir / "registry.json", rows, "t", self.dir / "history")
         self.assertEqual(folders.load(self.dir).sessions, {"a2": "客戶"})
 
+    def test_pending_member_survives_save_until_registered(self):
+        rows = self.rows("a1")
+        tree = Tree({"客戶": False}, {"a1": "客戶", "n1": "客戶"})
+        folders.save(self.dir, tree, rows)
+        data = json.loads((self.dir / folders.FOLDERS_FILE).read_text())
+        self.assertEqual(data["pending"], {"n1": tree.ids["客戶"]})
+        self.assertEqual(folders.load(self.dir, rows).sessions, {"a1": "客戶", "n1": "客戶"})
+
+    def test_pending_member_moves_to_sessions_once_registered(self):
+        rows = self.rows("a1")
+        folders.save(self.dir, Tree({"客戶": False}, {"n1": "客戶"}), rows)
+        rows = self.rows("a1", "n1")
+        tree = folders.load(self.dir, rows)
+        self.assertEqual(tree.sessions, {"n1": "客戶"})
+        folders.save(self.dir, tree, rows)
+        data = json.loads((self.dir / folders.FOLDERS_FILE).read_text())
+        self.assertEqual(data["sessions"], {"id-n1": tree.ids["客戶"]})
+        self.assertEqual(data["pending"], {})
+
     def test_unknown_session_id_dropped(self):
         rows = self.rows("a1")
         folders.save(self.dir, Tree({"客戶": False}, {"a1": "客戶"}), rows)

@@ -669,6 +669,17 @@ class FolderSyncTest(Base):
         self.assertEqual(rc, 1)
         self.assertEqual(folders.load(self.cfg.state_dir).sessions["n1"], "開發")
 
+    def test_new_codex_with_folder_keeps_folder(self):
+        # not registered yet when the folder is placed: it waits as pending, then follows the row once it exists
+        from unittest import mock
+        self.live.add("n1")
+        with mock.patch("sampan.session_run._cmd_new", return_value=1):
+            cmd_new(self.cfg, self.runner(), self.msgs.append, "n1", "codex", str(self.cwd), folder="開發")
+        self.assertEqual(folders.load(self.cfg.state_dir).sessions["n1"], "開發")
+        self.registry([Row("a1", "claude", "alice", A, str(self.cwd), "active", "t", "srv", None),
+                       Row("n1", "codex", "alice", B, str(self.cwd), "active", "t", "srv", None)])
+        self.assertEqual(folders.load(self.cfg.state_dir).sessions["n1"], "開發")
+
     def test_new_rc1_without_tmux_session_does_not_place(self):
         from unittest import mock
         with mock.patch("sampan.session_run._cmd_new", return_value=1):

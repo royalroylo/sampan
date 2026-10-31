@@ -125,7 +125,7 @@ def _load_v1(path, raw_folders, raw_sessions):
     return tree
 
 
-def _load_v2(path, raw_folders, raw_sessions, rows):
+def _load_v2(path, raw_folders, raw_sessions, rows, raw_pending):
     for fid, meta in raw_folders.items():
         if (not isinstance(meta, dict) or not isinstance(meta.get("name"), str)
                 or not isinstance(meta.get("collapsed", False), bool)
@@ -156,7 +156,7 @@ def _load_v2(path, raw_folders, raw_sessions, rows):
             raise _unreadable(f"{path} 的資料夾「{p}」重複了")
         tree.folders[p] = meta.get("collapsed", False)
         tree.ids[p] = fid
-    if raw_sessions:
+    if raw_sessions or raw_pending:
         if rows is None:
             rows = _registry_rows(Path(path).parent)
         names = {r.id: r.tmux for r in rows if r.id}
@@ -165,6 +165,11 @@ def _load_v2(path, raw_folders, raw_sessions, rows):
                 raise _unreadable(f"{path} 的 session {sid} 格式不對")
             if sid in names:  # a session that no longer exists is dropped
                 tree.sessions[names[sid]] = path_of(fid)
+        # pending: placed before the session had a registry row; once it has an id it is a normal member
+        for name, fid in raw_pending.items():
+            if not isinstance(fid, str) or fid not in raw_folders:
+                raise _unreadable(f"{path} 的 pending「{name}」格式不對")
+            tree.sessions.setdefault(name, path_of(fid))
     return tree
 
 
@@ -188,7 +193,10 @@ def load(state_dir, rows=None):
     if data["version"] == 1:
         tree = _load_v1(path, raw_folders, raw_sessions)
     else:
-        tree = _load_v2(path, raw_folders, raw_sessions, rows)
+        raw_pending = data.get("pending", {})
+        if not isinstance(raw_pending, dict):
+            raise _unreadable(f"{path} 的 pending 格式不對")
+        tree = _load_v2(path, raw_folders, raw_sessions, rows, raw_pending)
     for p in list(tree.folders) + list(tree.sessions.values()):  # 「客戶/甲」 implies 「客戶」: make it real
         _ensure(tree, p)
     _fill(tree)
@@ -196,7 +204,7 @@ def load(state_dir, rows=None):
 
 
 def save(state_dir, tree, rows=None):
-    """Write version 2, sessions keyed by Row.id (a session not in rows is not written). While a member session has no
+    """Write version 2, sessions keyed by Row.id (a session with no row waits under "pending" by name). While a member session has no
     id yet (a registry from before 0.15) the version 1 format is written unchanged, so no membership is lost."""
     path = Path(state_dir) / FOLDERS_FILE
     if rows is None:
@@ -212,7 +220,9 @@ def save(state_dir, tree, rows=None):
                 "folders": {tree.ids[p]: {"name": basename(p), "parent": tree.ids.get(parent(p)) if parent(p) else None,
                                           "collapsed": c} for p, c in tree.folders.items()},
                 "sessions": {by_name[n].id: tree.ids[p] for n, p in tree.sessions.items()
-                             if n in by_name and p and p in tree.ids}}
+                             if n in by_name and p and p in tree.ids},
+                # members with no registry row yet (a Codex session placed by `new` before it registers) wait by name
+                "pending": {n: tree.ids[p] for n, p in tree.sessions.items() if n not in by_name and p and p in tree.ids}}
     atomic_write(path, json.dumps(data, ensure_ascii=False, indent=1, sort_keys=True) + "\n", mode=PRIVATE_FILE)
 
 
