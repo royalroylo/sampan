@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-10-31
+
 ### Changed
 - When a caller session is owed several completion or failure notices at once, sampan sends one line covering all of them instead of one message (and one turn) per dispatch: replies grouped by target, each failure with its reason, each batch with its counts, e.g. 〔sampan：b 已回覆派工 a1b2、c3d4；給 d 的派工 e5f6 失敗：對方 session 已停止；用 sampan 工具 dispatch_result 看內容〕. A single notice keeps the old text.
 
