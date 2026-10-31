@@ -366,7 +366,7 @@ class FlowTest(Base):
         self.assertGreaterEqual(sleeps_before, 3)
         self.assertTrue(all(c["args"][:3] != ["tmux", "-u", "send-keys"] for c in r.calls[:first_new]))
         self.assertEqual(r.called(["tmux", "-u", "new-session"])[0]["args"][-4:], ["-s", "proj-v2", "-c", str(self.cwd)])
-        self.assertEqual(self.keys(), [["%50", f"env -u CLAUDE_CONFIG_DIR claude --resume {A}", "Enter"]])
+        self.assertEqual(self.keys(), [["%50", f"env -u CLAUDE_CONFIG_DIR claude --resume {A} --name proj-v2", "Enter"]])
         self.assertEqual([(x.tmux, x.agent, x.profile, x.session_id, x.cwd, x.state)
                           for x in load_rows(self.cfg.registry_path)],
                          [("proj-v2", "claude", "alice", A, str(self.cwd), "active")])

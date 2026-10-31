@@ -164,7 +164,8 @@ def text_picker(out, ask, cands, *, key=_row_key, label=None, prompt=RESTORE_PRO
 def _launch(cfg, tmux, row, live, out, sleep, dry_run):
     """Start one row. Returns the pane id it was sent to; None on dry-run or when tmux new-session fails."""
     pane = next((p for p in live.panes if p.session == row.tmux and p.command in SHELLS), None)
-    cmd = launch_line(cfg, row.agent, row.profile, resume=row.session_id, cwd=row.cwd if pane else None)
+    cmd = launch_line(cfg, row.agent, row.profile, resume=row.session_id, cwd=row.cwd if pane else None,
+                      name=row.tmux)
     if dry_run:
         out(f"[dry-run] {row.tmux}：{'送進既有 shell pane' if pane else '建立 tmux session'} → {cmd}")
         return None

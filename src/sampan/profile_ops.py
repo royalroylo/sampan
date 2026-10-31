@@ -306,7 +306,7 @@ def _resume_line(cfg, p, row):
         line = shell_command(codex_argv(resume=row.session_id, extra=("-C", row.cwd) if row.cwd else ()),
                              env_set=env, cwd=row.cwd or None)
     else:
-        line = shell_command(claude_argv(p, resume=row.session_id), env_set={"CLAUDE_CONFIG_DIR": str(p.config_dir)},
+        line = shell_command(claude_argv(p, resume=row.session_id, name=row.tmux), env_set={"CLAUDE_CONFIG_DIR": str(p.config_dir)},
                              cwd=row.cwd or None)
     return f"  對話還在：{line}"
 

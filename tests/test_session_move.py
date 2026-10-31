@@ -119,7 +119,7 @@ class MoveFixture(unittest.TestCase):
         return {r.tmux: r for r in load_rows(self.cfg.registry_path)}["994-monitor"]
 
     def launch(self):
-        return [f"cd {self.dest} && env -u CLAUDE_CONFIG_DIR claude --resume {A}", "Enter"]
+        return [f"cd {self.dest} && env -u CLAUDE_CONFIG_DIR claude --resume {A} --name 994-monitor", "Enter"]
 
 
 class MoveTest(MoveFixture):
@@ -446,7 +446,7 @@ class MoveTest(MoveFixture):
         self.dest = (self.cfg.home / "我的 專案").resolve()
         self.trust_shows = str(self.dest)
         self.assertEqual(self.move(), 0)
-        self.assertEqual(self.keys[3], [f"cd '{self.dest}' && env -u CLAUDE_CONFIG_DIR claude --resume {A}", "Enter"])
+        self.assertEqual(self.keys[3], [f"cd '{self.dest}' && env -u CLAUDE_CONFIG_DIR claude --resume {A} --name 994-monitor", "Enter"])
         self.assertEqual(self.keys[4:], [["Down"], ["Enter"]])
         self.assertEqual(self.row().cwd, str(self.dest))
 
@@ -669,7 +669,7 @@ class SwitchTest(MoveFixture):
     def test_running_moves_transcript_and_relaunches_under_new_profile(self):
         self.assertEqual(self.switch(), 0)
         work = self.cfg.profiles["work"].config_dir
-        self.assertIn([f"cd {self.old} && env CLAUDE_CONFIG_DIR={work} claude --resume {A}", "Enter"], self.keys)
+        self.assertIn([f"cd {self.old} && env CLAUDE_CONFIG_DIR={work} claude --resume {A} --name 994-monitor", "Enter"], self.keys)
         self.assertFalse(self.old_transcript().exists())  # moved, never copied: one copy only
         self.assertTrue(self.new_transcript().exists())
         self.assertTrue((self.new_transcript().with_suffix("") / "subagents" / "x.jsonl").exists())

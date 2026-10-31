@@ -60,6 +60,24 @@ class LaunchTest(unittest.TestCase):
                          "cd /p && codex -C /p \"$(cat '/tmp/a b/x.txt')\"")
         self.assertEqual(launch_line(self.cfg, "claude", "alice", session_id=A), f"env -u CLAUDE_CONFIG_DIR claude --session-id {A}")
 
+    def test_name_is_passed_to_claude_after_resume(self):
+        self.assertEqual(launch_line(self.cfg, "claude", "alice", resume=A, name="proj"),
+                         f"env -u CLAUDE_CONFIG_DIR claude --resume {A} --name proj")
+        self.assertEqual(launch_line(self.cfg, "claude", "alice", session_id=A, name="proj"),
+                         f"env -u CLAUDE_CONFIG_DIR claude --session-id {A} --name proj")
+        self.assertEqual(claude_argv(None, resume=A, name="n", extra=("x",)), ["claude", "--resume", A, "--name", "n", "x"])
+
+    def test_name_with_space_and_cjk_is_quoted(self):
+        line = launch_line(self.cfg, "claude", "alice", resume=A, name="rc probe 名稱")
+        self.assertIn("--name 'rc probe 名稱'", line)
+        self.assertEqual(shlex.split(line)[-2:], ["--name", "rc probe 名稱"])
+
+    def test_codex_never_gets_name(self):
+        self.assertNotIn("--name", launch_line(self.cfg, "codex", "", resume=A, name="proj"))
+
+    def test_no_name_means_no_flag(self):
+        self.assertNotIn("--name", launch_line(self.cfg, "claude", "alice", resume=A))
+
     def test_other_profile_sets_config_dir(self):
         self.assertEqual(launch_line(self.cfg, "claude", "work", session_id=A, cwd="/Users/u/p"),
                          f"cd /Users/u/p && env CLAUDE_CONFIG_DIR={self.cfg.profiles['work'].config_dir} claude --session-id {A}")

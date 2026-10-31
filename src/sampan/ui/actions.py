@@ -374,7 +374,7 @@ def _resume_line(cfg, name):
 
     try:
         row = next((r for r in load_rows(cfg.registry_path, codex_profile=cfg.codex.profile) if r.tmux == name), None)
-        return launch_line(cfg, row.agent, row.profile, resume=row.session_id, cwd=row.cwd) if row else None
+        return launch_line(cfg, row.agent, row.profile, resume=row.session_id, cwd=row.cwd, name=row.tmux) if row else None
     except (RegistryError, ValueError, KeyError):
         return None
 

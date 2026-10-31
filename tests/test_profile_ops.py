@@ -465,7 +465,7 @@ class ForgetTest(Base):
         work = self.cfg.home / ".claude-profiles" / "work"
         self.assertEqual(self.msgs, [
             "✔ 已從設定檔拿掉 profile work（目錄 ~/.claude-profiles/work 保留；登記表 2 列一起移除）",
-            f"  對話還在：cd '/c d' && env CLAUDE_CONFIG_DIR={work} claude --resume {A}",
+            f"  對話還在：cd '/c d' && env CLAUDE_CONFIG_DIR={work} claude --resume {A} --name w1",
             "  對話 id ",
         ])
         self.assertIn("[profile forget work] ✔", (self.cfg.state_dir / "actions.log").read_text())

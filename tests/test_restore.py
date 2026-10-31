@@ -290,7 +290,7 @@ class RestoreTest(Base):
         made = [c["args"][-4:] for c in r.called(["tmux", "-u", "new-session"])]
         self.assertEqual(made, [["-s", "003-帳務", "-c", str(self.cwd)], ["-s", "a", "-c", str(self.cwd)]])
         self.assertEqual(self.keys()[0],
-                         ["%50", f"env CLAUDE_CONFIG_DIR={self.cfg.profiles['work'].config_dir} claude --resume {B}", "Enter"])
+                         ["%50", f"env CLAUDE_CONFIG_DIR={self.cfg.profiles['work'].config_dir} claude --resume {B} --name '003-帳務'", "Enter"])
 
     def test_reuses_shell_pane_of_existing_session(self):
         self.transcript(A)
@@ -300,7 +300,7 @@ class RestoreTest(Base):
         r = self.runner()
         self.restore(r)
         self.assertEqual(r.called(["tmux", "-u", "new-session"]), [])
-        self.assertEqual(self.keys(), [["%7", "C-u"], ["%7", f"cd {self.cwd} && env -u CLAUDE_CONFIG_DIR claude --resume {A}", "Enter"]])
+        self.assertEqual(self.keys(), [["%7", "C-u"], ["%7", f"cd {self.cwd} && env -u CLAUDE_CONFIG_DIR claude --resume {A} --name x", "Enter"]])
 
     def test_session_without_shell_pane_skipped(self):
         self.transcript(A)
@@ -342,7 +342,7 @@ class RestoreTest(Base):
                 self.two_rows()
                 self.assertEqual(self.restore(self.per_pane({"%50": claude, "%51": codex}), timeout=10), 1)
                 sent = [k[1:] for k in self.keys()]
-                self.assertEqual(sent, [[f"env -u CLAUDE_CONFIG_DIR claude --resume {A}", "Enter"],
+                self.assertEqual(sent, [[f"env -u CLAUDE_CONFIG_DIR claude --resume {A} --name cl", "Enter"],
                                         [f"codex resume {TID}"], ["Enter"]])
                 self.assertIn("停在信任提示 2", self.text())
                 self.assertIn("請到視窗確認", self.text())

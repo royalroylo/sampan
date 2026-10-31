@@ -7,6 +7,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [0.14.1] - 2026-10-31
 
+### Changed
+- sampan now starts Claude with `--name <tmux name>` on new, restore / `R`, restart / `S`, switch, move and adopt (and in the resume command it prints), so the session name in Claude (prompt line, `/resume`, terminal title, Remote Control) stays the tmux name instead of an auto-generated title that changed after a switch or resume. Codex is unchanged.
+
 ### Fixed
 - A dispatch to a Codex session is no longer marked failed with 「對方這輪結束了，但沒有回覆文字」 while Codex is still working. For Codex, sampan now decides a turn is over only from its rollout (`task_complete`), not from the screen looking idle, which could be misread mid-turn. A turn Codex aborted (`turn_aborted`) now fails with 「對方這輪被中斷了」. Claude is unchanged. A finished turn is recognised as soon as its `task_complete` is in the rollout, even while the screen still reads as working.
 

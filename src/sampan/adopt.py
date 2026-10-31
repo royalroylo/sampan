@@ -340,9 +340,10 @@ def _resume_problem(cfg, run, c, sid):
     return f"這個對話已在 {where} 執行，不重複開" if where else None
 
 
-def _launch_cmd(cfg, c, sid):
+def _launch_cmd(cfg, c, sid, name):
     # codex gets -C <cwd> (added when launch_line is given a cwd); claude, like restore, relies on new-session -c for the directory
-    return launch_line(cfg, c.agent, c.profile, resume=sid, cwd=c.cwd if c.agent == "codex" else None)
+    return launch_line(cfg, c.agent, c.profile, resume=sid, cwd=c.cwd if c.agent == "codex" else None,
+                       name=name)
 
 
 def _adopt_one(cfg, run, out, c, name, sid, sleep, timeout):
@@ -359,7 +360,7 @@ def _adopt_one(cfg, run, out, c, name, sid, sleep, timeout):
     row = Row(name, c.agent, c.profile, sid, c.cwd, "active", now_iso(), tmux.server_id() or "", None)
     if not _register(cfg, out, row):
         return "登記表寫入失敗"
-    send_line(tmux, pane, c.agent, _launch_cmd(cfg, c, sid), sleep)
+    send_line(tmux, pane, c.agent, _launch_cmd(cfg, c, sid, name), sleep)
     resumed, at_trust, _unconfirmed = _watch(cfg, run, {pane: row}, timeout, sleep)
     if resumed:
         out(f"✔ 開好 tmux session「{name}」，接回同一段對話（{c.profile or 'codex'}）")
@@ -404,7 +405,7 @@ def cmd_adopt(cfg, run, out, ask, *, dry_run=False, picker_fn=None, sleep=time.s
             if c.skip is None:
                 name = default_name(c.cwd, _taken(cfg, run, out, used))
                 used.add(name)
-                out(f"[dry-run] {c.where}：結束後建立 tmux session {name} → {_launch_cmd(cfg, c, c.session_id)}")
+                out(f"[dry-run] {c.where}：結束後建立 tmux session {name} → {_launch_cmd(cfg, c, c.session_id, name)}")
         return 0
     if all(c.skip for c in cands):
         return 1

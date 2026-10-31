@@ -69,7 +69,7 @@ class NewAndStateTest(Base):
                           for x in load_rows(self.cfg.registry_path)],
                          [("new-x", "claude", "work", B, str(self.cwd.resolve()), "active", None)])
         self.assertEqual(self.keys_sent(r)[0][1],
-                         f"env CLAUDE_CONFIG_DIR={self.cfg.profiles['work'].config_dir} claude --session-id {B}")
+                         f"env CLAUDE_CONFIG_DIR={self.cfg.profiles['work'].config_dir} claude --session-id {B} --name new-x")
         self.assertTrue(any("信任" in m for m in self.msgs))
 
     def test_new_with_message_sends_it_as_startup_prompt_and_records_a_sent_dispatch(self):
@@ -82,7 +82,7 @@ class NewAndStateTest(Base):
         self.assertEqual(len(keys), 1)  # only the launch command (+ Enter)
         [d] = dispatch.load(self.cfg.state_dir)
         out_path = dispatch.outbox_path(self.cfg.state_dir, d.id)
-        self.assertTrue(keys[0][1].endswith(f"claude --session-id {B} \"$(cat {shlex.quote(str(out_path))})\""))
+        self.assertTrue(keys[0][1].endswith(f"claude --session-id {B} --name new-x \"$(cat {shlex.quote(str(out_path))})\""))
         self.assertEqual(out_path.read_text(), d.text)
         self.assertEqual(d.text, deliver.compose(None, "", d.id, msg).rstrip("\n"))
         self.assertFalse(d.text.endswith("\n"))
@@ -527,6 +527,7 @@ class ForgetTest(Base):
         self.assertEqual(self.msgs[0], "✔ 已從登記表移除 u")
         self.assertIn("  對話還在：", self.msgs[1])
         self.assertIn(f"--resume {A}", self.msgs[1])
+        self.assertIn("--name u", self.msgs[1])
         self.assertEqual(r.called(["tmux", "-u", "kill-session"]), [])
         log = actionlog.log_path(self.cfg).read_text()
         self.assertIn("[forget u] ✔ 已從登記表移除 u", log)

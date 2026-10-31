@@ -179,7 +179,7 @@ def _cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.slee
     if _load(cfg, out) is None:  # registry broken: stop first, so no unregistered empty session is left behind
         return 2
     session_id = str(uuid4()) if agent == "claude" else None
-    cmd = launch_line(cfg, agent, profile, session_id=session_id,
+    cmd = launch_line(cfg, agent, profile, session_id=session_id, name=name,
                       prompt_file=outbox_path(cfg.state_dir, "<派工編號>") if message is not None else None)
     if dry_run:
         out(f"[dry-run] 建立 tmux session {name}（{cwd}）→ {cmd}")
@@ -192,7 +192,8 @@ def _cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.slee
             out(f"❌ {d}")
             return 2
         did = d.id
-        cmd = launch_line(cfg, agent, profile, session_id=session_id, prompt_file=outbox_path(cfg.state_dir, did))
+        cmd = launch_line(cfg, agent, profile, session_id=session_id, name=name,
+                          prompt_file=outbox_path(cfg.state_dir, did))
 
     def abort(reason):
         if did is not None:
@@ -348,7 +349,7 @@ def cmd_forget(cfg, run, out, name, *, dry_run=False):
     if not dry_run:
         folder_cmd.sync_session(cfg, out, "forget", name)  # after the lock: the registry lock is not reentrant
     try:
-        out(f"  對話還在：{launch_line(cfg, row.agent, row.profile, resume=row.session_id, cwd=row.cwd)}")
+        out(f"  對話還在：{launch_line(cfg, row.agent, row.profile, resume=row.session_id, cwd=row.cwd, name=row.tmux)}")
     except (ValueError, KeyError):
         out(f"  對話 id {row.session_id}")
     return 0
@@ -684,7 +685,7 @@ def cmd_move(cfg, run, out, name, dest, *, dry_run=False, sleep=time.sleep, time
         if why:
             out(f"❌ {name}：{why}，不動")
             return 1
-    cmd = launch_line(cfg, agent, new_prof, resume=session_id, cwd=str(target))
+    cmd = launch_line(cfg, agent, new_prof, resume=session_id, cwd=str(target), name=name)
     if dry_run:
         made = "" if target.is_dir() else "（目錄不存在，將建立）"
         moved = f"搬逐字稿到 {new_prof} → " if carry else ""
