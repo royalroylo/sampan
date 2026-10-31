@@ -402,7 +402,9 @@ class Picker:
                 self._digit(k)
             return None
         self.jump = ""
-        if k in ("q", "\x1b"):
+        if k == "\x1b":  # a lone Esc does nothing here (only q quits): over a slow link it may be the start of an arrow
+            return None
+        if k == "q":
             return ("quit", [])
         if k == "n":
             return ("new", [self.here_parent()])

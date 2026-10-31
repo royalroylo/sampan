@@ -587,7 +587,7 @@ class PickerTest(unittest.TestCase):
         self.assertEqual(self.p.key("m"), ("move", ["b"]))
         self.assertEqual(self.p.key("P"), ("switch", ["b"]))
         self.assertEqual(self.p.key("q"), ("quit", []))
-        self.assertEqual(self.p.key("\x1b"), ("quit", []))
+        self.assertIsNone(self.p.key("\x1b"))  # a lone Esc does not quit the list: only q does
         self.assertIsNone(self.p.key("x"))
 
     def test_w_is_save_even_with_empty_list(self):
@@ -720,7 +720,8 @@ class PickerJumpSearchTest(unittest.TestCase):
         self.assertEqual(len(p.visible), 4)
         self.assertEqual(p.visible[p.cursor].name, "foo-2")
         self.assertIsNone(p.prompt)
-        self.assertEqual(p.key("\x1b"), ("quit", []))  # back in normal mode
+        self.assertIsNone(p.key("\x1b"))  # back in normal mode: a lone Esc does nothing there
+        self.assertEqual(p.key("q"), ("quit", []))
 
     def test_search_backspace_and_leave_on_empty(self):
         p = Picker([row("a"), row("b")])

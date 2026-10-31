@@ -23,6 +23,7 @@ from sampan.ui import (
     text_width,
 )
 from sampan.ui.render import _cell_text
+from sampan.ui.screen import ESC_WAIT_MS
 from tests.fakes import FakeRunner, cp, pane_line, ps_line
 from tests.helpers import TOML, make_env, status_row
 
@@ -261,7 +262,10 @@ class FakeScr:
         pass
 
     def get_wch(self):
-        k = self.keys.pop(0)
+        if not self.keys and self.timeouts and self.timeouts[-1] == ESC_WAIT_MS:
+            k = TICK  # nothing more after an Esc: the short wait for an escape sequence runs out
+        else:
+            k = self.keys.pop(0)
         if k is TICK:
             if self.on_tick:
                 self.on_tick()
@@ -499,7 +503,7 @@ class ListSearchScreenTest(unittest.TestCase):
         self.assertNotIn("│", shown[1])  # info card is underneath, not to the right
 
     def test_filtering_keeps_name_column_width(self):
-        s = self.screen(["/", "a", "\x1b", "\x1b"])
+        s = self.screen(["/", "a", "\x1b", "q"])
         s.pick([row("a"), row("zzzz-very-long-item")], None)
         full = self.scr.screens[0][1]
         just_a = self.scr.screens[2][1]  # after "/a": only row a is visible
@@ -1077,3 +1081,51 @@ class KeysWrapTest(unittest.TestCase):
         from sampan.ui.render import _card_rows
         rows = [r[0][0].rstrip() for r in _card_rows([Keys("x" * 25)], 10)]
         self.assertEqual(rows, ["x" * 10, "x" * 10, "x" * 5])
+
+
+class EscapeKeyTest(unittest.TestCase):
+    """Over a slow link Esc and the rest of an arrow's escape sequence may arrive in separate reads."""
+
+    def setUp(self):
+        self.cfg = make_env(Path(tempfile.mkdtemp()))
+
+    def pick(self, keys):
+        self.scr = FakeScr(keys)
+        s = CursesScreen(self.scr, self.cfg, FakeRunner(), now_fn=lambda: NOW)
+        return s.pick([row("a"), row("b")], None)
+
+    def test_split_arrow_moves_the_cursor_and_is_not_quit_or_adopt(self):
+        self.assertEqual(self.pick(["KEY_DOWN", "\x1b", "[", "A", "\n"]), ("attach", ["a"]))
+        self.assertEqual(self.pick(["\x1b", "O", "B", "\n"]), ("attach", ["b"]))  # SS3 form
+
+    def test_lone_esc_does_nothing_on_the_list(self):
+        self.assertEqual(self.pick(["KEY_DOWN", "\x1b", TICK, "\n"]), ("attach", ["b"]))
+        self.assertIn(ESC_WAIT_MS, self.scr.timeouts)
+        self.assertEqual(self.scr.timeouts[self.scr.timeouts.index(ESC_WAIT_MS) + 1], 1000)  # the tick is back
+
+    def test_unknown_or_cut_short_sequences_are_dropped_whole(self):
+        self.assertEqual(self.pick(["\x1b", "[", "2", "0", "0", "~", "KEY_DOWN", "\n"]), ("attach", ["b"]))
+        self.assertEqual(self.pick(["\x1b", "[", TICK, "A", "\n"]), ("adopt", []))  # A after the wait is A again
+
+    def test_q_quits(self):
+        self.assertEqual(self.pick(["q"]), ("quit", []))
+
+    def test_esc_then_a_key_gives_both(self):
+        s = CursesScreen(FakeScr(["\x1b", "x"]), self.cfg, FakeRunner(), now_fn=lambda: NOW)
+        self.assertEqual((s.key(), s.key()), ("\x1b", "x"))
+
+    def test_input_typed_during_an_attach_is_flushed(self):
+        import curses
+        from unittest import mock
+
+        from sampan.ui import screen as screen_mod
+        events = []
+        scr = NS(clear=lambda: events.append("clear"), refresh=lambda: events.append("refresh"))
+        with mock.patch.object(curses, "def_prog_mode", create=True), \
+                mock.patch.object(curses, "endwin", create=True), \
+                mock.patch.object(curses, "reset_prog_mode", create=True,
+                                  side_effect=lambda: events.append("reset")), \
+                mock.patch.object(curses, "flushinp", create=True, side_effect=lambda: events.append("flush")), \
+                mock.patch("subprocess.call", side_effect=lambda args, env=None: events.append("attach") or 0):
+            self.assertEqual(screen_mod.run_outside(scr, ["tmux", "attach"]), 0)
+        self.assertEqual(events, ["attach", "reset", "flush", "clear", "refresh"])

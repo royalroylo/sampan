@@ -69,6 +69,10 @@ from .tree import FolderItem, folder_key, folder_of
 
 # one line at 120 columns: digits (row numbers are on every row), the arrows, w (save now), Enter (on every row's
 # card), R and A still work, they are only left out here; g / f are short here, their folder card spells them out
+ESC_WAIT_MS = 80  # after Esc, how long to wait for the rest of an escape sequence (over SSH it may come late)
+ESCAPES = {"[A": "KEY_UP", "[B": "KEY_DOWN", "[C": "KEY_RIGHT", "[D": "KEY_LEFT", "OA": "KEY_UP", "OB": "KEY_DOWN",
+           "OC": "KEY_RIGHT", "OD": "KEY_LEFT", "[H": "KEY_HOME", "[F": "KEY_END", "OH": "KEY_HOME", "OF": "KEY_END",
+           "[1~": "KEY_HOME", "[4~": "KEY_END", "[7~": "KEY_HOME", "[8~": "KEY_END"}
 KEYS_HELP = "/ 找　Tab 篩選　! 等人　v 預覽　* 全選　空白 勾選　s 停　S 重開　g 包　f 搬　n 新　D 派工　t 送　p 外掛　o 帳號　q 退"
 RESTORE_HELP = "↑↓ 移動　空白 勾選　Enter 確認接回　q 取消"
 ADOPT_HELP = "↑↓ 移動　空白 勾選　Enter 確認接手　q 取消"
@@ -164,6 +168,8 @@ class CursesScreen:
         self.updater = updater  # update.Checker: the list screen shows a new-version hint, and re-checks in the idle time while waiting for a key once the cache has expired
         self.clock, self.rows_fn, self.own_pane = clock, rows_fn, own_pane
         self.messages = []
+        self._pushed = []  # keys read while telling a lone Esc from an escape sequence, given out next
+        self._timeout_ms = -1  # the wait set by _timeout, put back after reading an escape sequence
         self.warning = None  # one-line explanation when tmux is unreadable (the hint line of the list screen)
         self.prompt = None
         self.extra = []  # question under the message area (agent startup prompt)
@@ -238,7 +244,18 @@ class CursesScreen:
         self.scr.refresh()
 
     def key(self):
-        """The next key; returns None when a timeout was set and expired without a key."""
+        """The next key; returns None when a timeout was set and expired without a key, or for an escape sequence
+        that is not known (dropped whole). An Esc followed within ESC_WAIT_MS by "[" or "O" is read as one escape
+        sequence (curses only waits ESCDELAY for one, so over a slow link ESC and "[A" may come in two reads): the
+        known ones are the KEY_ names (↑↓←→, Home/End), so "[" and "A" never act as keys of their own."""
+        if self._pushed:
+            return self._pushed.pop(0)
+        ch = self._read()
+        if ch == "\x1b":
+            return self._escape()
+        return ch
+
+    def _read(self):
         import curses
         try:
             ch = self.scr.get_wch()
@@ -250,6 +267,30 @@ class CursesScreen:
             except (curses.error, ValueError):
                 return str(ch)
         return ch
+
+    def _escape(self):
+        set_timeout = getattr(self.scr, "timeout", None)
+        if set_timeout is not None:
+            set_timeout(ESC_WAIT_MS)
+        try:
+            first = self._read()
+            if first is None:
+                return "\x1b"  # a lone Esc
+            if first not in ("[", "O"):  # Esc then another key: Esc, and that key comes next
+                self._pushed.append(first)
+                return "\x1b"
+            seq = first
+            while len(seq) < 16:
+                ch = self._read()
+                if ch is None or len(ch) != 1:  # cut short: drop what came (an unknown key name is dropped too)
+                    return None
+                seq += ch
+                if first == "O" or "@" <= ch <= "~":  # SS3 takes one character; a CSI ends with a final byte
+                    break
+            return ESCAPES.get(seq)
+        finally:
+            if set_timeout is not None:
+                set_timeout(self._timeout_ms)
 
     def out(self, line=""):
         self.messages += str(line).split("\n")
@@ -310,6 +351,7 @@ class CursesScreen:
         return choice
 
     def _timeout(self, ms):
+        self._timeout_ms = ms
         set_timeout = getattr(self.scr, "timeout", None)
         if set_timeout is not None:
             set_timeout(ms)
@@ -1000,6 +1042,7 @@ def run_outside(scr, args, env=None):
         return subprocess.call(args, env=env)
     finally:
         curses.reset_prog_mode()
+        curses.flushinp()  # keys typed during the attach or its exit are not commands for the list
         scr.clear()
         scr.refresh()
 
