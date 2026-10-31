@@ -18,6 +18,12 @@ def own_light(row):
     return {"busy": RUNNING, "working": RUNNING, "shell": RUNNING, "waiting": WAITING}.get(row.agent_status)
 
 
+def name_matches(row, query):
+    """The search (/): case-insensitive substring of the session name or its alias; an empty query matches all."""
+    q = (query or "").lower()
+    return q in row.name.lower() or q in (getattr(row, "alias", "") or "").lower()
+
+
 def matches(row, kind, light=None):
     """Whether a status row is listed under filter kind. light is the row's lights.light (None: own_light). 等人 holds
     waiting and 待看, 執行中 the running ones; 閒置 is what S restarts (running and idle, 待看 included); retired rows
@@ -74,8 +80,7 @@ def build_items(rows, tree, query, *, hide_empty=False, lights=None):
     (a state filter is on) leaves out folders with none of rows under them. lights ({name: label}) feeds each folder's
     counts."""
     if query is not None:
-        q = query.lower()
-        return [(0, r) for r in _by_name(rows) if q in r.name.lower()]
+        return [(0, r) for r in _by_name(rows) if name_matches(r, query)]
     if tree is None:
         return [(0, r) for r in _by_name(rows)]
     t = F.resolve(tree, [r.name for r in rows])

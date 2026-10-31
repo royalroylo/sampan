@@ -17,6 +17,7 @@ from ..tmux import TMUX, Tmux
 from . import folder_actions
 from .dirpick import recent_dirs, sessions_by_dir
 from .state import row_text
+from .tree import name_matches
 
 HELP = ("編號 = 接上／切過去（已停止的先接回）；s 停掉　S 重開　m 搬目錄　P 換 profile　e 改名　R 接回　A 接手 tmux 外的　r retire　a activate　X 移除"
         "　n 開新 session　w 立即存檔　p plugin 管理　o 帳號　D 派工　/文字 搜尋　q 離開"
@@ -313,8 +314,8 @@ def cancel_flow(cfg, out, ask, d, *, cancel_fn=None):
 
 
 def _plain_search(ask, out, rows, query, prefix=None):
-    """/text: case-insensitive substring match on the name. One hit attaches; several are listed with their original numbers and one is asked for."""
-    hits = [(i, r) for i, r in enumerate(rows, 1) if query and query.lower() in r.name.lower()]
+    """/text: case-insensitive substring match on the name or alias. One hit attaches; several are listed with their original numbers and one is asked for."""
+    hits = [(i, r) for i, r in enumerate(rows, 1) if query and name_matches(r, query)]
     if not hits:
         out(f"沒有名稱含「{query}」的 session")
         return ("invalid", [])

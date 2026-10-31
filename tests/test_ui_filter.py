@@ -102,6 +102,17 @@ class PickerFilterTest(unittest.TestCase):
         self.assertEqual(names(p), ["客戶", "客戶/甲", "s1"])
         self.assertEqual([it.total for it in p.visible if isinstance(it, FolderItem)], [1, 1])
 
+    def test_search_matches_the_alias(self):
+        rows = frows() + [status_row("pm-x", alias="讀書 PM")]
+        for t in (None, tree()):
+            p = self.picker(rows=rows, t=t)
+            p.key("/")
+            for k in "讀書":
+                p.key(k)
+            self.assertEqual(names(p), ["pm-x"])
+            p.key("\x1b")
+        self.assertEqual([r.name for _, r in build_items(rows, tree(), "pm")], ["pm-x"])  # by its alias or name
+
     def test_search_stacks_on_filter_and_tab_is_not_text(self):
         p = self.picker(rows=frows() + [row("a2")])
         tab(p, 3)  # 閒置: a1 top a2

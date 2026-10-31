@@ -175,6 +175,29 @@ class RcResetTest(unittest.TestCase):
         self.assertIsNone(rc_reset(tmux, "%1", alias, sleep=self.sleep))
         self.assertEqual(tmux.sent[-1], ["/remote-control PM\\;", "Enter"])  # tmux: a trailing \; is a literal ;
 
+    def test_draft_typed_after_disconnect_sends_no_reconnect(self):
+        tmux = FakeTmux(ACTIVE, [MENU_CONTINUE, MENU_QR, MENU_DISCONNECT,
+                                 [DISCONNECTED, DISCONNECTED.replace("❯\xa0\n", "❯\xa0typed\n")]])
+        self.assertEqual(self.reset(tmux), "重新連線前輸入框不是空的")
+        self.assertEqual(tmux.sent, HAPPY_KEYS[:4])
+
+    def test_modal_after_disconnect_escapes(self):
+        modal = _split(DISCONNECTED)[0] + " Some dialog\n ❯ 1. Yes\n   2. No\n Enter to confirm · Esc to cancel\n"
+        tmux = FakeTmux(ACTIVE, [MENU_CONTINUE, MENU_QR, MENU_DISCONNECT, [DISCONNECTED, modal]])
+        self.assertEqual(self.reset(tmux), "重新連線前輸入框不是空的")
+        self.assertEqual(tmux.sent, HAPPY_KEYS[:4] + [["Escape"]])
+
+    def test_ctrl_c_with_the_menu_open_escapes(self):
+        sleep = Sleeps()
+
+        def interrupt(s):
+            sleep(s)
+            raise KeyboardInterrupt
+        tmux = FakeTmux(ACTIVE, [BOOTING])  # the menu never shows: rc_reset sleeps while it may be opening
+        with self.assertRaises(KeyboardInterrupt):
+            rc_reset(tmux, "%1", ALIAS, sleep=interrupt)
+        self.assertEqual(tmux.sent, [["/remote-control", "Enter"], ["Escape"]])
+
     def test_tmux_error_with_the_menu_open_escapes(self):
         class Flaky(FakeTmux):
             def send_keys(self, target, *keys):

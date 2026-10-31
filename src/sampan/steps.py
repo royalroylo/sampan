@@ -128,13 +128,18 @@ def rc_reset(tmux, pane, alias, *, sleep, wait=RC_WAIT):
     tmux.send_keys(pane, RC_COMMAND, "Enter")
     try:
         reason = _to_disconnect(tmux, pane, sleep)
-    except Exception:
+    except BaseException:  # a tmux error, or Ctrl-C
         _escape(tmux, pane)  # the menu may be open: leave the pane as it was, best effort
         raise
     if reason is not None:
         return reason
     if _wait(tmux, pane, _disconnected, MENU_WAIT, sleep) is None:
         return "沒看到斷開"
+    state = claude_input_state(tmux.capture(pane, escapes=True))  # the box on the current screen, just before typing
+    if state != "empty":
+        if state == "blocked":
+            tmux.send_keys(pane, "Escape")  # a menu or dialog may be open
+        return "重新連線前輸入框不是空的"
     tmux.send_keys(pane, _tmux_literal(f"{RC_COMMAND} {alias}"), "Enter")
     if _wait(tmux, pane, lambda s: _reconnected(s, alias), wait, sleep) is None:
         return "重新連線沒確認"

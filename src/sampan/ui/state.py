@@ -5,7 +5,7 @@ from .. import folders as F
 from ..restart import confirm_line, plan_restart, skip_text, stop_line
 from ..status import State, _fmt_tokens
 from .text import BACKSPACE, ENTER, MOVES, pad
-from .tree import FILTERS, FolderItem, build_items, folder_key, folder_of, matches
+from .tree import FILTERS, FolderItem, build_items, folder_key, folder_of, matches, name_matches
 
 
 def show_state(row):
@@ -124,7 +124,7 @@ class Picker:
         q = (self.query or "").lower()
         rows = self.shown()
         if self.tree is None:
-            self.items = [(0, r) for r in rows if q in r.name.lower()]
+            self.items = [(0, r) for r in rows if name_matches(r, self.query)]
         else:
             self.items = build_items(rows, self.tree, self.query, hide_empty=self.filter != 0, lights=self.lights)
         self.visible = [it for _, it in self.items]

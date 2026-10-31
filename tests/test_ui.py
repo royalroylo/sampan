@@ -419,6 +419,10 @@ class UiTest(unittest.TestCase):
     def test_plain_slash_one_match_attaches(self):
         self.assertEqual(self.plain_choice("/OLD"), ("attach", ["old"]))
 
+    def test_plain_slash_matches_the_alias(self):
+        rows = [row("old"), status_row("pm-x", alias="讀書 PM")]
+        self.assertEqual(self.plain_choice("/讀書", rows), ("attach", ["pm-x"]))
+
     def test_plain_slash_name_with_digits(self):
         rows = [row("proj-001"), row("proj-002"), row("proj-003")]
         self.assertEqual(self.plain_choice("/003", rows), ("attach", ["proj-003"]))
