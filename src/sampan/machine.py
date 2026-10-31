@@ -31,7 +31,7 @@ def _default_name(hostname):
 
 
 def _write(p, m):
-    fsutil.atomic_write(p, f"id = {json.dumps(m.id)}\nname = {json.dumps(m.name)}\n", mode=fsutil.PRIVATE_FILE,
+    fsutil.atomic_write(p, f"id = {json.dumps(m.id, ensure_ascii=False)}\nname = {json.dumps(m.name, ensure_ascii=False)}\n", mode=fsutil.PRIVATE_FILE,
                         encoding="utf-8")
 
 

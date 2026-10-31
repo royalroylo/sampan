@@ -48,5 +48,15 @@ class MachineTests(unittest.TestCase):
         self.assertIsInstance(machine.rename(self.cfg, ""), str)
         self.assertIsInstance(machine.rename(self.cfg, "a\nb"), str)
 
+    def test_machine_emoji_and_cjk_name_round_trips(self):
+        m = machine.load_or_create(self.cfg, hostname=host("box"))
+        r = machine.rename(self.cfg, "書房 \U0001F600")
+        self.assertEqual(r, machine.Machine(m.id, "書房 \U0001F600"))
+        self.assertEqual(machine.load_or_create(self.cfg, hostname=host("x")), r)
+
+    def test_machine_non_string_name_falls_back_to_hostname(self):
+        machine.path(self.cfg).write_text('id = "abc"\nname = 5\n')
+        self.assertEqual(machine.load_or_create(self.cfg, hostname=host("box.local")), machine.Machine("abc", "box"))
+
     def test_ref(self):
         self.assertEqual(machine.ref("m", "s"), "m:s")
