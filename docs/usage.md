@@ -17,7 +17,7 @@
 
 ## 怎麼用（大部分時候只要打 `sampan`）
 
-打 `sampan` 會開一個畫面：左邊是 session 清單，右邊是游標所在那一個的資訊卡（狀態、目錄、對話、最後活動、context 用量、最後一句話，以及這一列能按的鍵），下面是訊息區。有在 tmux 裡跑的 session，右邊會即時顯示它的畫面（每秒更新、只能看不能打字；要操作就按 Enter 進去）。所有問題、進度、結果都在這個畫面裡，做完一個動作會回到清單；按 `q` 才離開。
+打 `sampan` 會開一個畫面：左邊是 session 清單，右邊是游標所在那一個的資訊卡（狀態、目錄、對話、最後活動、context 用量、最後一句話，以及這一列能按的鍵），下面是訊息區。有在 tmux 裡跑的 session，右邊會即時顯示它的畫面（每秒更新、只能看不能打字；要操作就按 Enter 進去）。所有問題、進度、結果都在這個畫面裡，做完一個動作會回到清單；按 `q` 才離開（清單上單按 Esc 不會離開）。
 
 | 想做的事 | 在 `sampan` 裡按 | 會發生什麼 |
 |---|---|---|
@@ -274,7 +274,7 @@ session 可以放進資料夾（多層用 `/`，例如 `客戶/甲`）。資料�
 - `confirm = true` 時，agent 從 Bash 跑 `sampan send`、`sampan send-batch`、`sampan new … --message`、`sampan dispatches cancel` 會被拒絕（結束碼 2，「agent 請改用 sampan MCP 的工具（會先問使用者）；要讓 agent 直接用指令，在 config 設 [mcp] confirm = false」）；人在終端機跑照舊。
 - 改 `[mcp] confirm` 之後：Claude 在 MCP server 重啟時才讀到（開新 session，或 `/mcp` 重新連線）；Codex 要再跑一次 `sampan mcp install`。
 - 做不到的事：這擋不住自己對 tmux pane 打字的 agent（`tmux send-keys`）。Claude Code 的 sandbox 可以擋，但 sampan 不替你設定。上層行程檢查只看名稱，擋得住單純灌 JSON-RPC 的 agent，但名稱可以假冒（`exec -a claude`、叫 claude 的連結），所以跟 `tmux send-keys`、改 `[mcp] confirm` 一樣，擋不住刻意繞過 sampan 的 agent。
-- `send` 不等的話馬上回派工編號；對方做完時 sampan 往呼叫者的 session 送一行通知（`〔sampan：<對方> 已回覆派工 <編號>，用 sampan 工具 dispatch_result 看內容〕`，會按 Enter），失敗時也送一行（`〔sampan：給 <對方> 的派工 <編號> 失敗：<原因>〕`），同意派工就算同意這則通知。`wait=true` 最多等 60 秒，等到就連回覆一起回。
+- `send` 不等的話馬上回派工編號；對方做完時 sampan 往呼叫者的 session 送一行通知（`〔sampan：<對方> 已回覆派工 <編號>，用 sampan 工具 dispatch_result 看內容〕`，會按 Enter），失敗時也送一行（`〔sampan：給 <對方> 的派工 <編號> 失敗：<原因>〕`），同意派工就算同意這則通知。同一個呼叫者同時有好幾則通知要收時，合成一行送（`〔sampan：b 已回覆派工 a1b2、c3d4；給 d 的派工 e5f6 失敗：<原因>；批次 b7f3a 完成：…；用 sampan 工具 dispatch_result 看內容〕`），不會一則一則各開一輪。對方 Claude 的狀態是 `shell`（這輪結束了、背景還有 shell 工作在跑）時照樣送。`wait=true` 最多等 60 秒，等到就連回覆一起回。
 - `send` 的 `raw=true` 是直接送（上面「直接送」的規則：只限 Claude、單行、`/` 開頭、最長 500 字），所以 agent 現在可以請另一個 session 執行 `/compact`；核准畫面看得到 `raw` 和完整指令。
 - `send_batch`：參數 `sessions`（名稱清單，核准時看得到每個收件人）、`message`、`raw`、`wait`（最多 60 秒）。只收名稱，要依資料夾挑就先用 `list_sessions` 看每個 session 的 `folder`。一次呼叫只核准一次。跳過的（不是執行中而且閒著、`raw` 給 Codex）不排隊，列在結果的 `skipped`（每筆 `session`、`reason`）。整批都做完（成功、失敗或取消）才往呼叫者送**一則**通知（`〔sampan：批次 b7f3a 完成：2 完成、0 失敗、1 跳過，用 dispatch_result 看〕`），不再各筆通知。`dispatch_result` 的 `id` 也收批次編號，回整批；那裡的 `skipped` 是**數字**（跳過幾個），`send_batch` 回的 `skipped` 才是清單。`cancel_dispatch` 不收批次編號，要取消請逐筆用派工編號。
 - 呼叫者不是 sampan 管的 session（例如不在 tmux 裡）→ 工具照樣能用，只是收不到完成通知，自己用 `dispatch_result` 查。
