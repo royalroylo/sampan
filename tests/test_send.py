@@ -22,6 +22,8 @@ SID_B = "11111111-2222-3333-4444-555555555555"  # Claude target "b"
 SID_A = "22222222-3333-4444-5555-666666666666"  # Claude caller "a"
 TID_C = "33333333-4444-5555-6666-777777777777"  # Codex target "c"
 TID_X = "44444444-5555-6666-7777-888888888888"  # Codex caller "x"
+SID_D = "55555555-6666-7777-8888-999999999999"  # Claude target "d"
+SID_Z = "88888888-9999-aaaa-bbbb-cccccccccccc"  # Claude caller "z"
 CALLER_A = Caller("a", "alice", "claude", "%1")
 EMPTY = (FIXTURES / "claude_empty_placeholder.ansi").read_text()
 DRAFT = (FIXTURES / "claude_draft.ansi").read_text()
@@ -720,6 +722,108 @@ class ShellStatusTest(Base):
         self.assertEqual([w[2] for w in tmux_writes(run, "%1")], ["paste-buffer", "send-keys"])
 
 
+class MergedNoticeTest(Base):
+    """Several notices owed to one caller at once go out as one message."""
+
+    def setUp(self):
+        super().setUp()
+        self.rows["d"] = status_row("d", sid=SID_D, pane="%4")
+        self.rows["z"] = status_row("z", sid=SID_Z, pane="%6")
+        self.recs = {}  # transcript records per target
+
+    def finished(self, to, message, caller=CALLER_A, reply="answer"):
+        """A dispatch from caller to `to`, delivered and done (caller busy, so its notice is still owed)."""
+        self.set_row(caller.name, agent_status="busy")
+        d = self.submit(to=to, message=message, caller=caller, notify=True)
+        self.assertEqual(self.advance(tmux_runner(), d.id).state, "sent")
+        self.recs.setdefault(to, []).extend([user(self.stored(d.id).text), assistant(reply)])
+        self.transcript(self.rows[to].sid, self.recs[to])
+        self.assertEqual(self.advance(FakeRunner(strict=True), d.id, later(5)).state, "done")
+        return d
+
+    def failed(self, to, message, caller=CALLER_A):
+        self.set_row(caller.name, agent_status="busy")
+        d = self.submit(to=to, message=message, caller=caller, notify=True)
+        self.assertEqual(self.advance(tmux_runner(), d.id).state, "sent")
+        self.set_row(to, state=State.STOPPED, agent_status="-", pane=None)
+        self.assertEqual(self.advance(FakeRunner(strict=True), d.id, later(5)).state, "failed")
+        return d
+
+    def test_three_owed_notices_go_out_as_one_paste(self):
+        d1, d2 = self.finished("b", "one"), self.finished("b", "two")
+        d3 = self.finished("d", "three")
+        self.set_row("a", agent_status="idle")
+        run = tmux_runner()
+        self.advance(run, d2.id, later(10))
+        writes = tmux_writes(run, "%1")
+        self.assertEqual([w[2] for w in writes], ["paste-buffer", "send-keys"])
+        text = Path(tmux_writes(run)[0][-1]).read_text()
+        self.assertEqual(text, f"〔sampan：b 已回覆派工 {d1.id}、{d2.id}；d 已回覆派工 {d3.id}；"
+                               "用 sampan 工具 dispatch_result 看內容〕")
+        self.assertTrue(all(self.stored(x.id).notified for x in (d1, d2, d3)))
+        self.assertEqual(send.pending(self.cfg), [])
+        for x in (d1, d2, d3):  # a second advance sends nothing more
+            run = FakeRunner(strict=True)
+            self.advance(run, x.id, later(20))
+            self.assertEqual(run.calls, [])
+
+    def test_a_failure_is_listed_with_its_reason(self):
+        d1 = self.finished("b", "one")
+        d2 = self.failed("d", "two")
+        self.set_row("a", agent_status="idle")
+        run = tmux_runner()
+        self.advance(run, d1.id, later(10))
+        text = Path(tmux_writes(run)[0][-1]).read_text()
+        self.assertEqual(text, f"〔sampan：b 已回覆派工 {d1.id}；給 d 的派工 {d2.id} 失敗：{send.REASON_STOPPED}；"
+                               "用 sampan 工具 dispatch_result 看內容〕")
+        self.assertTrue(self.stored(d2.id).notified)
+
+    def test_one_owed_notice_keeps_the_single_text(self):
+        d1 = self.finished("b", "one")
+        self.set_row("a", agent_status="idle")
+        run = tmux_runner()
+        self.advance(run, d1.id, later(10))
+        self.assertEqual(Path(tmux_writes(run)[0][-1]).read_text(), send.notice_text(self.stored(d1.id)))
+
+    def test_two_callers_get_one_notice_each(self):
+        caller_z = Caller("z", "alice", "claude", "%6")
+        a1, a2 = self.finished("b", "one"), self.finished("b", "two")
+        z1 = self.finished("d", "three", caller=caller_z)
+        self.set_row("a", agent_status="idle")
+        self.set_row("z", agent_status="idle")
+        run = tmux_runner()
+        self.advance(run, a1.id, later(10))
+        self.assertEqual(len(tmux_writes(run, "%1")), 2)
+        self.assertEqual(tmux_writes(run, "%6"), [])
+        self.assertFalse(self.stored(z1.id).notified)
+        self.assertTrue(self.stored(a2.id).notified)
+        run = tmux_runner()
+        self.advance(run, z1.id, later(11))
+        self.assertEqual(len(tmux_writes(run, "%6")), 2)
+        self.assertEqual(Path(tmux_writes(run)[0][-1]).read_text(), send.notice_text(self.stored(z1.id)))
+        self.assertEqual(send.pending(self.cfg), [])
+
+    def test_nothing_sent_puts_every_merged_notice_back(self):
+        d1, d2 = self.finished("b", "one"), self.finished("b", "two")
+        self.set_row("a", agent_status="idle")
+        run = tmux_runner().on(["tmux", "-u", "load-buffer"], cp(1, "", "no buffer"))
+        self.advance(run, d1.id, later(10))
+        self.assertEqual([(self.stored(x.id).notified) for x in (d1, d2)], [False, False])
+        self.assertEqual(sorted(send.pending(self.cfg)), sorted([d1.id, d2.id]))
+
+    def test_unsure_delivery_counts_every_merged_notice_as_given(self):
+        d1, d2 = self.finished("b", "one"), self.finished("b", "two")
+        self.set_row("a", agent_status="idle")
+        run = tmux_runner().on(["tmux", "-u", "send-keys"], cp(1, "", "lost pane"))
+        self.advance(run, d1.id, later(10))
+        for x in (d1, d2):
+            self.assertTrue(self.stored(x.id).notified)
+            self.assertIn("lost pane", self.stored(x.id).reason)
+        run = FakeRunner(strict=True)
+        self.advance(run, d2.id, later(20))
+        self.assertEqual(run.calls, [])
+
+
 class PendingCancelTest(Base):
     def test_pending_lists_queued_and_sent(self):
         q = self.submit()
@@ -1407,6 +1511,32 @@ class BatchTest(BatchBase):
             run = FakeRunner(strict=True)
             self.advance(run, d.id, later(20))
             self.assertEqual(run.calls, [])  # once only
+
+    def test_batch_notice_is_merged_with_a_plain_one(self):
+        self.rows["me"] = dataclasses.replace(self.rows["me"], agent_status="busy")
+        b = self.sent(("a", "c"))
+        p = send.submit(self.cfg, FakeRunner(strict=True), CALLER_ME, "a", "plain", notify=True, now=NOW,
+                        status_fn=self.status_fn)
+        a, c = b.items
+        self.transcript(SID_A, [user(self.stored(a.id).text), assistant("from a"),
+                                user(self.stored(p.id).text), assistant("p")])
+        self.transcript(SID_C2, [user(self.stored(c.id).text), assistant("from c")])
+        self.assertEqual(self.advance(tmux_runner(), p.id).state, "sent")
+        for x in (a.id, c.id, p.id):
+            self.assertEqual(self.advance(FakeRunner(strict=True), x, later(5)).state, "done")
+        self.set_row("me", agent_status="idle")
+        run = tmux_runner()
+        self.advance(run, p.id, later(10))
+        self.assertEqual(len(tmux_writes(run, "%9")), 2)  # one paste + Enter
+        self.assertEqual(Path(tmux_writes(run)[0][-1]).read_text(),
+                         f"〔sampan：a 已回覆派工 {p.id}；批次 {b.id} 完成：2 完成、0 失敗、0 跳過；"
+                         "用 sampan 工具 dispatch_result 看內容〕")
+        self.assertTrue(all(d.notified for d in dispatch.load(self.cfg.state_dir)))
+        self.assertEqual(send.pending(self.cfg), [])
+        for d in dispatch.load(self.cfg.state_dir):
+            run = FakeRunner(strict=True)
+            self.advance(run, d.id, later(20))
+            self.assertEqual(run.calls, [])
 
     def test_batch_finishes_with_a_cancelled_item(self):  # Review Focus 4
         b = self.sent()

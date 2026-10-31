@@ -686,46 +686,75 @@ def _check_raw(cfg, d, row, now, run):
 
 def notify_caller(cfg, run, d, sleep, *, rows=None, snapshot_fn=None, status_fn=None, save=None, items=()):
     """Send the completion (or failure) notice to the caller (with Enter) if it is a running sampan session that can
-    take it. Changes d (notified; notified plus a reason when the notice may have arrived but Enter failed or
-    `codex queue` timed out, never sent twice; notify=False when the caller is gone); call it inside
-    dispatch.transaction. save: write the record now, before any key (notified is set first, so a crash in the middle
-    never sends the notice again). items: the transaction's list, for a batch's first item (the batch notice; every
-    item then gets the first one's notify / notified). True if sent."""
+    take it. Every other dispatch in items whose notice that same caller session is owed now goes into the same
+    message (merged_notice_text), so a caller owed several notices gets one message, not one turn per dispatch.
+    Changes d and the others merged with it (notified; notified plus a reason when the notice may have arrived but
+    Enter failed or `codex queue` timed out, never sent twice; notify=False when the caller is gone); call it inside
+    dispatch.transaction. save: write the records now, before any key (notified is set first, so a crash in the
+    middle never sends the notice again). items: the transaction's list (the other notices owed, and for a batch's
+    first item the batch: every item then gets the first one's notify / notified). True if sent."""
     if not _owes_notice(d, items):
         return False
-    if d.batch is None:
-        return _notify(cfg, run, d, notice_text(d), f"派工 {d.id}", sleep, rows, snapshot_fn, status_fn, save)
-    group = _group(items, d.batch)
-
-    def mirror():
-        for x in group:
-            x.notify, x.notified = d.notify, d.notified
-
-    def save_all():
-        mirror()
-        if save is not None:
-            save()
-    try:
-        return _notify(cfg, run, d, batch_notice_text(d.batch, group, d.batch_skipped), f"批次 {d.batch}", sleep,
-                       rows, snapshot_fn, status_fn, save_all)
-    finally:
-        mirror()
+    owers = [d]
+    if d.from_kind == "session":
+        owers += [x for x in items if x is not d and x.from_kind == "session" and x.from_name == d.from_name
+                  and _owes_notice(x, items)]
+    members = [m for x in owers for m in (_group(items, x.batch) if x.batch is not None else [x])]
+    if len(owers) == 1:
+        text = notice_text(d) if d.batch is None else batch_notice_text(d.batch, members, d.batch_skipped)
+    else:
+        text = merged_notice_text(sorted(owers, key=_position(items)), items)
+    what = "、".join(f"批次 {x.batch}" if x.batch is not None else f"派工 {x.id}" for x in owers)
+    return _notify(cfg, run, d, owers, members, text, what, sleep, rows, snapshot_fn, status_fn, save)
 
 
-def _notify(cfg, run, d, text, what, sleep, rows, snapshot_fn, status_fn, save):
+def _position(items):
+    index = {id(x): i for i, x in enumerate(items)}
+    return lambda x: index.get(id(x), len(index))
+
+
+def merged_notice_text(owers, items):
+    """One line for several notices owed to one caller, in this order: replies grouped by target, then each failure
+    with its reason, then each batch, then where to read them, e.g.
+    〔sampan：b 已回覆派工 a1b2、c3d4；c 已回覆派工 e5f6；給 d 的派工 0a0b 失敗：對方 session 已停止；
+    批次 b1234 完成：2 完成、0 失敗、1 跳過；用 sampan 工具 dispatch_result 看內容〕 (without the line break).
+    owers: plain dispatches (done or failed) and batches' first items, in creation order."""
+    replied, failed, batches = {}, [], []
+    for x in owers:
+        if x.batch is not None:
+            group = _group(items, x.batch)
+            done = sum(g.state == "done" for g in group)
+            bad = sum(g.state in ("failed", "cancelled") for g in group)
+            batches.append(f"批次 {x.batch} 完成：{done} 完成、{bad} 失敗、{x.batch_skipped} 跳過")
+        elif x.state == "failed":
+            failed.append(f"給 {x.to_name} 的派工 {x.id} 失敗：{' '.join((x.reason or '').split())}")
+        else:
+            replied.setdefault(x.to_name, []).append(x.id)
+    parts = [f"{to} 已回覆派工 {'、'.join(ids)}" for to, ids in replied.items()] + failed + batches
+    return "〔sampan：" + "；".join(parts) + "；用 sampan 工具 dispatch_result 看內容〕"
+
+
+def _notify(cfg, run, d, owers, members, text, what, sleep, rows, snapshot_fn, status_fn, save):
+    """d: the dispatch the notice is sent for (its caller; its id names the outbox); owers: every dispatch the notice
+    covers (d first), which get the note when it may have arrived; members: every record whose notify / notified
+    follows (owers plus their batches' items)."""
+    def mark(**changes):
+        for m in members:
+            for k, v in changes.items():
+                setattr(m, k, v)
     if d.from_kind != "session":
-        d.notify = False  # the terminal or an unregistered agent: there is no session to tell
+        mark(notify=False)  # the terminal or an unregistered agent: there is no session to tell
         return False
     rows = rows if rows is not None else _rows(cfg, run, snapshot_fn, status_fn)
     row = rows.get(d.from_name)
     if row is None or row.state in (State.RETIRED, State.UNREGISTERED, State.NO_AGENT):
-        d.notify = False  # nobody left to tell: the reply stays in the record
+        mark(notify=False)  # nobody left to tell: the reply stays in the record
         return False
     if row.state != State.RUNNING or (row.agent == "codex" and not row.sid):
         return False
     if row.agent != "codex" and (row.agent_status not in READY or row.pane is None):
         return False
-    d.notified = True
+    mark(notified=True)
     if save is not None:
         save()
     if row.agent == "codex":
@@ -735,13 +764,13 @@ def _notify(cfg, run, d, text, what, sleep, rows, snapshot_fn, status_fn, save):
         why = deliver.to_claude(Tmux(run), row.pane, dispatch.write_outbox(cfg.state_dir, nid, text), nid, sleep)
     if isinstance(why, deliver.Unsure):  # the notice may be with the caller: count it as given, never send it again
         note = f"完成通知{REASON_PASTED}：{why}" if isinstance(why, deliver.Pasted) else f"完成通知{why}"
-        d.reason = f"{d.reason}；{note}" if d.state == "failed" and d.reason else note
+        for x in owers:
+            x.reason = f"{x.reason}；{note}" if x.state == "failed" and x.reason else note
         _log(cfg, "send", f"{what}：{note}")
         return False
     if why is not None:
-        d.notified = False  # nothing was sent: try again later
+        mark(notified=False)  # nothing was sent: try again later
         return False
-    d.notified = True
     _log(cfg, "send", f"{what}：已通知 {d.from_name}")
     return True
 
