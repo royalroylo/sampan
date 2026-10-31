@@ -274,6 +274,7 @@ class ScreenTest(unittest.TestCase):
         self.assertIn("Tab 篩選　! 等人", KEYS_HELP)
         self.assertIn("v 預覽", KEYS_HELP)
         self.assertIn("* 全選　空白 勾選", KEYS_HELP)  # marking keys stay listed (batch sends use the marks)
+        self.assertIn("D 派工　t 送", KEYS_HELP)
         from sampan.ui.text import text_width
         self.assertLessEqual(text_width(" " + KEYS_HELP), 119)  # one line at 120 columns (render gets width - 1)
         self.assertTrue(scr.screens[2][1].lstrip().startswith("1   ◆ b1"), scr.screens[2][1])  # numbered within the filter

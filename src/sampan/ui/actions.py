@@ -237,6 +237,34 @@ def _forget(cfg, run, out, ask, name, forget_fn):
     return forget_fn(cfg, run, out, name)
 
 
+def tell_flow(cfg, run, out, ask, names):
+    """t: ask for a message, then send it from the terminal. One name goes through send.submit (a busy one is queued),
+    several through send.submit_batch (the busy ones are skipped and listed). A message starting with / asks once
+    whether to send it directly (only y / Y); empty or cancelled records nothing. 0 sent or cancelled, 1 refused."""
+    message = _ask(ask, "訊息：")
+    if not message:
+        out("已取消")
+        return 0
+    raw = message.startswith("/") and (_ask(ask, "直接送（不加標頭）？ y/N") or "").lower() == "y"
+    now = send_mod._utcnow()
+    if len(names) == 1:
+        r = send_mod.submit(cfg, run, send_mod.TERMINAL, names[0], message, notify=False, now=now, raw=raw)
+        items, skipped = [r], []
+    else:
+        r = send_mod.submit_batch(cfg, run, send_mod.TERMINAL, list(names), message, raw=raw, notify=False, now=now)
+        items, skipped = ([], []) if isinstance(r, str) else (r.items, r.skipped)
+    if isinstance(r, str):
+        out(f"❌ {r}")
+        return 1
+    if len(names) > 1:
+        out(f"批次 {r.id}：送給 {len(items)} 個 session" + (f"，跳過 {len(skipped)} 個" if skipped else ""))
+    for d in items:
+        out(f"派工 {d.id} → {d.to_name}：{send_mod.STATE_LABELS[d.state]}" + (f"（{d.reason}）" if d.reason else ""))
+    for name, why in skipped:
+        out(f"跳過 {name}：{why}")
+    return 0
+
+
 CANCEL_WAIT_S = 0.3  # the ui never waits longer than this for the dispatches lock
 
 
@@ -572,6 +600,7 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
         "group": lambda names, rows, kw: (folder_actions.group_flow(cfg, out, answer, names), None),
         "file": lambda names, rows, kw: (folder_actions.file_flow(cfg, out, answer, names, rows, choose_folder_fn),
                                          None),
+        "tell": lambda names, rows, kw: (tell_flow(cfg, run, out, answer, names), None),
         "rename_folder": lambda names, rows, kw: (folder_actions.rename_flow(cfg, out, answer, names[0]), None),
         "rm_folder": lambda names, rows, kw: (folder_actions.remove_flow(cfg, out, answer, names[0]), None),
         "retired": lambda names, rows, kw: (set_state_fn(cfg, out, names[0], "retired"), None),

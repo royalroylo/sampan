@@ -69,7 +69,7 @@ from .tree import FolderItem, folder_key, folder_of
 
 # one line at 120 columns: digits (row numbers are on every row), the arrows, w (save now), Enter (on every row's
 # card), R and A still work, they are only left out here; g / f are short here, their folder card spells them out
-KEYS_HELP = "/ 搜尋　Tab 篩選　! 等人　v 預覽　* 全選　空白 勾選　s 停　S 重開　g 包　f 搬　n 新　D 派工　p plugin　o 帳號　q 離開"
+KEYS_HELP = "/ 找　Tab 篩選　! 等人　v 預覽　* 全選　空白 勾選　s 停　S 重開　g 包　f 搬　n 新　D 派工　t 送　p 外掛　o 帳號　q 退"
 RESTORE_HELP = "↑↓ 移動　空白 勾選　Enter 確認接回　q 取消"
 ADOPT_HELP = "↑↓ 移動　空白 勾選　Enter 確認接手　q 取消"
 PLUGINS_HELP = "↑↓ 移動　1-9 跳列　/ 搜尋　Enter 選 profile　u 更新這個　U 全部更新　a 新增　r 檢查新版　q 返回　Tab 切到來源"

@@ -2,6 +2,7 @@ import dataclasses
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from sampan.restore import Candidate
 from sampan.status import State
@@ -1450,3 +1451,127 @@ class DetachKeyUiTest(unittest.TestCase):
     def test_a_warning_is_shown_once(self):
         self.run_ui([("attach", ["a"]), ("attach", ["b"]), ("quit", [])], warning="tmux 已經把 C-q 綁成別的功能")
         self.assertEqual(sum("C-q" in m for m in self.msgs), 1)
+
+
+class TellPickerTest(unittest.TestCase):
+    """t: the keys only; the flow is TellFlowTest. Visible order: 客戶, 客戶/甲, b1, x, a1, top."""
+
+    def picker(self, tree=None, others=()):
+        return Picker(folder_rows(), "a1", clock=Clock(), tree=tree or folder_tree(), others=others)
+
+    def test_t_on_a_session_row(self):
+        self.assertEqual(self.picker().key("t"), ("tell", ["a1"]))
+
+    def test_t_on_marked_rows_in_display_order(self):
+        p = self.picker()
+        p.cursor = 2
+        p.key(" ")  # b1 (cursor moves on to x)
+        p.key(" ")  # x
+        self.assertEqual(p.key("t"), ("tell", ["b1", "x"]))
+
+    def test_t_on_a_folder_row_targets_its_sessions(self):
+        p = self.picker()
+        p.cursor = 0
+        self.assertEqual(p.key("t"), ("tell", ["a1", "b1", "x"]))
+
+    def test_t_on_an_empty_folder_says_so(self):
+        p = self.picker(tree=Tree({"空": False}, {}))
+        p.cursor = 0
+        self.assertTrue(p.on_folder())
+        self.assertIsNone(p.key("t"))
+        self.assertIn("沒有 session", p._notice)
+
+    def test_t_on_another_machines_row_only_says_where_to_go(self):
+        from types import SimpleNamespace as NS
+        p = self.picker(others=[NS(name="\x00other:t", thread=NS(name="t"))])
+        p.cursor = len(p.visible) - 1
+        self.assertTrue(p.on_other())
+        self.assertEqual(p.key("t"), ("desktop", []))
+
+
+class TellFlowTest(unittest.TestCase):
+    setUp, text = UiTest.setUp, UiTest.text
+    ui_keys = InteractiveUiTest.ui_keys
+
+    def disp(self, did, to, state="queued", reason=""):
+        from sampan.dispatch import Dispatch
+        return Dispatch(did, "終端機", "", "", to, "claude", "alice", "x", state, "2026-10-31T00:00:00Z", reason=reason)
+
+    def tell(self, names, answers):
+        return self.ui_keys(("tell", names), answers)
+
+    def test_t_single_queues_through_submit(self):
+        seen = []
+
+        def submit(cfg, run, caller, to, message, **kw):
+            seen.append((caller, to, message, kw["raw"], kw["notify"]))
+            return self.disp("1a2b", to, reason="對方忙")
+        with mock.patch("sampan.send.submit", submit):
+            self.tell(["b"], ["請看一下"])
+        from sampan.send import TERMINAL
+        self.assertEqual(seen, [(TERMINAL, "b", "請看一下", False, False)])
+        self.assertEqual(self.asked, ["訊息："])
+        self.assertIn("1a2b", self.text())
+        self.assertIn("排隊中", self.text())
+        self.assertIn("對方忙", self.text())
+
+    def test_t_marked_rows_go_through_submit_batch_and_list_skipped(self):
+        from sampan.send import Batch
+        seen = []
+
+        def batch(cfg, run, caller, names, message, **kw):
+            seen.append((names, message, kw["raw"], kw["notify"]))
+            return Batch("b0a1", [self.disp("1111", "a")], [("b", "對方在忙")])
+        with mock.patch("sampan.send.submit_batch", batch), \
+                mock.patch("sampan.send.submit", side_effect=AssertionError("single path")):
+            self.tell(["a", "b"], ["大家好"])
+        self.assertEqual(seen, [(["a", "b"], "大家好", False, False)])
+        t = self.text()
+        self.assertIn("b0a1", t)
+        self.assertIn("1111", t)
+        self.assertIn("跳過 b", t)
+        self.assertIn("對方在忙", t)
+
+    def test_t_batch_refusal_shown(self):
+        with mock.patch("sampan.send.submit_batch", return_value="沒有可以送的 session"):
+            self.tell(["a", "b"], ["hi"])
+        self.assertIn("❌ 沒有可以送的 session", self.text())
+
+    def test_t_slash_asks_raw_and_default_is_no(self):
+        seen = []
+
+        def submit(cfg, run, caller, to, message, **kw):
+            seen.append(kw["raw"])
+            return self.disp("2222", to)
+        with mock.patch("sampan.send.submit", submit):
+            self.tell(["a"], ["/compact", ""])
+            self.tell(["a"], ["/compact", "n"])
+            self.tell(["a"], ["/compact", "y"])
+            self.tell(["a"], ["  /compact", "Y"])
+        self.assertEqual(seen, [False, False, True, True])
+        self.assertEqual(self.asked, ["訊息：", "直接送（不加標頭）？ y/N"])
+
+    def test_t_non_slash_does_not_ask_raw(self):
+        with mock.patch("sampan.send.submit", return_value=self.disp("3333", "a")):
+            self.tell(["a"], ["hello"])
+        self.assertEqual(self.asked, ["訊息："])
+
+    def test_t_raw_problem_shown_and_nothing_created(self):
+        with mock.patch("sampan.send.submit", return_value="直接送只能是一行"):
+            self.tell(["a"], ["/a\nb", "y"])
+        self.assertIn("❌ 直接送只能是一行", self.text())
+
+    def test_t_empty_message_cancels(self):
+        for ans in ("", "   ", None):
+            with mock.patch("sampan.send.submit", side_effect=AssertionError), \
+                    mock.patch("sampan.send.submit_batch", side_effect=AssertionError):
+                self.tell(["a"], [ans])
+        self.assertNotIn("❌", self.text())
+
+    def test_t_on_folder_targets_its_sessions(self):
+        from sampan.send import Batch
+        seen = []
+        with mock.patch("sampan.send.submit_batch", lambda c, r, caller, names, m, **kw: seen.append(names) or Batch(
+                "b000", [], [])):
+            self.tell(["a1", "b1", "x"], ["hi"])
+        self.assertEqual(seen, [["a1", "b1", "x"]])

@@ -288,7 +288,7 @@ class ScreenTest(unittest.TestCase):
     def test_help_line_with_q_fits_120_columns(self):
         s = self.screen(["q"])
         s.pick([row("a")], None)
-        self.assertIn("q 離開", self.scr.screens[-1][-1])
+        self.assertIn("q 退", self.scr.screens[-1][-1])
 
     def test_cancel_returns_promptly_when_the_lock_is_held(self):
         import fcntl

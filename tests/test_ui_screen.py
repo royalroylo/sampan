@@ -510,7 +510,7 @@ class ListSearchScreenTest(unittest.TestCase):
     def test_help_mentions_jump_and_search(self):
         s = self.screen(["q"])
         s.pick([row("a")], None)
-        self.assertIn("/ 搜尋　Tab 篩選　! 等人　v 預覽　* 全選　空白 勾選", self.scr.screens[0][-1])
+        self.assertIn("/ 找　Tab 篩選　! 等人　v 預覽　* 全選　空白 勾選", self.scr.screens[0][-1])
 
 
 class CursesUiTest(unittest.TestCase):

@@ -441,12 +441,12 @@ class Picker:
             return None
         if k == " ":
             self._lost = False
-        if self._lost and len(k) == 1 and k in "sSgf":
+        if self._lost and len(k) == 1 and k in "sSgft":
             self._lost = False
             self._notice = "勾選的 session 已不在畫面上（狀態變了或被篩掉），沒有動作；請重新勾選"
             return None
         if self.on_other():  # row-targeted actions on a read-only other row only say where to go
-            return ("desktop", []) if k in ENTER or (len(k) == 1 and k in "smPeXra") else None
+            return ("desktop", []) if k in ENTER or (len(k) == 1 and k in "smPeXrat") else None
         if k == "g":
             return ("group", self._as_items())
         if k == "f":
@@ -457,6 +457,12 @@ class Picker:
                 self._stop = names
             else:
                 self._notice = "資料夾裡沒有 session"
+            return None
+        if k == "t":
+            names = self._names(*self._targets())
+            if names:
+                return ("tell", names)
+            self._notice = "資料夾裡沒有 session"
             return None
         if k == "S":
             self._ask_restart()
