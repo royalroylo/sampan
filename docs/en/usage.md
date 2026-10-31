@@ -8,7 +8,7 @@ English · [繁體中文](../usage.md) · [Back to README](../../README.en.md)
   project directory.
 - **sampan keeps a registry** of every session's name, agent, profile, directory and the **conversation it is in**. So after
   the agent ends, tmux closes or the machine reboots, the same conversation can be resumed as if nothing happened.
-- **Claude's session name is pinned to the tmux name**: every time sampan starts Claude (new, restore / `R`, restart / `S`, switch, move, adopt) it passes `--name <tmux name>`, so the name shown on the prompt line, in `/resume`, in the terminal title and in Remote Control does not turn into an auto-generated title after a switch or resume. Codex is unaffected.
+- **Claude's session name is pinned to the tmux name**: every time sampan starts Claude (new, restore / `R`, restart / `S`, switch, move, adopt) it passes `--name <tmux name>`, so the name shown on the prompt line, in `/resume`, in the terminal title and in Remote Control does not turn into an auto-generated title after a switch or resume. If the profile has Remote Control at startup on (`remoteControlAtStartup` in settings.json, else the legacy `.claude.json`), sampan also passes `--remote-control <tmux name>`, because `--name` alone names only a new conversation in Remote Control; with it off, sampan never turns it on. Codex is unaffected.
 - **Each session is in one of three states:**
 
   | State | Meaning | How it gets there |

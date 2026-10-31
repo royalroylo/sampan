@@ -12,7 +12,7 @@ from .config import ConfigError, load_config
 from .config_edit import NAME_RE, _k, _s, append_section, remove_profile, remove_table, rename_profile, set_profile_flag
 from .fsutil import atomic_write
 from .init import NAME_RULE, _disp, _email
-from .launch import claude_argv, codex_argv, shell_command
+from .launch import claude_argv, codex_argv, remote_control_on, shell_command
 from .observe import PROC_ROOT, live_by_pane
 from .procs import is_uuid, list_procs
 from .status import State, status_rows
@@ -306,7 +306,8 @@ def _resume_line(cfg, p, row):
         line = shell_command(codex_argv(resume=row.session_id, extra=("-C", row.cwd) if row.cwd else ()),
                              env_set=env, cwd=row.cwd or None)
     else:
-        line = shell_command(claude_argv(p, resume=row.session_id, name=row.tmux), env_set={"CLAUDE_CONFIG_DIR": str(p.config_dir)},
+        line = shell_command(claude_argv(p, resume=row.session_id, name=row.tmux,
+                                         remote_control=row.tmux if row.tmux and remote_control_on(p) else None), env_set={"CLAUDE_CONFIG_DIR": str(p.config_dir)},
                              cwd=row.cwd or None)
     return f"  對話還在：{line}"
 

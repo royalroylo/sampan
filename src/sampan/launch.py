@@ -1,7 +1,9 @@
 """Build the claude/codex launch commands, plus `sampan claude` / `sampan codex`."""
+import json
 import os
 import shlex
 import sys
+from pathlib import Path
 
 from .procs import is_uuid
 
@@ -14,7 +16,31 @@ def disabled_problem(cfg, name):
     return None
 
 
-def claude_argv(profile, *, resume=None, session_id=None, name=None, extra=()):
+def _rc_key(path):
+    """remoteControlAtStartup from one JSON file: its value, or None when missing, unreadable or the key is absent."""
+    try:
+        data = json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return None
+    return data.get("remoteControlAtStartup") if isinstance(data, dict) else None
+
+
+def remote_control_on(profile):
+    """Whether the profile starts Claude with Remote Control: settings.json `remoteControlAtStartup`, else the legacy
+    .claude.json. Read at launch time; anything but a real true counts as off. Never raises."""
+    try:
+        for path in (Path(profile.config_dir) / "settings.json", Path(profile.claude_json)):
+            value = _rc_key(path)
+            if isinstance(value, bool):
+                return value
+            if value is not None:  # a key that is not a bool: off, do not fall through to the next file
+                return False
+    except Exception:
+        pass
+    return False
+
+
+def claude_argv(profile, *, resume=None, session_id=None, name=None, remote_control=None, extra=()):
     if resume and session_id:
         raise ValueError("resume 與 session_id 不可同時給")
     argv = ["claude"]
@@ -24,6 +50,8 @@ def claude_argv(profile, *, resume=None, session_id=None, name=None, extra=()):
         argv += ["--session-id", session_id]
     if name:  # pin Claude's session name to the tmux name (prompt line, /resume, terminal title, Remote Control)
         argv += ["--name", name]
+    if remote_control:  # keep the Remote Control name the tmux name too: --name alone only names a new conversation
+        argv += ["--remote-control", remote_control]
     return argv + list(extra)
 
 
@@ -63,7 +91,8 @@ def launch_line(cfg, agent, profile_name, *, resume=None, session_id=None, cwd=N
         extra = ("-C", cwd) if cwd else ()
         return shell_command(codex_argv(resume=resume, extra=extra), env_set=codex_env(cfg), cwd=cwd, prompt_file=prompt_file)
     profile = cfg.profiles[profile_name]
-    argv = claude_argv(profile, resume=resume, session_id=session_id, name=name)
+    argv = claude_argv(profile, resume=resume, session_id=session_id, name=name,
+                       remote_control=name if name and remote_control_on(profile) else None)
     if profile.default:
         return shell_command(argv, env_set={}, env_unset=("CLAUDE_CONFIG_DIR",), cwd=cwd, prompt_file=prompt_file)
     return shell_command(argv, env_set={"CLAUDE_CONFIG_DIR": str(profile.config_dir)}, cwd=cwd,

@@ -6,7 +6,7 @@
 
 - **一個 tmux session = 一個 agent。** 每個 session 裡跑一個 Claude Code（某個 profile）或 Codex，做一件事、放在一個專案目錄。
 - **sampan 有一本登記表**，記住每個 session 的名稱、agent、profile、目錄，以及**它正在進行的那段對話**。所以 agent 結束、tmux 關掉、甚至重開機之後，都能接回同一段對話，就像沒停過。
-- **Claude 的 session 名稱固定成 tmux 名稱**：sampan 每次開 Claude（新開、接回／`R`、重開／`S`、換帳號、搬目錄、接手）都帶 `--name <tmux 名稱>`，所以提示列、`/resume`、終端機標題和 Remote Control 看到的名稱不會在換帳號或接回後變成自動產生的標題。Codex 不受影響。
+- **Claude 的 session 名稱固定成 tmux 名稱**：sampan 每次開 Claude（新開、接回／`R`、重開／`S`、換帳號、搬目錄、接手）都帶 `--name <tmux 名稱>`，所以提示列、`/resume`、終端機標題和 Remote Control 看到的名稱不會在換帳號或接回後變成自動產生的標題。如果該 profile 開了啟動時的 Remote Control（settings.json 的 `remoteControlAtStartup`，沒有就看舊的 `.claude.json`），sampan 還會帶 `--remote-control <tmux 名稱>`，因為只有 `--name` 時，Remote Control 只有新對話會用這個名稱；沒開就不會替它打開。Codex 不受影響。
 - **每個 session 有三種狀態：**
 
   | 狀態 | 意思 | 怎麼變成這樣 |
