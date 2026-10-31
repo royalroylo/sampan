@@ -554,7 +554,8 @@ class SendToolTest(Base):
         self.rows["b"] = dataclasses.replace(self.rows["b"], last=NOW, agent_status="busy")
         c = self.serve(Client([init(1), call(2, "list_sessions", {})]))
         rows = {r["name"]: r for r in tool_json(c.response(2))["sessions"]}
-        self.assertEqual(rows["b"], {"name": "b", "agent": "claude", "profile": "alice", "cwd": "/w/b", "folder": "",
+        self.assertEqual(rows["b"], {"name": "b", "id": "", "machine": mcp_server.machine.load_or_create(self.cfg.path).id,
+                                     "agent": "claude", "profile": "alice", "cwd": "/w/b", "folder": "",
                                      "alias": "", "state": "running", "activity": "busy",
                                      "last": "2026-10-26T12:00:00+00:00"})
         self.assertEqual(rows["a"]["cwd"], "")
@@ -719,6 +720,59 @@ class NewSessionToolTest(Base):
                 self.assertEqual(c.elicits, [])
                 self.assertTrue(c.response(2)["result"]["isError"])
                 self.assertIn(why, tool_text(c.response(2)))
+
+
+ID_B = "bbbbbbbb-1111-4000-8000-000000000001"
+ID_C = "bbbbbbbb-2222-4000-8000-000000000002"
+
+
+class IdRefTest(Base):
+    """A session is named by name, full id or a unique id prefix (8+ characters) in the tools."""
+    def setUp(self):
+        super().setUp()
+        self.rows["b"] = dataclasses.replace(self.rows["b"], id=ID_B)
+        self.rows["c"] = dataclasses.replace(self.rows["c"], agent="claude", profile="alice", id=ID_C)
+        write_rows(self.cfg.registry_path, [Row("b", "claude", "alice", "sb", "/w/b", id=ID_B),
+                                            Row("c", "claude", "alice", "sc", "/w/c", id=ID_C),
+                                            Row("a", "claude", "alice", "sa", "/w/a", id="aaaaaaaa-0000-4000-8000-000000000003")],
+                   "t", self.cfg.history_dir)
+
+    def test_list_sessions_has_id_and_machine(self):
+        c = self.serve(Client([init(1), call(2, "list_sessions", {})]))
+        body = tool_json(c.response(2))
+        mach = mcp_server.machine.load_or_create(self.cfg.path)
+        self.assertEqual(body["machine"], {"id": mach.id, "name": mach.name})
+        rows = {r["name"]: r for r in body["sessions"]}
+        self.assertEqual((rows["b"]["id"], rows["b"]["machine"]), (ID_B, mach.id))
+
+    def test_send_accepts_id_prefix(self):
+        for ref in (ID_B, ID_B[:8] + "-1"):
+            with self.subTest(ref=ref):
+                c = self.serve(Client([init(1), call(2, "send", {"session": ref, "message": "hi"})]),
+                               run=tmux_runner(), confirm=False)
+                self.assertFalse(c.response(2)["result"]["isError"], tool_text(c.response(2)))
+        self.assertEqual({d.to_name for d in self.dispatches()}, {"b"})
+
+    def test_send_ambiguous_prefix_error(self):
+        c = self.serve(Client([init(1), call(2, "send", {"session": "bbbbbbbb", "message": "hi"})]),
+                       run=tmux_runner(), confirm=False)
+        self.assertTrue(c.response(2)["result"]["isError"])
+        text = tool_text(c.response(2))
+        self.assertIn("對到多個", text)
+        self.assertIn("b（bbbbbbbb）", text)
+        self.assertIn("c（bbbbbbbb）", text)
+        self.assertEqual(self.dispatches(), [])
+
+    def test_send_batch_accepts_ids(self):
+        c = self.serve(Client([init(1), call(2, "send_batch", {"sessions": [ID_C, "b"], "message": "hi"})]),
+                       run=tmux_runner(), confirm=False)
+        self.assertEqual({i["session"] for i in tool_json(c.response(2))["items"]}, {"b", "c"})
+
+    def test_folder_move_accepts_ids(self):
+        c = self.serve(Client([init(1), call(2, "folder_move", {"sessions": [ID_B, "a"], "folder": "x"})]), confirm=False)
+        self.assertEqual(tool_json(c.response(2)), {"moved": ["b", "a"], "folder": "x"})
+        c = self.serve(Client([init(1), call(2, "folder_move", {"sessions": ["bbbbbbbb"], "folder": "x"})]), confirm=False)
+        self.assertIn("對到多個", tool_text(c.response(2)))
 
 
 class FolderToolTest(Base):

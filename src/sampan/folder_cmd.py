@@ -1,6 +1,6 @@
 """sampan folder: list and edit the session folders (folders.json). Never reads a session's state and never writes the
 registry; the only thing read from it is which sessions exist."""
-from . import folders, registry
+from . import folders, ids, registry
 from .folders import FoldersError
 
 BROKEN_HINT = "資料夾設定壞了，修好或刪掉 folders.json 再試"
@@ -17,12 +17,17 @@ def _path(text):
     return text.strip().strip("/")
 
 
-def _session_names(cfg, out):
+def _session_rows(cfg, out):
     try:
-        return [r.tmux for r in registry.load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)]
+        return registry.load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)
     except registry.RegistryError as e:
         out(f"❌ {e}")
         return None
+
+
+def _session_names(cfg, out):
+    rows = _session_rows(cfg, out)
+    return None if rows is None else [r.tmux for r in rows]
 
 
 def _render(tree, names):
@@ -75,10 +80,10 @@ def cmd_folder(cfg, out, action, args, *, merge=False):
         out(f"❌ {e}")
         out(f"❌ {BROKEN_HINT}")
         return 2
-    names = None
+    rows = None
     if action == "move":
-        names = _session_names(cfg, out)
-        if names is None:
+        rows = _session_rows(cfg, out)
+        if rows is None:
             return 2
 
     def apply(tree):
@@ -95,10 +100,11 @@ def cmd_folder(cfg, out, action, args, *, merge=False):
                 p = _path(a)
                 if p in tree.folders:
                     items.append(("folder", p))
-                elif a in names:
-                    items.append(("session", a))
                 else:
-                    raise FoldersError(f"找不到 {a}")
+                    r = ids.resolve(rows, a)  # a session by name, id or unique id prefix
+                    if isinstance(r, str):
+                        raise FoldersError(r if "對到多個" in r else f"找不到 {a}")
+                    items.append(("session", r.tmux))
             folders.move(tree, items, dest, merge=merge)
 
     try:

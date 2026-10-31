@@ -186,6 +186,63 @@ class CliTest(unittest.TestCase):
         kw = sw.call_args.kwargs
         self.assertEqual((kw["dry_run"], kw["timeout"], kw["own_pane"], kw["on_prompt"]), (True, 5, "%4", None))
 
+    def test_cli_rename_by_id(self):
+        from sampan.registry import Row, write_rows
+        write_rows(self.cfg.registry_path, [Row("a", "claude", "alice", "sa", "/c", id="abcdef12-0000-4000-8000-000000000001"),
+                                            Row("b", "claude", "alice", "sb", "/c", id="12345678-0000-4000-8000-000000000002")],
+                   "t", self.cfg.history_dir)
+        with mock.patch("sampan.session_run.cmd_rename", return_value=0) as rn:
+            self.assertEqual(cli.main(["rename", "12345678-0000-4000-8000-000000000002", "z"]), 0)
+        self.assertEqual(rn.call_args.args[3:], ("b", "z"))
+
+    def test_cli_switch_by_id_prefix(self):
+        from sampan.registry import Row, write_rows
+        write_rows(self.cfg.registry_path, [Row("a", "claude", "alice", "sa", "/c", id="abcdef12-0000-4000-8000-000000000001"),
+                                            Row("b", "claude", "alice", "sb", "/c", id="abcdef99-0000-4000-8000-000000000002")],
+                   "t", self.cfg.history_dir)
+        with mock.patch("sampan.session_run.cmd_switch", return_value=0) as sw, \
+                mock.patch("sys.stdin.isatty", return_value=False):
+            self.assertEqual(cli.main(["switch", "abcdef99", "work"]), 0)
+            self.assertEqual(sw.call_args.args[3:5], ("b", "work"))
+            cli.main(["switch", "abcdef", "work"])  # shorter than 8: not an id, passed on as typed
+            self.assertEqual(sw.call_args.args[3], "abcdef")
+
+    def test_cli_ambiguous_prefix_refused(self):
+        from sampan.registry import Row, write_rows
+        write_rows(self.cfg.registry_path, [Row("a", "claude", "alice", "sa", "/c", id="abcdef12-0000-4000-8000-000000000001"),
+                                            Row("b", "claude", "alice", "sb", "/c", id="abcdef12-1111-4000-8000-000000000002")],
+                   "t", self.cfg.history_dir)
+        buf = io.StringIO()
+        with mock.patch("sampan.session_run.cmd_forget") as fg, redirect_stdout(buf):
+            self.assertEqual(cli.main(["forget", "abcdef12"]), 2)
+        fg.assert_not_called()
+        self.assertIn("對到多個", buf.getvalue())
+
+    def test_machine_command_shows_and_renames(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            self.assertEqual(cli.main(["machine"]), 0)
+        from sampan import machine
+        m = machine.load_or_create(self.cfg.path)
+        self.assertIn(m.id, buf.getvalue())
+        self.assertIn(m.name, buf.getvalue())
+        buf = io.StringIO()
+        with redirect_stdout(buf), mock.patch("sampan.send.command_caller", return_value=TERMINAL):
+            self.assertEqual(cli.main(["machine", "--name", "書房 Mac"]), 0)
+        m2 = machine.load_or_create(self.cfg.path)
+        self.assertEqual((m2.id, m2.name), (m.id, "書房 Mac"))
+        self.assertIn("書房 Mac", buf.getvalue())
+
+    def test_machine_rename_refused_for_agents_under_confirm(self):
+        cfg = self.cfg = __import__("dataclasses").replace(self.cfg, mcp_confirm=True)
+        with mock.patch("sampan.cli.load_config", return_value=cfg), \
+                mock.patch("sampan.send.command_caller", return_value=Caller("a", "alice", "claude", "%1")):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                self.assertEqual(cli.main(["machine", "--name", "x"]), 2)
+        from sampan import machine
+        self.assertNotEqual(machine.load_or_create(cfg.path).name, "x")
+
     def test_cli_forget_parses(self):
         with mock.patch("sampan.session_run.cmd_forget", return_value=0) as fg, \
                 mock.patch("sys.stdin.isatty", return_value=False):

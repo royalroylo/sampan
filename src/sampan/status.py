@@ -182,13 +182,13 @@ def cmd_status(cfg, run, out):
     warning = rows.warning
     if warning:
         out(f"⚠ {warning}")
-    widths = (38, 6, 12, 8, 16, 7, 11)
+    widths = (38, 6, 12, 8, 8, 16, 7, 11)
 
     def line(*cells):
         return " ".join(ljust(c, w) for c, w in zip(cells, widths)) + " " + cells[-1]
 
-    out(line("名稱", "agent", "profile", "id", "狀態", "活動", "最後活動", "context"))
+    out(line("名稱", "agent", "profile", "id", "對話", "狀態", "活動", "最後活動", "context"))
     for r in rows:
-        out(line(r.name, r.agent, r.profile, r.sid[:8], r.display, r.agent_status,
+        out(line(r.name, r.agent, r.profile, r.id[:8] or "-", r.sid[:8], r.display, r.agent_status,
                  _fmt_time(r.last), _fmt_tokens(r.tokens, r.context_window)))
     return 1 if warning else 0

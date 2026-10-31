@@ -73,6 +73,17 @@ class StatusTest(unittest.TestCase):
         self.assertIn("10/17 11:00", line)
 
 
+class ShortIdStatusTest(StatusTest):
+    def test_status_shows_short_id(self):
+        msgs = []
+        cmd_status(self.cfg, self.r, msgs.append)
+        rows = {x.name: x for x in status_rows(self.cfg, self.r)}
+        self.assertTrue(rows["running"].id)
+        self.assertEqual(msgs[0].split()[3:5], ["id", "對話"])
+        line = next(m for m in msgs if m.startswith("running"))
+        self.assertEqual(line.split()[3], rows["running"].id[:8])
+
+
 class TrustPromptStatusTest(StatusTest):
     def test_session_waiting_at_the_trust_prompt_is_not_reported_as_down(self):
         panes = [pane_line("running", "%1", 100, "claude", "/c"), pane_line("down", "%4", 103, "claude", "/c")]

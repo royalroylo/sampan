@@ -17,7 +17,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import dispatch, folders, send, session_run
+from . import dispatch, folders, ids, machine, send, session_run
 from .procs import list_procs
 from .prompts import SKIP
 from .registry import RegistryError, load_rows
@@ -50,15 +50,15 @@ def _str(desc):
 
 TOOLS = [
     {"name": "list_sessions",
-     "description": "列出 sampan 登記的 session：名稱、agent、profile、目錄、所在資料夾（folder，\"\" 是最上層）、別名（alias，沒設是 \"\"）、"
-                    "狀態（running 才收得到訊息）、忙／閒（activity）、最後活動。唯讀。",
+     "description": "列出 sampan 登記的 session：名稱、id（完整；其他工具可用名稱或 id 前 8 碼以上指定）、machine（這台機器的 id）、agent、profile、目錄、所在資料夾（folder，\"\" 是最上層）、別名（alias，沒設是 \"\"）、"
+                    "狀態（running 才收得到訊息）、忙／閒（activity）、最後活動。頂層另有 machine（id 與名稱）。唯讀。",
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "send",
      "description": "傳一則訊息給另一個執行中的 sampan session（對方閒著才送，忙就排隊）。回傳派工編號；"
                     "wait=true 時最多等 60 秒，做完就連回覆一起回。沒等到的，完成或失敗時會在你的 session 送出一則通知，"
                     "或用 dispatch_result 查。",
      "inputSchema": {"type": "object", "properties": {
-         "session": _str("對方的 session 名稱（list_sessions 看）"),
+         "session": _str("對方的 session 名稱或 id（前 8 碼以上；list_sessions 看）"),
          "message": _str("要送的訊息"),
          "wait": {"type": "boolean", "description": "等回覆（最多 60 秒）", "default": False},
          "raw": {"type": "boolean", "default": False,
@@ -71,7 +71,7 @@ TOOLS = [
                     "沒等到的，整批做完時會在你的 session 送出一則通知，或用 dispatch_result 帶批次編號查。",
      "inputSchema": {"type": "object", "properties": {
          "sessions": {"type": "array", "items": {"type": "string"}, "minItems": 1,
-                      "description": "對方的 session 名稱（list_sessions 看；不能重複）"},
+                      "description": "對方的 session 名稱或 id（前 8 碼以上；list_sessions 看；不能重複）"},
          "message": _str("要送的訊息"),
          "raw": {"type": "boolean", "default": False,
                  "description": "直接送：不加 sampan 的轉送標頭，讓對方的 Claude 當作指令執行（例如 /compact）；"
@@ -92,7 +92,7 @@ TOOLS = [
                     "只改畫面上的分組，不影響 session 本身。",
      "inputSchema": {"type": "object", "properties": {
          "sessions": {"type": "array", "items": {"type": "string"}, "minItems": 1,
-                      "description": "要搬的 session 名稱（list_sessions 看）"},
+                      "description": "要搬的 session 名稱或 id（前 8 碼以上；list_sessions 看）"},
          "folder": _str("目的資料夾路徑，例如 客戶/甲；\"/\" 是最上層")},
          "required": ["sessions", "folder"]}},
     {"name": "dispatch_result",
@@ -187,6 +187,24 @@ def _folder(text):
         except folders.FoldersError as e:
             raise ToolError(str(e)) from e
     return path
+
+
+class _Ref:
+    """ids.resolve wants rows with .tmux and .id; a status row has .name."""
+    def __init__(self, name, id):
+        self.tmux, self.id = name, id
+
+
+def _resolve_ref(rows, ref):
+    """The session name that ref (name, full id or unique id prefix) names in rows (status rows or registry rows).
+    A ref that matches nothing comes back as typed (the tool's own "not found" follows); an ambiguous one is a
+    ToolError with ids.resolve's text."""
+    r = ids.resolve([_Ref(getattr(x, "tmux", None) or getattr(x, "name", ""), x.id) for x in rows], ref)
+    if isinstance(r, str):
+        if r.startswith("找不到"):
+            return ref
+        raise ToolError(r)
+    return r.tmux
 
 
 def _batch_item(d):
@@ -420,7 +438,9 @@ class Server:
         except folders.FoldersError as e:
             where = {}
             warnings.append(f"讀不到資料夾設定，folder 全部當成最上層：{e}")
-        out = {"sessions": [{"name": r.name, "agent": r.agent, "profile": r.profile, "cwd": reg[r.name].cwd if r.name in reg else "",
+        mach = machine.load_or_create(self.cfg.path)
+        out = {"machine": {"id": mach.id, "name": mach.name},
+               "sessions": [{"name": r.name, "id": r.id, "machine": mach.id, "agent": r.agent, "profile": r.profile, "cwd": reg[r.name].cwd if r.name in reg else "",
                              "folder": where.get(r.name, ""), "alias": reg[r.name].alias if r.name in reg else "", "state": r.state.value, "activity": r.agent_status,
                              "last": r.last.astimezone(timezone.utc).isoformat(timespec="seconds") if r.last else None}
                             for r in rows]}
@@ -437,10 +457,14 @@ class Server:
             raise ToolError("參數 folder 要是字串（\"/\" 是最上層）")
         dest = _folder(dest)
         try:
-            known = {r.tmux for r in load_rows(self.cfg.registry_path, codex_profile=self.cfg.codex.profile)}
+            reg_rows = load_rows(self.cfg.registry_path, codex_profile=self.cfg.codex.profile)
         except RegistryError as e:
             raise ToolError(str(e)) from e
-        names = list(dict.fromkeys(names))
+        known = {r.tmux for r in reg_rows}
+        resolved = []
+        for n in names:
+            resolved.append(n if n in known else _resolve_ref(reg_rows, n))
+        names = list(dict.fromkeys(resolved))
         for n in names:
             if n not in known:
                 raise ToolError(f"找不到 session {n}（list_sessions 看名稱）")
@@ -461,10 +485,13 @@ class Server:
             raise ToolError("參數 raw 要是 true 或 false")
         if session_run.has_control(to):
             raise ToolError(f"session 名稱不能含換行或控制字元：{to!r}")
+        status = self._rows()
+        if not any(r.name == to for r in status):
+            to = _resolve_ref(status, to)  # an id (prefix) names the session; the name goes on from here
         caller = self._refresh_caller()
         if caller.name is not None and caller.name == to:
             raise ToolError(f"不能送給自己（{to}）")
-        row = next((r for r in self._rows() if r.name == to), None)
+        row = next((r for r in status if r.name == to), None)
         problem = send.target_problem(row, to)
         if problem:
             raise ToolError(problem)
@@ -489,6 +516,9 @@ class Server:
         names, message = args.get("sessions"), _arg_str(args, "message")
         if not isinstance(names, list) or not names or not all(isinstance(n, str) and n for n in names):
             raise ToolError("參數 sessions 要是 session 名稱的清單（至少一個）")
+        status = self._rows()
+        names = [n if any(r.name == n for r in status) or session_run.has_control(n) else _resolve_ref(status, n)
+                 for n in names]
         twice = sorted({n for n in names if names.count(n) > 1})
         if twice:
             raise ToolError(f"參數 sessions 裡有重複的名稱：{'、'.join(twice)}")

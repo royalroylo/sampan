@@ -91,6 +91,8 @@ def build_parser():
     sb.add_argument("--timeout", type=int, default=600, help="--wait 最多等幾秒（預設 600；逾時結束碼 124，派工照樣留著）")
     sb.add_argument("--raw", action="store_true",
                     help="直接送：不加轉送標頭，讓對方的 Claude 當作指令執行（例如 /compact）；只限 Claude，一行、以 / 開頭")
+    mh = sub.add_parser("machine", help="這台機器的 id 與名稱（--name 改名；id 不變）")
+    mh.add_argument("--name", help="新的機器名稱")
     ds = sub.add_parser("dispatches", usage="sampan dispatches [--all] | sampan dispatches show <編號> [--wait 秒] | sampan dispatches cancel <編號>",
                         help="列派工（預設只列排隊中與等回覆的）；show <編號> 看狀態與完整回覆；cancel <編號> 取消排隊中的、或不再等已送出的")
     ds.add_argument("action", nargs="?", choices=["cancel", "show"], help=argparse.SUPPRESS)
@@ -368,6 +370,34 @@ def _agent_refused(cfg, caller, out):
     return True
 
 
+def _resolve_refs(cfg, refs, out):
+    """Session names for refs given as name, id or unique id prefix (ids.resolve against the registry). A ref that
+    matches nothing is passed on as typed (the command says its own "not found", and may know unregistered tmux
+    sessions); an ambiguous one prints why and gives None. A registry that cannot be read passes everything on."""
+    from . import ids
+    from .registry import RegistryError, load_rows
+    try:
+        rows = load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)
+    except RegistryError:
+        return list(refs)
+    names = []
+    for ref in refs:
+        r = ids.resolve(rows, ref)
+        if isinstance(r, str):
+            if not r.startswith("找不到"):
+                out(f"❌ {r}")
+                return None
+            names.append(ref)
+        else:
+            names.append(r.tmux)
+    return names
+
+
+def _resolve_one(cfg, ref, out):
+    names = _resolve_refs(cfg, [ref], out)
+    return None if names is None else names[0]
+
+
 def _folder_sessions(cfg, folder):
     """The sessions in folder and its subfolders (sorted), or why not (str)."""
     from . import folders
@@ -451,8 +481,11 @@ def _dispatch(cfg, args):
         return cmd_save(cfg, run, out, quiet=args.quiet, dry_run=args.dry_run)
     if cmd == "restore":
         from .restore import cmd_restore
+        names = _resolve_refs(cfg, args.names, out)
+        if names is None:
+            return 2
         on_prompt, want = _prompt_fn()
-        rc = cmd_restore(cfg, run, out, input, names=tuple(args.names), select_all=args.all, dry_run=args.dry_run,
+        rc = cmd_restore(cfg, run, out, input, names=tuple(names), select_all=args.all, dry_run=args.dry_run,
                          on_prompt=on_prompt)
         return _go_in(run, want, rc)
     if cmd == "adopt":
@@ -467,15 +500,20 @@ def _dispatch(cfg, args):
         caller = command_caller(cfg, run, os.getpid())
         if _agent_refused(cfg, caller, out):
             return 2
+        to = _resolve_one(cfg, args.name, out)
+        if to is None:
+            return 2
         message = sys.stdin.read() if args.message == "-" else args.message
-        return cmd_send(cfg, run, out, args.name, message, wait=args.wait, timeout=args.timeout, caller=caller,
+        return cmd_send(cfg, run, out, to, message, wait=args.wait, timeout=args.timeout, caller=caller,
                         raw=args.raw)
     if cmd == "send-batch":
         from .send import cmd_send_batch, command_caller
         if bool(args.names) == (args.folder is not None):
             out("❌ 給 session 名稱，或用 --folder 給資料夾，二選一")
             return 2
-        names = list(args.names) if args.folder is None else _folder_sessions(cfg, args.folder)
+        names = _resolve_refs(cfg, args.names, out) if args.folder is None else _folder_sessions(cfg, args.folder)
+        if names is None:
+            return 2
         if isinstance(names, str):
             out(f"❌ {names}")
             return 2
@@ -525,13 +563,32 @@ def _dispatch(cfg, args):
                                     resolve=lambda: mcp_server.lookup_caller(cfg, run, ppid), parent_agent=parent_agent)
         finally:
             sys.stdout = proto
+    if cmd == "machine":
+        from . import machine
+        if args.name is None:
+            m = machine.load_or_create(cfg.path)
+            out(f"機器 id：{m.id or '（讀不到 machine.toml）'}")
+            out(f"名稱：{m.name}")
+            return 0
+        from .send import command_caller
+        if _agent_refused(cfg, command_caller(cfg, run, os.getpid()) if cfg.mcp_confirm else None, out):
+            return 2
+        m = machine.rename(cfg.path, args.name)
+        if isinstance(m, str):
+            out(f"❌ {m}")
+            return 2
+        out(f"✔ 機器名稱改成「{m.name}」（id {m.id} 不變）")
+        return 0
     if cmd == "status":
         from .status import cmd_status
         return cmd_status(cfg, run, out)
     if cmd == "restart":
         from . import restart, status
         own = os.environ.get("TMUX_PANE")
-        plan = restart.plan_restart(status.status_rows(cfg, run), args.names, resume_stopped=True, own_pane=own)
+        refs = _resolve_refs(cfg, args.names, out)
+        if refs is None:
+            return 2
+        plan = restart.plan_restart(status.status_rows(cfg, run), refs, resume_stopped=True, own_pane=own)
         if not plan.restart and not plan.resume:
             out("沒有可重開的 session。" + (restart.skip_text(plan.skip) if plan.skip else ""))
             return 1
@@ -556,8 +613,15 @@ def _dispatch(cfg, args):
             if rc == 0 and not args.dry_run and not want:  # the command returns to the shell: say where the session went
                 out(f"✔ {args.name} 在背景執行；要進去：sampan 畫面選它，或 tmux attach -t {args.name}")
             return _go_in(run, want, rc)
+        if cmd in ("rename", "alias", "move", "switch", "retire", "activate"):
+            args.name = _resolve_one(cfg, args.name, out)  # name, id or unique id prefix → the session's name
+            if args.name is None:
+                return 2
         if cmd == "stop":
-            return session_run.cmd_stop(cfg, run, out, names=tuple(args.names), profile=args.profile,
+            names = _resolve_refs(cfg, args.names, out)
+            if names is None:
+                return 2
+            return session_run.cmd_stop(cfg, run, out, names=tuple(names), profile=args.profile,
                                         force=args.force, dry_run=args.dry_run, timeout=args.timeout,
                                         keep_tmux=args.keep_tmux,
                                         own_pane=os.environ.get("TMUX_PANE"))
@@ -573,7 +637,10 @@ def _dispatch(cfg, args):
             return session_run.cmd_alias(cfg, out, args.name, args.alias, clear=args.clear)
         if cmd == "forget":
             # each name on its own (own lock, own log line); a failure does not stop the rest, the worst code is returned
-            return max(session_run.cmd_forget(cfg, run, out, n, dry_run=args.dry_run) for n in dict.fromkeys(args.names))
+            refs = _resolve_refs(cfg, args.names, out)
+            if refs is None:
+                return 2
+            return max(session_run.cmd_forget(cfg, run, out, n, dry_run=args.dry_run) for n in dict.fromkeys(refs))
         if cmd == "switch":
             on_prompt, want = _prompt_fn()
             rc = session_run.cmd_switch(cfg, run, out, args.name, args.profile, dry_run=args.dry_run,
