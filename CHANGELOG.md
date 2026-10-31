@@ -5,6 +5,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-31
+
+### Added
+- Direct send: MCP `send` takes `raw` (CLI `sampan send --raw`, and `t` on the screen for a message that starts with `/`). The text goes as written, without the 〔sampan 轉送…〕 header, so Claude runs a built-in command such as `/compact` or `/context` instead of reading it as a message. One line starting with `/`, at most 500 characters, no control characters, Claude only (Codex is refused). It is asked every time like the other acting tools. The dispatch is done once the command shows in the transcript and the target is idle again: with the reply text if there is one, otherwise 「指令已執行（沒有文字回覆）」; a `/clear` that starts a new conversation is done, not "not found"; a command that opens a menu (a bare `/model`) fails with a reason, and sampan presses no key for it.
+- Batch send: MCP `send_batch` (a list of session names, `message`, `raw`, `wait`) and CLI `sampan send-batch NAME… -m MSG [--raw] [--wait] [--timeout N]` or `--folder PATH` (subfolders included). One approval for the whole batch. Only running, idle sessions are sent to; busy, waiting, stopped and unknown ones, and `raw` to Codex, are skipped and listed with the reason, never queued. One notice when the whole batch has finished (also when an item failed or was cancelled). `dispatch_result` accepts the batch id (`skipped` there is a count; `send_batch` returns the list); `cancel_dispatch` refuses a batch id, cancel the items one by one. `sampan send-batch` is refused for an agent while `[mcp] confirm` is on, like `sampan send`; `sampan dispatches show` does not take a batch id. **Codex: run `sampan mcp install` again** so it asks for `send_batch` too; until then Codex is refused that tool.
+- Lights on the screen: a `◆` before each running session, 執行中 / 等人 / 閒置, and 待看 (counted as 等人): idle with output nobody has looked at since the last attach, a preview held for 3 seconds, or the last collected dispatch reply. The seen times are kept in `seen.json`; on first launch every running session counts as seen. Folder rows show a count per light (`2 等人　1 執行中`), folded or not.
+- Screen keys: `!` jumps to the 等人 filter and back, `v` shows or hides the preview (remembered in `ui.json`), `t` sends a message (one row queues like `sampan send`, several marked rows go as a batch, a message starting with `/` asks whether to send it directly).
+
+### Changed
+- The Tab filters are now 全部 / 等人 / 執行中 / 閒置 / 已停止 / 異常: the old 忙碌 is 執行中 and no longer holds sessions waiting for you (those are 等人). 閒置 means the same as before (what `S` restarts). The folder count 「N 忙」 is replaced by the per-light counts. The key help line is shorter to fit the new keys.
+- A forwarded `/compact` used to be typed under the header and never ran; send it with `raw` to run it.
+
+### Known limits
+- Direct send is Claude only. A Codex session stopped at an approval prompt cannot be told from an idle one, so it shows as 閒置 with no light.
+
 ## [0.13.10] - 2026-10-30
 
 ### Fixed

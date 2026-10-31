@@ -21,4 +21,4 @@
 
 ## 讓 agent 用工具傳訊息（sampan MCP）
 
-`sampan mcp install` 把 sampan MCP 裝進每個啟用的 Claude profile 與 Codex（`--dry-run` 先看會跑什麼指令，`sampan mcp uninstall` 移除；兩者都可用 `--profile <名稱>` 只處理指定的 profile，可重複，Codex 用它的 profile 名稱）。裝好後重開該 profile 的 session。預設（`[mcp] confirm = true`）每次 `send`、`new_session`、`cancel_dispatch`、`folder_move` 都由 agent 自己的權限詢問問你；為此 `sampan mcp install` 會改 Codex 的 `config.toml`（先備份成 `config.toml.bak-sampan-<時間>`，只動 sampan 的那幾段）。細節見 [reference.md](reference.md#安裝與核准方式)。
+`sampan mcp install` 把 sampan MCP 裝進每個啟用的 Claude profile 與 Codex（`--dry-run` 先看會跑什麼指令，`sampan mcp uninstall` 移除；兩者都可用 `--profile <名稱>` 只處理指定的 profile，可重複，Codex 用它的 profile 名稱）。裝好後重開該 profile 的 session。預設（`[mcp] confirm = true`）每次 `send`、`send_batch`、`new_session`、`cancel_dispatch`、`folder_move` 都由 agent 自己的權限詢問問你；為此 `sampan mcp install` 會改 Codex 的 `config.toml`（先備份成 `config.toml.bak-sampan-<時間>`，只動 sampan 的那幾段）。細節見 [reference.md](reference.md#安裝與核准方式)。
