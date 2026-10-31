@@ -25,6 +25,7 @@ class Env:
         self.server_id = SRV
         self.messages = []
         self.stamps = {}  # tmux session → the @sampan_id it carries
+        self.ids_unreadable = False
         self.stamped = []  # set-option calls: (target, value)
 
     def pane(self, session, pane_id, pane_pid, command="claude", path="/c"):
@@ -41,6 +42,8 @@ class Env:
             if not self.server:
                 return cp(rc=1)
             if "#{session_name}\t#{@sampan_id}" in args:
+                if self.ids_unreadable:
+                    return cp(rc=1, err="permission denied")
                 return cp(out="".join(f"{n}\t{i}\n" for n, i in self.stamps.items()))
             return cp(out=self.server_id + "\n") if "-F" in args else cp()
         r.on(["tmux", "-u", "list-sessions"], list_sessions)
@@ -112,6 +115,16 @@ class SaveTest(unittest.TestCase):
         e.stamps = {"x": "", "y": "other-id"}  # y carries someone else's id: left alone
         e.save()
         self.assertEqual(e.stamped, [("=x", "x-id")])
+
+    def test_unreadable_ids_stamp_nothing(self):
+        e = Env()
+        e.seed([Row("x", "claude", "work", A, "/c", id="x-id")])
+        e.pane("x", "%3", 100)
+        e.claude(200, 100)
+        write_session(e.cfg, "work", 200, sid=A, cwd="/c")
+        e.ids_unreadable = True
+        self.assertEqual(e.save(), 0)
+        self.assertEqual(e.stamped, [])
 
     def test_dry_run_writes_no_option(self):
         e = Env()

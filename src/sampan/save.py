@@ -19,10 +19,13 @@ def append_log(cfg, msg):
 def stamp_missing(tmux, observed, rows):
     """Stamp @sampan_id on registered sessions whose tmux session has none. One that carries a different id is
     another session's: left alone. Best effort, a failure changes nothing."""
+    stamped = tmux.session_ids()
+    if stamped is None:  # unreadable: an unread value must not be taken for "missing"
+        return
     by_name = {r.tmux: r for r in rows}
     for ob in observed:
         row = by_name.get(ob.tmux)
-        if row is not None and row.id and not ob.sampan_id:
+        if row is not None and row.id and stamped.get(ob.tmux) == "":
             tmux.set_session_id(ob.tmux, row.id)
 
 
