@@ -318,6 +318,12 @@ class CursesScreenTest(unittest.TestCase):
         self.scr = FakeScr(keys, **kw)
         return CursesScreen(self.scr, self.cfg, self.r, now_fn=lambda: NOW)
 
+    def test_drop_typeahead_forgets_pushed_back_keys(self):
+        s = self.screen([])
+        s._pushed.extend(["\n", "R"])
+        s.drop_typeahead()  # curses is not started here: flushinp's error is swallowed
+        self.assertEqual(s._pushed, [])
+
     def test_ask_reads_wide_chars_with_backspace(self):
         s = self.screen(["帳", "務", "x", "\x7f", "\n"])
         self.assertEqual(s.ask("名稱："), "帳務")

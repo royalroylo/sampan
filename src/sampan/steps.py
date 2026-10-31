@@ -209,6 +209,7 @@ def rc_step(cfg, tmux, row, pane, out, *, sleep, profile=None):
     if not rc_wanted(cfg, row, profile):
         return
     alias = display_name(row)
+    out(f"  … {row.tmux}：RC 校正中（最多約 {RC_WAIT} 秒）")  # the wait for the bridge can be long: say so first
     try:
         reason = rc_reset(tmux, pane, alias, sleep=sleep)
     except Exception as e:  # a tmux failure mid-way is a reason like any other
@@ -216,4 +217,4 @@ def rc_step(cfg, tmux, row, pane, out, *, sleep, profile=None):
     if reason is None:
         out(f"  · {row.tmux} Remote Control 名稱已校正為「{alias}」")
     else:
-        out(f"  ⚠ {row.tmux}：RC 校正沒做：{reason}")
+        out(f"  ⚠ {row.tmux}：RC 校正沒做：{reason}；之後按 S 重開（或 sampan restart {row.tmux}）會再校正")

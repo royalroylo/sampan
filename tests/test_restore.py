@@ -701,7 +701,8 @@ class StepsTest(StepsFixture):
         rc = self.restore(self.runner(), select_all=True, timeout=2)
         self.assertEqual(rc, 0)
         t = self.text()
-        self.assertIn("  ⚠ a：RC 校正沒做：沒看到 Remote Control 連上", self.msgs)
+        self.assertIn("  ⚠ a：RC 校正沒做：沒看到 Remote Control 連上；之後按 S 重開（或 sampan restart a）會再校正", self.msgs)
+        self.assertLess(t.index("RC 校正中"), t.index("RC 校正沒做"))
         self.assertLess(t.index("  ✔ a"), t.index("RC 校正沒做"))
 
 

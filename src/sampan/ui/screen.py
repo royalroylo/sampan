@@ -604,6 +604,15 @@ class CursesScreen:
             self.view = saved
             self._timeout(-1)
 
+    def drop_typeahead(self):
+        """Forget the keys typed while an action ran: they were pressed at a list that was not listening."""
+        import curses
+        self._pushed.clear()
+        try:
+            curses.flushinp()
+        except curses.error:  # curses not started (tests)
+            pass
+
     def pick(self, rows, current):
         """Arrow-key menu. While waiting for a key, re-capture the pane screen of the row under the cursor (a row with a tmux session) every TICK_MS and re-read the list every REFRESH_S seconds.
         A preview that stays on one row for SEEN_DWELL_S marks that session seen; v hides / shows the preview."""
@@ -1097,6 +1106,7 @@ def curses_ui(cfg, run, out, *, current_session=None, own_pane=None, exec_fn=os.
             if watcher is not None:
                 watcher.cfg = c  # renamed / added Codex profiles: the next poll saves under the new names
         opts = dict(picker_fn=screen.pick, restore_picker_fn=screen.restore_checklist, prompt_fn=screen.prompt_choice,
+                    typeahead_fn=screen.drop_typeahead,
                     adopt_picker_fn=screen.adopt_checklist, plugins_fn=screen.plugins, profiles_fn=screen.profiles,
                     dispatches_fn=screen.dispatches, choose_folder_fn=screen.choose_folder,
                     set_cfg_fn=set_cfg,

@@ -155,7 +155,7 @@ stdio MCP server（每行一則 JSON-RPC 2.0；協定版本 `2025-06-18`，clien
 
 ## 啟動後的標準步驟與 RC 校正
 
-接回（`restore`／`R`／Enter）、重開（`restart`／`S`）、`switch`、`move`、`adopt` 在 Claude 回到輸入框之後，如果該 profile 開了 Remote Control（`remoteControlAtStartup`），都會做一次 RC 校正：打 `/remote-control`，確認選單的游標停在 `Disconnect this session` 才按 Enter，再打 `/remote-control <別名，沒設就是名稱>`。每次啟動都做，不判斷名稱對不對，所以手機 app 的 RC 列表每次多一個新項目、舊的消失。sampan 只按文字加 Enter、上、Enter、Esc 這幾種鍵；畫面不是預期的樣子就按 Esc，印 `RC 校正沒做：<原因>`，原動作與其他步驟不受影響、結束碼不變。`new` 不做（新對話直接帶對的名稱）；在 sampan 畫面自己那個 pane 原地接回（sampan 先結束）也做不了。畫面上單按 Enter 接回一個 session 會等接回與校正做完才進去。手動做法同樣是 `/remote-control` → `Disconnect this session` → `/remote-control <名稱>`。修一個現有 session 的名稱：先 `sampan alias` 設好，再 `sampan restart <名稱>`（agent 可從自己的 shell 對別的 session 跑，忙碌中的與自己的 pane 略過）。
+接回（`restore`／`R`／Enter）、重開（`restart`／`S`）、`switch`、`move`、`adopt` 在 Claude 回到輸入框之後，如果該 profile 開了 Remote Control（`remoteControlAtStartup`），都會做一次 RC 校正：打 `/remote-control`，確認選單的游標停在 `Disconnect this session` 才按 Enter，再打 `/remote-control <別名，沒設就是名稱>`。每次啟動都做，不判斷名稱對不對，所以手機 app 的 RC 列表每次多一個新項目、舊的消失。sampan 只按文字加 Enter、上、Enter、Esc 這幾種鍵；畫面不是預期的樣子就按 Esc，印 `RC 校正沒做：<原因>`，原動作與其他步驟不受影響、結束碼不變。`new` 不做（新對話直接帶對的名稱）；在 sampan 畫面自己那個 pane 原地接回（sampan 先結束）也做不了。畫面上單按 Enter 接回一個 session 會等接回與校正做完才進去：等待時印出 `… <名稱>：RC 校正中（最多約 20 秒）`，這段時間按的鍵會被丟掉（不會變成第二次接回）；校正沒做時訊息會附上「之後按 S 重開（或 `sampan restart <名稱>`）會再校正」。手動做法同樣是 `/remote-control` → `Disconnect this session` → `/remote-control <名稱>`。修一個現有 session 的名稱：先 `sampan alias` 設好，再 `sampan restart <名稱>`（agent 可從自己的 shell 對別的 session 跑，忙碌中的與自己的 pane 略過）。
 
 ## `sampan alias <名稱> <別名>`、`sampan alias <名稱> --clear`
 

@@ -451,8 +451,9 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
            adopt_fn=adopt_mod.cmd_adopt, adopt_picker_fn=None, save_fn=save_mod.cmd_save, loop=False,
            attach_fn=None, choose_dir_fn=None, updater=None, update_fn=update_mod.do_update, argv=(), prompt_fn=None, plugins_fn=None,
            profiles_fn=None, set_cfg_fn=None, dispatches_fn=None, choose_folder_fn=None, restart_fn=None,
-           detach_fn=None):
-    """dispatches_fn(ask=…) is the dispatch list for D (curses: CursesScreen.dispatches); when None, the dispatches are printed.
+           detach_fn=None, typeahead_fn=None):
+    """typeahead_fn() drops the keys typed while an action ran (curses: CursesScreen.drop_typeahead).
+    dispatches_fn(ask=…) is the dispatch list for D (curses: CursesScreen.dispatches); when None, the dispatches are printed.
     picker_fn(rows, current) returns (action, list of names); when None, use the plain-text menu where a number is typed.
     restore_picker_fn / adopt_picker_fn are the checklist interfaces for R / A; when None, restore / adopt ask in text themselves.
     loop=True: after an action return to the list, leaving only on q / Esc (or when an opened session is attached); False does just one action.
@@ -705,6 +706,8 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
                     raise
                 out(f"❌ {action} 失敗：{e}")
                 rc, go = 1, None
+            if typeahead_fn is not None:
+                typeahead_fn()  # keys pressed while the action ran (a reattach waiting for the RC reset) are not commands
         if isinstance(go, tuple) and go[0] is RESUME_HERE:
             # in curses exec_fn only records it, and the exec happens after curses is closed: sampan is replaced by the reattach command
             exec_fn("/bin/sh", ["/bin/sh", "-c", go[1]])

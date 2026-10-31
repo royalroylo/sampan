@@ -307,11 +307,11 @@ class RcStepTest(unittest.TestCase):
         tmux = happy_tmux()
         rc_step(rc_cfg(True), tmux, row(ALIAS), "%1", self.out.append, sleep=self.sleep)
         self.assertEqual(tmux.sent, HAPPY_KEYS)
-        self.assertEqual(self.out, [f"  · rc-probe Remote Control 名稱已校正為「{ALIAS}」"])
+        self.assertEqual(self.out, ["  … rc-probe：RC 校正中（最多約 20 秒）", f"  · rc-probe Remote Control 名稱已校正為「{ALIAS}」"])
 
     def test_rc_step_failure_line(self):
         rc_step(rc_cfg(True), FakeTmux(DRAFT), row(ALIAS), "%1", self.out.append, sleep=self.sleep)
-        self.assertEqual(self.out, ["  ⚠ rc-probe：RC 校正沒做：輸入框有字"])
+        self.assertEqual(self.out, ["  … rc-probe：RC 校正中（最多約 20 秒）", "  ⚠ rc-probe：RC 校正沒做：輸入框有字；之後按 S 重開（或 sampan restart rc-probe）會再校正"])
 
     def test_rc_step_profile_override(self):
         tmux = happy_tmux()
@@ -324,7 +324,7 @@ class RcStepTest(unittest.TestCase):
             def capture(self, target, lines=30, escapes=False):
                 raise OSError("tmux gone")
         rc_step(rc_cfg(True), Broken(ACTIVE), row(ALIAS), "%1", self.out.append, sleep=self.sleep)
-        self.assertEqual(self.out, ["  ⚠ rc-probe：RC 校正沒做：tmux gone"])
+        self.assertEqual(self.out, ["  … rc-probe：RC 校正中（最多約 20 秒）", "  ⚠ rc-probe：RC 校正沒做：tmux gone；之後按 S 重開（或 sampan restart rc-probe）會再校正"])
 
 
 class LaunchStepTest(unittest.TestCase):

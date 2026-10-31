@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-11-01
+
+### Fixed
+- Pressing Enter on a stopped session no longer looks frozen. The reattach waits for the RC reset, which waits up to 20 s for Remote Control to come up (longer after the tmux server was killed); nothing was shown meanwhile, and the Enter pressed again started a second reattach. sampan now prints `… <name>：RC 校正中（最多約 20 秒）` before the reset, drops the keys typed while any action runs, and when the reset is not done says that `S` (or `sampan restart <name>`) will do it again.
+
 ## [0.15.0] - 2026-10-31
 
 ### Added

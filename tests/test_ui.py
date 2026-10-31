@@ -133,6 +133,25 @@ class UiTest(unittest.TestCase):
                save_fn=lambda *a, **kw: 0)
         self.assertEqual(len(seen), 2)
 
+    def test_keys_typed_during_an_action_are_dropped(self):
+        # a long action (a reattach waiting for the RC reset) must not turn the keys pressed meanwhile into commands
+        order = []
+        actions = iter([("save", []), ("quit", [])])
+        cmd_ui(self.cfg, self.r, self.msgs.append, lambda _p: "", loop=True, rows_fn=lambda c, r: ROWS,
+               picker_fn=lambda rows, cur: order.append("pick") or next(actions),
+               save_fn=lambda *a, **kw: order.append("save") or 0, typeahead_fn=lambda: order.append("drop"))
+        self.assertEqual(order, ["pick", "save", "drop", "pick"])
+
+    def test_keys_dropped_also_after_a_failed_action(self):
+        drops = []
+        actions = iter([("save", []), ("quit", [])])
+
+        def boom(*a, **kw):
+            raise KeyboardInterrupt
+        cmd_ui(self.cfg, self.r, self.msgs.append, lambda _p: "", loop=True, rows_fn=lambda c, r: ROWS,
+               picker_fn=lambda rows, cur: next(actions), save_fn=boom, typeahead_fn=lambda: drops.append(1))
+        self.assertEqual(drops, [1])
+
     def test_loop_ctrl_c_during_action_returns_to_list(self):
         actions = iter([("save", []), ("quit", [])])
 
