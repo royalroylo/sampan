@@ -13,6 +13,7 @@ from .config_edit import NAME_RE, _k, _s, append_section, remove_profile, remove
 from .fsutil import atomic_write
 from .init import NAME_RULE, _disp, _email
 from .launch import claude_argv, codex_argv, remote_control_on, shell_command
+from .machine import registry_machine
 from .observe import PROC_ROOT, live_by_pane
 from .procs import is_uuid, list_procs
 from .status import State, status_rows
@@ -217,7 +218,7 @@ def cmd_profile_rename(cfg, run, out, old, new, *, proc_root=PROC_ROOT):
             r.profile = new
         if hit:
             try:
-                registry.write_rows(cfg.registry_path, rows, now_iso(), cfg.history_dir)
+                registry.write_rows(cfg.registry_path, rows, now_iso(), cfg.history_dir, machine=registry_machine(cfg))
             except OSError as e:
                 return _undo_config(cfg, out, backups[0], e)
     out(f"✔ 已把 profile {old} 改名為 {new}（登記表 {len(hit)} 列一起改）")
@@ -356,7 +357,7 @@ def cmd_profile_forget(cfg, run, out, ask, name, *, proc_root=PROC_ROOT):
         if hit:
             keep = [r for r in rows if all(r is not h for h in hit)]
             try:
-                registry.write_rows(cfg.registry_path, keep, now_iso(), cfg.history_dir)
+                registry.write_rows(cfg.registry_path, keep, now_iso(), cfg.history_dir, machine=registry_machine(cfg))
             except OSError as e:
                 return _undo_config(cfg, out, backups[0], e)
     out(f"✔ 已從設定檔拿掉 profile {name}（目錄 {_disp(p.config_dir, cfg.home)} 保留；登記表 {len(hit)} 列一起移除）")

@@ -6,13 +6,15 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from . import ids
 from .clock import now_stamp
 from .fsutil import PRIVATE_FILE, atomic_write, private_dir, private_file, try_chmod
 from .procs import is_uuid
 
 STATES = ("active", "retired")
 AGENTS = ("claude", "codex")
-VERSION = 2
+VERSION = 3
+READABLE = (1, 2, 3)
 
 
 class RegistryError(Exception):
@@ -30,6 +32,7 @@ class Row:
     seen_at: str = ""
     server: str = ""  # tmux server when it was last seen (pid-start_time)
     pid: int | None = None  # agent process last seen
+    id: str = ""  # stable sampan id (uuid4), kept across saves and renames; "" until write_rows fills it
 
 
 @dataclass(frozen=True)
@@ -40,6 +43,7 @@ class Observed:
     session_id: str
     cwd: str
     pid: int
+    sampan_id: str = ""  # the id sampan stamped on the tmux session, "" when not stamped
 
 
 @dataclass
@@ -67,8 +71,11 @@ def merge(old, observed, tmux_sessions, now, server, keep_silently=frozenset()):
     for ob in observed:
         prev = by_name.get(ob.tmux)
         if prev is None:
-            prev = next((o for o in old if o.session_id == ob.session_id
-                         and o.tmux not in tmux_sessions and o.tmux not in used), None)
+            if ob.sampan_id:  # the stamped id names the row first; session_id is the fallback
+                prev = next((o for o in old if o.id == ob.sampan_id and o.tmux not in used), None)
+            if prev is None:
+                prev = next((o for o in old if o.session_id == ob.session_id
+                             and o.tmux not in tmux_sessions and o.tmux not in used), None)
             if prev is None:
                 res.added.append(ob.tmux)
             else:
@@ -78,7 +85,8 @@ def merge(old, observed, tmux_sessions, now, server, keep_silently=frozenset()):
         if prev is not None:
             used.add(prev.tmux)
         state = prev.state if prev is not None else "active"
-        new_rows[ob.tmux] = Row(ob.tmux, ob.agent, ob.profile, ob.session_id, ob.cwd, state, now, server, ob.pid)
+        new_rows[ob.tmux] = Row(ob.tmux, ob.agent, ob.profile, ob.session_id, ob.cwd, state, now, server, ob.pid,
+                                prev.id if prev is not None else ids.new_id())
     for r in old:
         if r.tmux in used or r.tmux in new_rows:
             continue
@@ -125,8 +133,8 @@ def load_rows(path, *, codex_profile=""):
     try:
         data = json.loads(path.read_text())
         version = data["version"]
-        if version not in (1, 2):
-            raise RegistryError(f"{path} 是未知的版本 {version!r}（只認得 1、2）。不會覆蓋它；請升級 sampan 或從 state/history/ 挑一份還原。")
+        if version not in READABLE:
+            raise RegistryError(f"{path} 是未知的版本 {version!r}（只認得 1、2、3）。不會覆蓋它；請升級 sampan 或從 state/history/ 挑一份還原。")
         rows = [Row(**({"agent": "claude", "pid": None} | s)) for s in data["sessions"]]
     except (OSError, ValueError, KeyError, TypeError) as e:
         raise RegistryError(f"{path} 無法解析（{e}）。不會覆蓋它；請從 state/history/ 挑一份還原。") from e
@@ -162,8 +170,20 @@ def _only_volatile_changes(path, new_sessions):
         return False
 
 
-def write_rows(path, rows, now, history_dir, keep=20):
+def load_machine(path):
+    """The machine id recorded in the registry header ("" for a version 1/2 file, a missing or unreadable one)."""
+    try:
+        m = json.loads(Path(path).read_text()).get("machine", "")
+        return m if isinstance(m, str) else ""
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
+def write_rows(path, rows, now, history_dir, keep=20, *, machine=""):
     path = Path(path)
+    for r in rows:
+        if not r.id:
+            r.id = ids.new_id()
     history_dir = Path(history_dir)
     private_dir(path.parent)
     sessions = [asdict(r) for r in rows]
@@ -186,7 +206,7 @@ def write_rows(path, rows, now, history_dir, keep=20):
             old.unlink()
         for kept in snaps[-keep:]:
             private_file(kept)  # snapshots an older version left readable by others
-    body = {"version": VERSION, "saved_at": now, "sessions": sessions}
+    body = {"version": VERSION, "machine": machine, "saved_at": now, "sessions": sessions}
     atomic_write(path, json.dumps(body, ensure_ascii=False, indent=2) + "\n", mode=PRIVATE_FILE)
 
 

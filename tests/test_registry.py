@@ -5,13 +5,15 @@ import time
 import unittest
 from pathlib import Path
 
-from sampan.registry import Observed, RegistryError, Row, load_rows, lock, merge, set_state, write_rows
+from sampan.registry import Observed, RegistryError, Row, load_machine, load_rows, lock, merge, set_state, write_rows
 
 NOW = "2026-10-17T12:00:00+08:00"
 SRV = "4242-1792197209"
 OLD_SRV = "1111-1700000000"
 A = "aaaaaaaa-0000-4000-8000-000000000001"
 B = "bbbbbbbb-0000-4000-8000-000000000002"
+I1 = "11111111-0000-4000-8000-0000000000a1"
+I2 = "22222222-0000-4000-8000-0000000000a2"
 
 
 class MergeTest(unittest.TestCase):
@@ -95,6 +97,38 @@ class MergeTest(unittest.TestCase):
         self.assertEqual([row.tmux for row in merge([], obs, {"a", "b"}, NOW, SRV).rows], ["a", "b"])
 
 
+class MergeIdTest(unittest.TestCase):
+    def test_merge_new_row_gets_id(self):
+        r = merge([], [Observed("x", "claude", "work", A, "/c", 1)], {"x"}, NOW, SRV)
+        self.assertEqual(len(r.rows[0].id), 36)
+
+    def test_merge_update_keeps_id(self):
+        old = [Row("x", "claude", "alice", A, "/c", "active", "old", SRV, None, I1)]
+        r = merge(old, [Observed("x", "claude", "alice", B, "/c", 1)], {"x"}, NOW, SRV)
+        self.assertEqual(r.rows[0].id, I1)
+        r = merge(old, [], {"x"}, NOW, SRV)  # kept as is
+        self.assertEqual(r.rows[0].id, I1)
+
+    def test_merge_rename_by_session_id_keeps_id(self):
+        old = [Row("old-name", "claude", "alice", A, "/c", "active", "", SRV, None, I1)]
+        r = merge(old, [Observed("new-name", "claude", "alice", A, "/c", 1)], {"new-name"}, NOW, SRV)
+        self.assertEqual((r.renamed, r.rows[0].id), ([("old-name", "new-name")], I1))
+
+    def test_merge_rename_by_sampan_id(self):
+        # the conversation id changed as well as the name: only the stamped id recognises the row
+        old = [Row("old-name", "claude", "alice", A, "/c", "active", "", SRV, None, I1),
+               Row("other", "claude", "alice", B, "/c", "active", "", SRV, None, I2)]
+        r = merge(old, [Observed("new-name", "claude", "alice", "cccccccc-0000-4000-8000-000000000003", "/c", 1, I1)],
+                  {"new-name", "other"}, NOW, SRV)
+        self.assertEqual((r.renamed, r.added), ([("old-name", "new-name")], []))
+        self.assertEqual({x.tmux: x.id for x in r.rows}, {"new-name": I1, "other": I2})
+
+    def test_unknown_sampan_id_falls_back_to_session_id_rule(self):
+        old = [Row("old-name", "claude", "alice", A, "/c", "active", "", SRV, None, I1)]
+        r = merge(old, [Observed("new-name", "claude", "alice", A, "/c", 1, I2)], {"new-name"}, NOW, SRV)
+        self.assertEqual(r.rows[0].id, I1)
+
+
 class StorageTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -129,7 +163,7 @@ class StorageTest(unittest.TestCase):
         rows = load_rows(self.path)
         self.assertEqual((rows[0].agent, rows[0].pid), ("claude", None))
         write_rows(self.path, rows, NOW, self.hist)
-        self.assertEqual(json.loads(self.path.read_text())["version"], 2)
+        self.assertEqual(json.loads(self.path.read_text())["version"], 3)
         self.assertEqual(load_rows(self.path), rows)
 
     def test_v2_round_trips_codex_and_pid(self):
@@ -137,10 +171,11 @@ class StorageTest(unittest.TestCase):
         write_rows(self.path, rows, NOW, self.hist)
         self.assertEqual(load_rows(self.path), rows)
 
-    def test_registry_written_by_v0_5_3_reads_and_rewrites_byte_for_byte(self):
+    def test_registry_written_by_v0_5_3_reads_and_rewrites_with_the_same_values(self):
         # tests/fixtures/registry_v0.5.3.json is hand-written in the shape v0.5.3 wrote (local times with a +08:00 offset): active (claude, codex),
         # retired and stopped rows, a non-ASCII name, null pid. The State enum is a display status
-        # (status.py) and must not leak into the persisted active/retired values.
+        # (status.py) and must not leak into the persisted active/retired values. Since version 3 the rewrite adds
+        # the header "machine" and a row "id"; every other value, and the order, stays as it was.
         fixture = Path(__file__).resolve().parent / "fixtures" / "registry_v0.5.3.json"
         self.path.parent.mkdir(parents=True)
         self.path.write_bytes(fixture.read_bytes())
@@ -148,13 +183,22 @@ class StorageTest(unittest.TestCase):
         self.assertEqual([(r.tmux, r.state) for r in rows], [("003-帳務", "active"), ("api", "active"),
                                                               ("old-experiment", "retired"), ("stopped-one", "active")])
         data = json.loads(fixture.read_text())
-        write_rows(self.path, rows, data["saved_at"], self.hist)
-        self.assertEqual(self.path.read_bytes(), fixture.read_bytes())
-        # retire then activate through set_state also lands on the same bytes
+
+        def check():
+            out = json.loads(self.path.read_text())
+            self.assertEqual((out["version"], out["machine"], out["saved_at"]), (3, "m", data["saved_at"]))
+            for old, new in zip(data["sessions"], out["sessions"]):
+                self.assertEqual({k: v for k, v in new.items() if k != "id"}, old)
+                self.assertTrue(new["id"])
+        write_rows(self.path, rows, data["saved_at"], self.hist, machine="m")
+        check()
+        # retire then activate through set_state lands on the same values, with the same ids
+        ids_before = [r.id for r in rows]
         self.assertTrue(set_state(rows, "api", "retired"))
         self.assertTrue(set_state(rows, "api", "active"))
-        write_rows(self.path, rows, data["saved_at"], self.hist)
-        self.assertEqual(self.path.read_bytes(), fixture.read_bytes())
+        write_rows(self.path, rows, data["saved_at"], self.hist, machine="m")
+        check()
+        self.assertEqual([r.id for r in load_rows(self.path)], ids_before)
 
     def test_v1_registry_loads_and_rewrites_with_the_same_values(self):
         body = {"version": 1, "saved_at": NOW, "sessions": [
@@ -165,14 +209,40 @@ class StorageTest(unittest.TestCase):
         rows = load_rows(self.path)
         write_rows(self.path, rows, NOW, self.hist)
         out = json.loads(self.path.read_text())
-        self.assertEqual(out["version"], 2)
+        self.assertEqual(out["version"], 3)
         for old, new in zip(body["sessions"], out["sessions"]):
             self.assertEqual({k: new[k] for k in old}, old)  # every v1 value survives unchanged
             self.assertEqual((new["agent"], new["pid"]), ("claude", None))
 
+    def test_v2_file_loads_with_empty_ids(self):
+        self.path.parent.mkdir(parents=True)
+        self.path.write_text(json.dumps({"version": 2, "saved_at": NOW, "sessions": [
+            {"tmux": "x", "agent": "claude", "profile": "a", "session_id": A, "cwd": "/c"}]}))
+        self.assertEqual(load_rows(self.path)[0].id, "")
+        self.assertEqual(load_machine(self.path), "")
+
+    def test_write_fills_missing_ids_and_keeps_existing(self):
+        rows = [Row("a", "claude", "p", A, "/c"), Row("b", "claude", "p", B, "/c", id=I2)]
+        write_rows(self.path, rows, NOW, self.hist)
+        self.assertEqual(len(rows[0].id), 36)  # filled in the passed object
+        self.assertEqual(rows[1].id, I2)
+        again = load_rows(self.path)
+        self.assertEqual([r.id for r in again], [rows[0].id, I2])
+        write_rows(self.path, again, NOW, self.hist)
+        self.assertEqual([r.id for r in load_rows(self.path)], [rows[0].id, I2])
+
+    def test_write_is_version_3_with_machine(self):
+        write_rows(self.path, [Row("a", "claude", "p", A, "/c")], NOW, self.hist, machine="mach-1")
+        body = json.loads(self.path.read_text())
+        self.assertEqual((body["version"], body["machine"]), (3, "mach-1"))
+        self.assertEqual(load_machine(self.path), "mach-1")
+
+    def test_v4_refused(self):
+        self.test_rejects_unknown_version()
+
     def test_rejects_unknown_version(self):
         self.path.parent.mkdir(parents=True)
-        self.path.write_text(json.dumps({"version": 3, "sessions": []}))
+        self.path.write_text(json.dumps({"version": 4, "sessions": []}))
         with self.assertRaises(RegistryError):
             load_rows(self.path)
 
@@ -217,9 +287,9 @@ class StorageTest(unittest.TestCase):
         self.assertFalse(any(".tmp" in p.name for p in self.path.parent.iterdir()))
 
     def test_history_snapshot_skipped_when_only_seen_at_changes(self):
-        write_rows(self.path, [Row("s", "claude", "alice", A, "/c", seen_at="t1", pid=1, server="a")], NOW, self.hist)
+        write_rows(self.path, [Row("s", "claude", "alice", A, "/c", seen_at="t1", pid=1, server="a", id=I1)], NOW, self.hist)
         self.assertFalse(self.hist.exists() and list(self.hist.iterdir()))  # no old file: no snapshot
-        write_rows(self.path, [Row("s", "claude", "alice", A, "/c", seen_at="t2", pid=2, server="b")], NOW, self.hist)
+        write_rows(self.path, [Row("s", "claude", "alice", A, "/c", seen_at="t2", pid=2, server="b", id=I1)], NOW, self.hist)
         self.assertFalse(self.hist.exists() and list(self.hist.iterdir()))
         self.assertEqual(json.loads(self.path.read_text())["sessions"][0]["seen_at"], "t2")
 

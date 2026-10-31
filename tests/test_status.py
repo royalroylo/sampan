@@ -5,7 +5,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sampan.registry import Row, write_rows
+from sampan.registry import Row, load_rows, write_rows
 from sampan.status import State, _fmt_tokens, cmd_status, status_rows
 from tests.fakes import FakeRunner, cp, pane_line, ps_line
 from tests.helpers import local_tz, make_env
@@ -51,6 +51,13 @@ class StatusTest(unittest.TestCase):
         self.assertEqual(rows["old"].state, State.RETIRED)
         self.assertEqual(rows["extra"].state, State.UNREGISTERED)
         self.assertEqual(rows["running"].tokens, 300001)
+
+    def test_status_row_carries_id(self):
+        rows = {x.name: x for x in status_rows(self.cfg, self.r)}
+        reg = {r.tmux: r.id for r in load_rows(self.cfg.registry_path)}
+        self.assertTrue(reg["running"])
+        self.assertEqual((rows["running"].id, rows["old"].id), (reg["running"], reg["old"]))
+        self.assertEqual(rows["extra"].id, "")  # live but not registered
 
     def test_rows_carry_the_agent_pane(self):
         rows = {x.name: x for x in status_rows(self.cfg, self.r)}

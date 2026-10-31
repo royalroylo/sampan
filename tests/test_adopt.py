@@ -370,6 +370,7 @@ class FlowTest(Base):
         self.assertEqual([(x.tmux, x.agent, x.profile, x.session_id, x.cwd, x.state)
                           for x in load_rows(self.cfg.registry_path)],
                          [("proj-v2", "claude", "alice", A, str(self.cwd), "active")])
+        self.assertEqual(len(load_rows(self.cfg.registry_path)[0].id), 36)  # an adopted row has an id
         t = self.text()
         self.assertIn("▶ 請到原本的終端機視窗（tmux 外）裡「~/proj.v2」那個 Claude 輸入 /exit", t)
         self.assertIn("  等待它結束…（按 Ctrl-C 取消，什麼都不會改）", t)

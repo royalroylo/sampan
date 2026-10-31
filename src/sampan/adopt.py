@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import actionlog, claude_state, codex_daemon, codex_state
+from . import actionlog, claude_state, codex_daemon, codex_state, ids
 from .claude_state import find_transcript, read_session_files, transcript_problem, transcript_stats
 from .clock import now_iso
 from .codex_state import (
@@ -357,7 +357,7 @@ def _adopt_one(cfg, run, out, c, name, sid, sleep, timeout):
     pane = tmux.new_session(name, c.cwd)
     if pane is None:
         return "tmux new-session 失敗"
-    row = Row(name, c.agent, c.profile, sid, c.cwd, "active", now_iso(), tmux.server_id() or "", None)
+    row = Row(name, c.agent, c.profile, sid, c.cwd, "active", now_iso(), tmux.server_id() or "", None, ids.new_id())
     if not _register(cfg, out, row):
         return "登記表寫入失敗"
     send_line(tmux, pane, c.agent, _launch_cmd(cfg, c, sid, name), sleep)

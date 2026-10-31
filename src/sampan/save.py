@@ -2,6 +2,7 @@ import os
 
 from .clock import now_iso
 from .fsutil import PRIVATE_FILE, private_dir, try_chmod
+from .machine import registry_machine
 from .observe import PROC_ROOT, agent_sessions, observe
 from .procs import list_procs
 from .registry import RegistryError, load_rows, lock, merge, write_rows
@@ -48,7 +49,7 @@ def cmd_save(cfg, run, out, *, quiet=False, dry_run=False, proc_root=PROC_ROOT):
         now = now_iso()
         res = merge(old, observed, {p.session for p in panes}, now, server, keep_silently=quiet_keep)
         if not dry_run:
-            write_rows(cfg.registry_path, res.rows, now, cfg.history_dir)
+            write_rows(cfg.registry_path, res.rows, now, cfg.history_dir, machine=registry_machine(cfg))
     warnings += res.warnings
     summary = (f"新增 {len(res.added)}、更新 {len(res.updated)}、改名 {len(res.renamed)}、"
                f"已停止 {len(res.pending)}、警告 {len(warnings)}，共 {len(res.rows)} 列")

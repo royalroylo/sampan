@@ -72,6 +72,14 @@ class NewAndStateTest(Base):
                          f"env CLAUDE_CONFIG_DIR={self.cfg.profiles['work'].config_dir} claude --session-id {B} --name new-x")
         self.assertTrue(any("信任" in m for m in self.msgs))
 
+    def test_new_and_adopt_rows_have_ids(self):
+        r = self.runner()
+        cmd_new(self.cfg, r, self.msgs.append, "new-x", "claude:work", str(self.cwd),
+                sleep=lambda _: None, timeout=1, uuid4=lambda: B)
+        rows = load_rows(self.cfg.registry_path)
+        self.assertEqual(len(rows[0].id), 36)
+        self.assertNotEqual(rows[0].id, B)
+
     def test_new_with_message_sends_it_as_startup_prompt_and_records_a_sent_dispatch(self):
         r = self.runner()
         msg = "line1\n$HOME `x` 中文\n"

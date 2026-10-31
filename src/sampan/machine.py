@@ -67,3 +67,8 @@ def rename(cfg_path, name):
     except OSError as e:
         return f"寫不了 machine.toml：{e}"
     return m
+
+
+def registry_machine(cfg):
+    """The machine id to write into registry.json ("" when machine.toml cannot be read or written)."""
+    return load_or_create(cfg.path).id

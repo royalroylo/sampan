@@ -7,12 +7,13 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import actionlog, folder_cmd, folders
+from . import actionlog, folder_cmd, folders, ids
 from .claude_state import move_transcript, transcript_carry, transcript_problem
 from .clock import now_iso
 from .codex_state import _is_codex, codex_pid_in_pane, find_rollout
 from .dispatch import outbox_path
 from .launch import disabled_problem, launch_line, send_line
+from .machine import registry_machine
 from .observe import PROC_ROOT, SPLIT_HINT, live_by_pane, multi_agent_sessions
 from .procs import descendant_claude, is_descendant, list_procs
 from .prompts import ANSWERED, ATTACH, SKIP, Relay
@@ -65,7 +66,7 @@ def _register(cfg, out, row):
         if rows is None:
             return False
         rows = [r for r in rows if r.tmux != row.tmux] + [row]
-        write_rows(cfg.registry_path, sorted(rows, key=lambda r: r.tmux), now_iso(), cfg.history_dir)
+        write_rows(cfg.registry_path, sorted(rows, key=lambda r: r.tmux), now_iso(), cfg.history_dir, machine=registry_machine(cfg))
     return True
 
 
@@ -205,7 +206,7 @@ def _cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.slee
         out(f"❌ tmux new-session 失敗：{name}")
         return 1
     if agent == "claude":
-        row = Row(name, "claude", profile, session_id, cwd, "active", now_iso(), tmux.server_id() or "", None)
+        row = Row(name, "claude", profile, session_id, cwd, "active", now_iso(), tmux.server_id() or "", None, ids.new_id())
         if not _register(cfg, out, row):
             abort("session 沒登記成功，開場訊息沒送")
             return 2
@@ -242,7 +243,7 @@ def _cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.slee
                 out(f"  已信任 {cwd}")
             return 0
         if agent == "codex" and la is not None and la.agent == "codex" and la.session_id:
-            row = Row(name, "codex", cfg.codex.profile, la.session_id, cwd, "active", now_iso(), tmux.server_id() or "", la.pid)
+            row = Row(name, "codex", cfg.codex.profile, la.session_id, cwd, "active", now_iso(), tmux.server_id() or "", la.pid, ids.new_id())
             if not _register(cfg, out, row):
                 return 2
             out(f"▶ {name}（codex，{la.session_id[:8]}）已登記")
@@ -282,7 +283,7 @@ def cmd_set_state(cfg, out, name, state):
         if not set_state(rows, name, state):
             out(f"❌ 登記表沒有 {name}")
             return 2
-        write_rows(cfg.registry_path, rows, now_iso(), cfg.history_dir)
+        write_rows(cfg.registry_path, rows, now_iso(), cfg.history_dir, machine=registry_machine(cfg))
     out(f"{name} → {state}")
     return 0
 
@@ -312,7 +313,7 @@ def cmd_rename(cfg, run, out, old, new):
             return 1
         if row is not None:
             row.tmux = new
-            write_rows(cfg.registry_path, sorted(rows, key=lambda r: r.tmux), now_iso(), cfg.history_dir)
+            write_rows(cfg.registry_path, sorted(rows, key=lambda r: r.tmux), now_iso(), cfg.history_dir, machine=registry_machine(cfg))
     out(f"{old} → {new}" + ("" if live else "（tmux session 沒在執行，只改登記表）"))
     if row is not None:
         folder_cmd.sync_session(cfg, out, "rename", old, new)  # after the lock: the registry lock is not reentrant
@@ -344,7 +345,7 @@ def cmd_forget(cfg, run, out, name, *, dry_run=False):
         if dry_run:
             out(f"（dry-run）會從登記表移除 {name}，什麼都沒改")
         else:
-            write_rows(cfg.registry_path, [r for r in rows if r is not row], now_iso(), cfg.history_dir)
+            write_rows(cfg.registry_path, [r for r in rows if r is not row], now_iso(), cfg.history_dir, machine=registry_machine(cfg))
             out(f"✔ 已從登記表移除 {name}")
     if not dry_run:
         folder_cmd.sync_session(cfg, out, "forget", name)  # after the lock: the registry lock is not reentrant
@@ -800,7 +801,7 @@ def _set_profile(cfg, name, session_id, profile):
             return False
         if row.profile != profile:
             row.profile = profile
-            write_rows(cfg.registry_path, rows, now_iso(), cfg.history_dir)
+            write_rows(cfg.registry_path, rows, now_iso(), cfg.history_dir, machine=registry_machine(cfg))
         return True
 
 
@@ -901,7 +902,7 @@ def cmd_switch(cfg, run, out, name, profile, *, dry_run=False, own_pane=None, on
                 return 1
             out(f"  已把逐字稿搬到 {profile}")
         row.profile = profile
-        write_rows(cfg.registry_path, rows, now_iso(), cfg.history_dir)
+        write_rows(cfg.registry_path, rows, now_iso(), cfg.history_dir, machine=registry_machine(cfg))
     out(f"✔ {name}：登記表改成 {profile}，接回中…")
     if restore_fn is None:
         from .restore import cmd_restore as restore_fn
