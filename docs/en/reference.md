@@ -26,16 +26,17 @@ For migration or conversion scripts. A version sampan does not understand is nev
 
 Overrides: `SAMPAN_CONFIG` (config file, default `~/.config/sampan/config.toml`), `SAMPAN_STATE_DIR` (state folder, default `~/.local/state/sampan/`).
 
-## `registry.json` (`version = 2`, in the state folder)
+## `registry.json` (`version = 3`, in the state folder)
 
 ```json
 {
-  "version": 2,
+  "version": 3,
+  "machine": "…",
   "saved_at": "2026-01-01T09:00:00+00:00",
   "sessions": [
     {"tmux": "work", "agent": "claude", "profile": "alice", "session_id": "…",
      "cwd": "/Users/u/proj", "state": "active", "seen_at": "2026-01-01T09:00:00+00:00",
-     "server": "…", "pid": 12345}
+     "server": "…", "pid": 12345, "id": "…", "alias": ""}
   ]
 }
 ```
@@ -51,15 +52,16 @@ Overrides: `SAMPAN_CONFIG` (config file, default `~/.config/sampan/config.toml`)
 | `seen_at` | when it was last seen |
 | `server` | identity of the tmux server at the last sighting (pid and start time), used to tell "the user closed it" from "waiting to be resumed after a reboot" |
 | `pid` | the agent process last seen, an integer or `null` |
+| `id` | the session's fixed id (`str(uuid.uuid4())`), unchanged by renames, folder moves and profile switches; the screen shows its first 8 characters. Commands and MCP tools take a name, a full id, or a unique prefix of at least 8 characters (when ambiguous they fail and list the candidates: name plus first 8) |
+| `alias` | the alias: free text, not empty, no control characters, at most 50 characters; `""` is unset (the name stands in). Changing it touches neither tmux nor the id; it applies to Claude's `--name` and the Remote Control name at the next launch |
 
-Version 1 files are still read (a missing `agent` counts as `claude`, a missing `pid` as `null`) and become version 2 on the
-next write. Before a rewrite the previous file is copied to `history/registry-<time>.json` (newest 20 kept) only when a session really changed (`seen_at`, `pid` and `server` do not count).
+Version 1 and 2 files are still read (a missing `agent` counts as `claude`, a missing `pid` as `null`; `id` and `alias` are filled in by `sampan migrate`), and 0.15 always writes 3. Sampan 0.14 and earlier refuse a version 3 file instead of overwriting it; to downgrade, run `sampan migrate --revert` first (below). Before a rewrite the previous file is copied to `history/registry-<time>.json` (newest 20 kept) only when a session really changed (`seen_at`, `pid` and `server` do not count).
 Times (`saved_at`, `seen_at`, the history file names) are written in UTC (`+00:00`) and converted to local time only for
 display; history files left by older versions may be named in local time.
 
-## `folders.json` (`version = 1`, in the state folder)
+## `folders.json` (`version = 2`, in the state folder)
 
-Session folders, used only by the screen and `sampan folder`; `save`, `restore` and the reboot resume neither read nor write it, and the registry holds no folders. The format is `{"version": 1, "folders": {"客戶/甲": {"collapsed": false}}, "sessions": {"<name>": "客戶/甲"}}`: the keys of `folders` are full paths (levels separated by `/`, no empty segment, no control character) and `collapsed` is whether the screen shows it folded; `sessions` maps a session name to a folder path, and a session not listed sits at the top level. Reads and writes take the registry lock; the file is mode 600. A session the registry does not have is not listed, and parents missing from `folders` are added automatically. If the file cannot be read, is not JSON or its `version` is not 1, the list shows every session flat, every folder operation exits 2 with an explanation, and the bad file is never overwritten.
+Session folders, used only by the screen and `sampan folder`; `save`, `restore` and the reboot resume neither read nor write it, and the registry holds no folders. Version 2 is `{"version": 2, "folders": {"<folder id>": {"name": "A", "parent": "<parent folder id or null>", "collapsed": false}}, "sessions": {"<session id>": "<folder id>"}, "pending": {"<name>": "<folder id>"}}`: a folder has its own id and parent, and a session belongs to a folder by its registry `id`, so renaming a session or a folder, or moving it to another level, never loses the membership (only the one entry touched changes); `pending` holds members with no registry row yet (for example a Codex session `sampan new` placed in a folder), waiting by name. Version 1 is `{"version": 1, "folders": {"客戶/甲": {"collapsed": false}}, "sessions": {"<name>": "客戶/甲"}}` (paths as keys, levels separated by `/`, no empty segment, no control character); it is still read, 0.15 always writes 2, and while a member has no `id` yet (before the registry is upgraded) version 1 is still written. A session not listed sits at the top level. Reads and writes take the registry lock; the file is mode 600. A session the registry does not have is not listed, and parents missing from `folders` are added automatically. If the file cannot be read, is not JSON or its `version` is not 1 or 2, the list shows every session flat, every folder operation exits 2 with an explanation, and the bad file is never overwritten.
 
 | Command | Effect |
 |---|---|
@@ -72,9 +74,9 @@ Session folders, used only by the screen and `sampan folder`; `save`, `restore` 
 
 `sampan rename`, `sampan forget` and `sampan profile forget` keep `folders.json` in step; a failed sync only adds a line `⚠ 資料夾設定沒同步：…` and does not affect the action.
 
-## `dispatches.json` (`version = 1`, in the state folder)
+## `dispatches.json` (`version = 2`, in the state folder)
 
-Dispatch records: one message sent from a caller session (or the terminal) to a target session. Reads and writes hold `dispatches.lock` in the same folder; the file is 600 and the folder 700. The format is `{"version": 1, "dispatches": [...]}`, each entry:
+Dispatch records: one message sent from a caller session (or the terminal) to a target session. Reads and writes hold `dispatches.lock` in the same folder; the file is 600 and the folder 700. The format is `{"version": 2, "dispatches": [...]}` (version 2 since 0.14; the 0.15 fields ride on 0.14 keeping fields it does not know, so the version did not change), each entry:
 
 | Field | Meaning |
 |---|---|
@@ -90,6 +92,8 @@ Dispatch records: one message sent from a caller session (or the terminal) to a 
 | `thread_id` | conversation identifier, or `null` |
 | `raw` | a direct send (`send --raw`, MCP `raw=true`): `text` is the bare message with no source line; default `false` |
 | `batch` | batch id (`b` plus 4 lowercase hex), `null` when not sent as a batch; the dispatches of one batch share it |
+| `to_id`, `from_id` | the registry `id` of the target and of the caller; after a rename the other side is still found by it, so a rename mid-flight loses neither the reply nor the notice. `""` in old records (found by name instead) |
+| `machine` | the id of the machine the dispatch was made on |
 | `batch_skipped` | meaningful on the first item of a batch only: how many sessions the batch skipped (for the completion notice); default `0` |
 | `startup` | the startup message of `sampan new --message` (the new session may not be registered yet); an old record without it counts as `false` |
 
@@ -117,8 +121,8 @@ A stdio MCP server (one JSON-RPC 2.0 message per line; protocol version `2025-06
 
 | Tool | Arguments | Returns | Approval |
 |---|---|---|---|
-| `list_sessions` | none | `sessions`: each with `name`, `agent`, `profile`, `cwd`, `folder` (its folder, `""` is the top level; all `""` when `folders.json` cannot be read, with a `warning` saying so), `state` (`running`, `stopped`…), `activity` (`idle`, `busy`…), `last` (UTC ISO or `null`); plus `warning` when tmux cannot be read | never asks |
-| `send` | `session`, `message`, `raw` (default `false`; direct send: one line, starting with `/`, at most 500 characters, Claude only), `wait` (default `false`) | `dispatch`, `state`, `reply` once done, `reason` while not sent yet. `wait` waits at most 60 seconds; a dispatch not finished by then stays, and a notice goes to the caller's session when it is done or fails | asks |
+| `list_sessions` | none | `machine` (`id`, `name`: this machine); `sessions`: each with `name`, `id` (the full id; other tools take a name or an id), `machine` (this machine's id), `alias` (`""` when unset), `agent`, `profile`, `cwd`, `folder` (its folder, `""` is the top level; all `""` when `folders.json` cannot be read, with a `warning` saying so), `state` (`running`, `stopped`…), `activity` (`idle`, `busy`…), `last` (UTC ISO or `null`); plus `warning` when tmux cannot be read | never asks |
+| `send` | `session` (name or id), `message`, `raw` (default `false`; direct send: one line, starting with `/`, at most 500 characters, Claude only), `wait` (default `false`) | `dispatch`, `state`, `reply` once done, `reason` while not sent yet. `wait` waits at most 60 seconds; a dispatch not finished by then stays, and a notice goes to the caller's session when it is done or fails | asks |
 | `new_session` | `name`, `target` (`claude:<profile>`, `<profile>` or `codex`), `cwd`, `message`, `folder` (optional, as `sampan new --folder`; created when missing) | `dispatch` (the startup-message dispatch, as with `sampan new --message`). A new directory's trust prompt: with `confirm = true` and Claude Code as the caller (its permission prompt shows the whole arguments; not verified for Codex, which gets no automatic trust) you saw the `cwd` in the permission prompt, so sampan trusts for you only the prompt that shows exactly that `cwd`; any other prompt (another directory, an update, an unrecognised menu), and every prompt with `confirm = false`, gets no key: the result is `isError` saying which prompt it stopped at and `tmux attach -t <name>` to handle it, and the startup message starts once it is handled (the dispatch can still be read with `dispatch_result`). A Claude that does not come up in time (for example at a login or theme screen) is an `isError` too; a directory sampan trusted for you is named in the message | asks |
 | `send_batch` | `sessions` (a list of names, no duplicates), `message`, `raw` (default `false`), `wait` (default `false`, up to 60 seconds) | `batch` (the batch id), `items` (each `session`, `dispatch`, `state`, `reply` / `reason`), `skipped` (a **list**, each `session`, `reason`). Sends only to sessions that are running and idle, the others are not queued; one notice when the whole batch is done | asks (once) |
 | `dispatch_result` | `id` (a dispatch id, or the batch id from `send_batch`), `wait` (0–60 seconds, default 0) | `dispatch`, `state`, `label`, `to`, `reply`, `reason`; given a batch id it returns the whole batch: `batch`, `items`, and `skipped` is a **number** (how many were skipped) | never asks |
@@ -150,3 +154,28 @@ Limits:
 ## `sampan restart <name…>`
 
 Restarts the named sessions; each result is logged in `actions.log` (label `重開`). Classification: running in the registry with `agent_status` `idle`, and not in the pane sampan itself runs in, then `sampan stop` (90 second timeout) and a background reattach; stopped, then only reattached; busy (`busy`, `working` or `waiting`, reason 「忙」), any other status that is not idle (reason for example 「沒有閒著（unknown）」), retired, state unknown, any other state or not found, then skipped, with a final line "略過：name（reason）…". The reattach is a `restore` without confirmation that does not take you in by itself; an agent that stops at a startup menu (trust this directory and so on) is waited for and its question handed to you, as with `R` (by number in a terminal); in the sampan screen, choosing "go in and do it yourself" takes you into that session. Exit 1 when there is nothing to restart or reattach; otherwise the worst exit code of stop and restore.
+
+## Standard steps after a launch, and the RC reset
+
+After reattach (`restore` / `R` / Enter), restart (`restart` / `S`), `switch`, `move` and `adopt`, once Claude is back at its prompt and when the profile has Remote Control on (`remoteControlAtStartup`), sampan does one RC reset: it types `/remote-control`, presses Enter only when the menu's cursor is verified on `Disconnect this session`, then types `/remote-control <alias, or the name when unset>`. It does this on every launch without judging whether the name is already right, so the phone app's RC list gets a new entry each time and the old one disappears. The only keys sampan presses are text plus Enter, Up, Enter and Escape; if the screen is not what it expects it presses Escape and prints `RC 校正沒做：<reason>`, and the operation and its other steps and exit code are unaffected. `new` does not do it (a new conversation gets the right name directly), and neither can the in-place reattach inside sampan's own pane (sampan exits first). A single Enter on a stopped row in the screen waits for the reattach and the reset before taking you in. By hand it is `/remote-control` → `Disconnect this session` → `/remote-control <name>`. To fix an existing session's name, set the alias with `sampan alias`, then `sampan restart <name>` (an agent may run it from its shell for other sessions; busy ones and its own pane are skipped).
+
+## `sampan alias <name> <alias>`, `sampan alias <name> --clear`
+
+Sets or clears the alias (rules under `alias` in `registry.json`); `L` on the screen. Refused (exit 2) when an agent runs it from Bash while `[mcp] confirm` is on.
+
+## `sampan migrate [--dry-run | --revert]`
+
+Upgrades the data to the 0.15 format: `registry.json` to 3 (filling in `id`) and `folders.json` to 2; `dispatches.json` keeps its version. You normally never run it: the first 0.15 command of any kind does it automatically. Steps: copy the state files that exist into `backup-0.15-<time>/` in the state folder (never deleted; a retry after a failed run with identical content reuses the same backup), write the new format, re-read and compare session count, names, conversation ids and folder membership, and on any difference restore from the backup and report. It can be run again and does nothing when the data is already new. A broken `folders.json` is kept as it is with a warning, and the registry is still upgraded.
+
+- `--dry-run`: tries it on a copy and prints the before/after difference and how many ids would be made; the real files are untouched (read-only).
+- `--revert`: writes the registry back as version 2 and the folders as version 1, which 0.14 reads (after a backup). **Run it with 0.15 before downgrading**; ids and aliases are not kept, and the ids are regenerated at the next upgrade. An older sampan refuses version 3 / 2 files instead of damaging them.
+- `sampan doctor` shows the data versions of the registry and folders and the last backup.
+- After upgrading, a session still running an older `sampan mcp serve` cannot read the new registry and its sampan tools fail until that session is restarted; restart every session once (`sampan restart`). With 0.14 and 0.15 servers mixed, dispatches are still matched by name.
+
+## `machine.toml` and `sampan machine`
+
+`machine.toml` sits in the same folder as `config.toml`: `id` (made on creation) and `name` (editable; default the hostname without `.local`). `sampan machine` prints both; `sampan machine --name X` renames the machine (the id does not change; refused for an agent while `[mcp] confirm` is on). The id is written into the registry and the dispatch records, and MCP `list_sessions` returns it as `machine`. A cross-machine reference is written `<machine id>:<session id>`; only the format is defined so far.
+
+## `sampan switch` (several at once)
+
+`sampan switch <name…> <profile>`: the last word is the profile, before it come session names or ids (several allowed). `--folder <path>` switches everything in that folder (subfolders included) instead, and then only the profile is given. `--from <profile>` switches only the ones currently on that profile and skips the rest; `--dry-run` only lists the plan; `--yes` skips the "start?" question when several are switched. Skipped: busy or waiting sessions, Codex, retired, worktree, the pane sampan itself runs in, ones already on the target profile, ones not on `--from`. One table lists what happened to each session (switched, or skipped with the reason); conversation ids do not change. While `[mcp] confirm` is on, switching several at once (`--folder`, `--from`, or more than one name) is refused for an agent; `--dry-run` is not.

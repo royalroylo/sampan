@@ -26,16 +26,17 @@
 
 路徑覆寫：環境變數 `SAMPAN_CONFIG`（設定檔，預設 `~/.config/sampan/config.toml`）、`SAMPAN_STATE_DIR`（狀態資料夾，預設 `~/.local/state/sampan/`）。
 
-## `registry.json`（`version = 2`，在狀態資料夾裡）
+## `registry.json`（`version = 3`，在狀態資料夾裡）
 
 ```json
 {
-  "version": 2,
+  "version": 3,
+  "machine": "…",
   "saved_at": "2026-01-01T09:00:00+00:00",
   "sessions": [
     {"tmux": "work", "agent": "claude", "profile": "alice", "session_id": "…",
      "cwd": "/Users/u/proj", "state": "active", "seen_at": "2026-01-01T09:00:00+00:00",
-     "server": "…", "pid": 12345}
+     "server": "…", "pid": 12345, "id": "…", "alias": ""}
   ]
 }
 ```
@@ -51,12 +52,14 @@
 | `seen_at` | 最後一次看到的時間 |
 | `server` | 最後一次看到時的 tmux server 識別（pid 與啟動時間），用來分辨「使用者關掉了」與「重開機後等待接回」 |
 | `pid` | 最後一次看到的 agent 行程，整數或 `null` |
+| `id` | 這個 session 固定的 id（`str(uuid.uuid4())`），改名、搬資料夾、換 profile 都不變；畫面顯示前 8 碼。指令與 MCP 工具可用名稱、完整 id、或 ≥ 8 碼且唯一的前綴指定（不唯一時回錯並列出候選：名稱加前 8 碼） |
+| `alias` | 別名：自由文字、不可空白、不含控制字元、最長 50 字；`""` 是沒設（以名稱代替）。改別名不動 tmux 也不動 id，下次啟動才套用到 Claude 的 `--name` 與 Remote Control 名稱 |
 
-`version = 1` 的舊檔仍可讀（缺的 `agent` 視為 `claude`、`pid` 視為 `null`），下次寫入時升為 2。每次改寫前，若 session 有實際變動（`seen_at`、`pid`、`server` 不算），會把舊檔複製到 `history/registry-<時間>.json`（保留最近 20 份）。時間（`saved_at`、`seen_at`、歷史檔名）一律以 UTC 寫入（`+00:00`），畫面上顯示時才換成本地時間；舊版留下的歷史檔名可能是本地時間。
+`version = 1`、`2` 的舊檔仍可讀（缺的 `agent` 視為 `claude`、`pid` 視為 `null`、`id` 與 `alias` 由 `sampan migrate` 補上），0.15 寫入時一律是 3。0.14 以前的 sampan 讀到 3 會拒絕、不覆蓋；要降版先跑 `sampan migrate --revert`（見下）。每次改寫前，若 session 有實際變動（`seen_at`、`pid`、`server` 不算），會把舊檔複製到 `history/registry-<時間>.json`（保留最近 20 份）。時間（`saved_at`、`seen_at`、歷史檔名）一律以 UTC 寫入（`+00:00`），畫面上顯示時才換成本地時間；舊版留下的歷史檔名可能是本地時間。
 
-## `folders.json`（`version = 1`，在狀態資料夾裡）
+## `folders.json`（`version = 2`，在狀態資料夾裡）
 
-session 資料夾，只給畫面和 `sampan folder` 用；`save`、`restore`、重開機接回都不讀也不寫它，登記表也不放資料夾。格式是 `{"version": 1, "folders": {"客戶/甲": {"collapsed": false}}, "sessions": {"<名稱>": "客戶/甲"}}`：`folders` 的鍵是完整路徑（用 `/` 分層，每段不能是空的、不含控制字元），`collapsed` 是畫面上是否收合；`sessions` 把 session 名稱對到資料夾路徑，不在裡面的 session 在最外層。讀寫時用登記表的鎖；檔 600。登記表沒有的 session 不會列出，資料夾沒寫的上層會自動補上。檔案讀不到、不是 JSON、`version` 不是 1 時，列表平坦列出全部 session，所有資料夾操作回 2 並說明，壞檔不會被覆寫。
+session 資料夾，只給畫面和 `sampan folder` 用；`save`、`restore`、重開機接回都不讀也不寫它，登記表也不放資料夾。版本 2 的格式是 `{"version": 2, "folders": {"<資料夾 id>": {"name": "甲", "parent": "<上層資料夾 id 或 null>", "collapsed": false}}, "sessions": {"<session id>": "<資料夾 id>"}, "pending": {"<名稱>": "<資料夾 id>"}}`：資料夾有自己的 id 與上層，session 用登記表的 `id` 歸屬，所以 session 或資料夾改名、搬層都不會掉歸屬（只有被動到的那一筆變）；`pending` 放還沒有登記表那一列的成員（例如 `sampan new` 先放進資料夾的 Codex），照名稱等著。版本 1 是 `{"version": 1, "folders": {"客戶/甲": {"collapsed": false}}, "sessions": {"<名稱>": "客戶/甲"}}`（路徑為鍵，用 `/` 分層，每段不能是空的、不含控制字元），仍可讀，0.15 寫入時一律是 2；沒有 `id` 的成員在登記表升級前仍照版本 1 寫。不在 `sessions` 裡的 session 在最外層。讀寫時用登記表的鎖；檔 600。登記表沒有的 session 不會列出，資料夾沒寫的上層會自動補上。檔案讀不到、不是 JSON、`version` 不是 1 或 2 時，列表平坦列出全部 session，所有資料夾操作回 2 並說明，壞檔不會被覆寫。
 
 | 指令 | 作用 |
 |---|---|
@@ -69,9 +72,9 @@ session 資料夾，只給畫面和 `sampan folder` 用；`save`、`restore`、�
 
 `sampan rename`、`sampan forget`、`sampan profile forget` 會同步 `folders.json`；同步失敗只多一行 `⚠ 資料夾設定沒同步：…`，不影響原動作。
 
-## `dispatches.json`（`version = 1`，在狀態資料夾裡）
+## `dispatches.json`（`version = 2`，在狀態資料夾裡）
 
-派工紀錄：一則從呼叫者 session（或終端機）送給目標 session 的訊息。讀寫時用同資料夾的 `dispatches.lock` 鎖住；檔 600、資料夾 700。格式是 `{"version": 1, "dispatches": [...]}`，每筆：
+派工紀錄：一則從呼叫者 session（或終端機）送給目標 session 的訊息。讀寫時用同資料夾的 `dispatches.lock` 鎖住；檔 600、資料夾 700。格式是 `{"version": 2, "dispatches": [...]}`（0.14 起；0.15 的新欄位靠 0.14 的「保留不認得的欄位」，版本不變），每筆：
 
 | 欄位 | 說明 |
 |---|---|
@@ -88,6 +91,8 @@ session 資料夾，只給畫面和 `sampan folder` 用；`save`、`restore`、�
 | `startup` | `sampan new --message` 的開場訊息（新 session 可能還沒登記）；沒有這欄的舊紀錄視為 `false` |
 | `raw` | 直接送（`send --raw`、MCP `raw=true`）：`text` 是原文，沒有來源行；預設 `false` |
 | `batch` | 批次編號（`b` 加 4 個小寫 hex），不是批次送出的是 `null`。同一批的派工共用它 |
+| `to_id`、`from_id` | 目標與呼叫者在登記表裡的 `id`；改名後仍靠它找到對方，所以途中改名不會漏掉回覆與通知。舊紀錄是 `""`（改靠名稱）|
+| `machine` | 派工發生的那台機器的 id |
 | `batch_skipped` | 只在一批的第一筆有意義：這批跳過了幾個 session（給完成通知用）；預設 `0` |
 
 `sampan new --message` 建的派工一開始就是 `sent`（`sent_at` 是開新 session 的時間；`text` 與 `outbox/<id>.txt` 都不以換行結尾，因為 `$(cat …)` 會去掉結尾換行，不然回覆對不上）；`thread_id` 由之後的推進從狀態列補。新 session 還沒被認出來時不判失敗，`reason` 寫「對方 session 還在啟動」：Codex 還沒有對話（未登記）時只要那個 Codex 還在跑就一直等；tmux 在、agent 還沒看到（Claude 已登記但「已停止」、或沒有 agent）時最多等 120 秒；停在信任資料夾等提示時一直等。
@@ -114,8 +119,8 @@ stdio MCP server（每行一則 JSON-RPC 2.0；協定版本 `2025-06-18`，clien
 
 | 工具 | 參數 | 回傳 | 核准 |
 |---|---|---|---|
-| `list_sessions` | 無 | `sessions`：每列 `name`、`agent`、`profile`、`cwd`、`folder`（所在資料夾，`""` 是最上層；`folders.json` 讀不到時全是 `""`，`warning` 說明）、`state`（`running`、`stopped`…）、`activity`（`idle`、`busy`…）、`last`（UTC ISO 或 `null`）；讀不到 tmux 時多一個 `warning` | 不問 |
-| `send` | `session`、`message`、`raw`（預設 `false`，直接送：單行、`/` 開頭、最長 500 字、只限 Claude）、`wait`（預設 `false`） | `dispatch`、`state`，做完時有 `reply`，還沒送出時有 `reason`。`wait` 最多等 60 秒；沒等到的照樣留著，完成或失敗時往呼叫者的 session 送一則通知 | 問 |
+| `list_sessions` | 無 | `machine`（`id`、`name`：這台機器）；`sessions`：每列 `name`、`id`（完整 id；其他工具可用名稱或 id 指定）、`machine`（這台機器的 id）、`alias`（沒設是 `""`）、`agent`、`profile`、`cwd`、`folder`（所在資料夾，`""` 是最上層；`folders.json` 讀不到時全是 `""`，`warning` 說明）、`state`（`running`、`stopped`…）、`activity`（`idle`、`busy`…）、`last`（UTC ISO 或 `null`）；讀不到 tmux 時多一個 `warning` | 不問 |
+| `send` | `session`（名稱或 id）、`message`、`raw`（預設 `false`，直接送：單行、`/` 開頭、最長 500 字、只限 Claude）、`wait`（預設 `false`） | `dispatch`、`state`，做完時有 `reply`，還沒送出時有 `reason`。`wait` 最多等 60 秒；沒等到的照樣留著，完成或失敗時往呼叫者的 session 送一則通知 | 問 |
 | `new_session` | `name`、`target`（`claude:<profile>`、`<profile>` 或 `codex`）、`cwd`、`message`、`folder`（選填，跟 `sampan new --folder` 一樣，沒有就建立） | `dispatch`（跟 `sampan new --message` 一樣，開場訊息的派工）。新目錄的信任提示：`confirm = true` 而且呼叫的是 Claude Code（它的權限提示顯示完整參數；Codex 還沒確認，不自動信任）時，你已在權限提示看過 `cwd`，sampan 只替你信任「提示上顯示的正是這個 `cwd`」的那一個；其他提示（別的目錄、更新、認不出的選單）和 `confirm = false` 時一律不按鍵，回 `isError` 說停在哪個提示、`tmux attach -t <名稱>` 進去處理，開場訊息處理完才開始（派工照樣可用 `dispatch_result` 看）。Claude 在時限內沒啟動完成（例如停在登入或主題畫面）也回 `isError`；已替你信任的目錄會寫在訊息裡 | 問 |
 | `send_batch` | `sessions`（名稱清單，不能重複）、`message`、`raw`（預設 `false`）、`wait`（預設 `false`，最多 60 秒） | `batch`（批次編號）、`items`（每筆 `session`、`dispatch`、`state`、`reply`／`reason`）、`skipped`（**清單**，每筆 `session`、`reason`）。只送給執行中而且閒著的，其他不排隊；整批做完才送一則通知 | 問（一次） |
 | `dispatch_result` | `id`（派工編號，或 `send_batch` 的批次編號）、`wait`（0–60 秒，預設 0） | `dispatch`、`state`、`label`、`to`、`reply`、`reason`；給批次編號時回整批：`batch`、`items`，`skipped` 是**數字**（跳過幾個） | 不問 |
@@ -147,3 +152,28 @@ stdio MCP server（每行一則 JSON-RPC 2.0；協定版本 `2025-06-18`，clien
 ## `sampan restart <名稱…>`
 
 重開指定的 session，每筆結果記在 `actions.log`（標籤 `重開`）。分類：登記表裡執行中、`agent_status` 是 `idle`、也不在 sampan 自己所在的 pane 的 → 先 `sampan stop`（逾時 90 秒）再背景接回；已停止的 → 只接回；忙碌中的（`busy`／`working`／`waiting`，原因「忙」）、其他不是 idle 的（原因例如「沒有閒著（unknown）」）、retired、狀態不明、其他狀態、找不到的 → 略過，最後一行印「略過：名稱（原因）…」。接回用 `restore` 的不確認模式，不會主動把你帶進 session；agent 啟動時停在選單（信任目錄等）的，跟 `R` 一樣等選單出現、把問題交給你回答（終端機裡用編號問）；在 sampan 畫面裡選「進去自己操作」就會進到那個 session。可重開與可接回的都沒有時回傳 1；否則回傳 stop 與 restore 中最差的結束碼。
+
+## 啟動後的標準步驟與 RC 校正
+
+接回（`restore`／`R`／Enter）、重開（`restart`／`S`）、`switch`、`move`、`adopt` 在 Claude 回到輸入框之後，如果該 profile 開了 Remote Control（`remoteControlAtStartup`），都會做一次 RC 校正：打 `/remote-control`，確認選單的游標停在 `Disconnect this session` 才按 Enter，再打 `/remote-control <別名，沒設就是名稱>`。每次啟動都做，不判斷名稱對不對，所以手機 app 的 RC 列表每次多一個新項目、舊的消失。sampan 只按文字加 Enter、上、Enter、Esc 這幾種鍵；畫面不是預期的樣子就按 Esc，印 `RC 校正沒做：<原因>`，原動作與其他步驟不受影響、結束碼不變。`new` 不做（新對話直接帶對的名稱）；在 sampan 畫面自己那個 pane 原地接回（sampan 先結束）也做不了。畫面上單按 Enter 接回一個 session 會等接回與校正做完才進去。手動做法同樣是 `/remote-control` → `Disconnect this session` → `/remote-control <名稱>`。修一個現有 session 的名稱：先 `sampan alias` 設好，再 `sampan restart <名稱>`（agent 可從自己的 shell 對別的 session 跑，忙碌中的與自己的 pane 略過）。
+
+## `sampan alias <名稱> <別名>`、`sampan alias <名稱> --clear`
+
+設或清別名（規則見 `registry.json` 的 `alias`）；畫面按 `L`。`[mcp] confirm` 開著時 agent 從 Bash 跑會被拒絕（結束碼 2）。
+
+## `sampan migrate [--dry-run | --revert]`
+
+把資料升到 0.15 的格式：`registry.json` 到 3（補 `id`）、`folders.json` 到 2；`dispatches.json` 版本不變。平常不用手動跑：0.15 第一次執行任何指令就自動做。步驟：先把狀態資料夾裡存在的檔案複製到 `backup-0.15-<時間>/`（從不刪除；上次失敗重試時內容相同就沿用同一份）、寫新格式、重讀比對 session 數、名稱、對話 id、歸屬，不一致就從備份寫回並報錯。可重複跑，已是新格式時什麼都不做。`folders.json` 壞掉時原檔保留並警告，登記表照樣升級。
+
+- `--dry-run`：在複本上試做，印前後差異與會產生幾個 id，原檔不動（唯讀）。
+- `--revert`：把登記表寫回 0.14 讀得懂的版本 2、資料夾寫回版本 1（先備份）。**降版前用 0.15 先跑它**；`id` 與別名不會保留，下次升級會重新產生 id。舊版 sampan 讀到版本 3／2 的檔案會拒絕，不會弄壞它。
+- `sampan doctor` 顯示登記表與資料夾的資料版本與最近一次備份。
+- 升級後，還在跑舊版 `sampan mcp serve` 的 session 讀不懂新登記表，它的 sampan 工具會失敗，直到該 session 重開；每個 session 重開一次（`sampan restart`）。0.14 與 0.15 的 server 混用時，派工仍靠名稱對得上。
+
+## `machine.toml` 與 `sampan machine`
+
+`machine.toml` 在 `config.toml` 同一個資料夾：`id`（建立時產生）與 `name`（可改，預設是主機名稱去掉 `.local`）。`sampan machine` 印 id 與名稱；`sampan machine --name X` 改名（id 不變；`[mcp] confirm` 開著時 agent 執行會被拒絕）。id 寫進登記表與派工紀錄，MCP `list_sessions` 回傳 `machine`。跨機器引用寫成 `<機器 id>:<session id>`，目前只有這個格式的定義。
+
+## `sampan switch`（批次）
+
+`sampan switch <名稱…> <profile>`：最後一個字是 profile，前面是 session 名稱或 id（可多個）。`--folder <路徑>` 改成換該資料夾（含子資料夾）裡的全部，這時只給 profile。`--from <profile>` 只換目前在這個 profile 的，別人的跳過；`--dry-run` 只列計畫；`--yes` 多個一起換時不再問「開始？」。跳過的情況：忙碌或等人、Codex、retired、worktree、sampan 自己所在的 pane、已經在目標 profile、不是 `--from` 指定的。結果用一張表列出每個 session（換了或跳過與原因）；對話 id 不變。`[mcp] confirm` 開著時，多個一起換（含 `--folder`、`--from`）由 agent 執行會被拒絕，`--dry-run` 不受限。

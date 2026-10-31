@@ -5,6 +5,29 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-31
+
+### Added
+- Stable session ids: every session gets an id (a uuid4, shown as its first 8 characters) that survives renames, folder moves and profile switches. The CLI and the MCP tools accept a name, a full id, or a unique prefix of at least 8 characters (ambiguous: an error that lists the candidates). `sampan status` has an id column (the conversation id column is now 對話). A rename done directly in tmux is recognised as the same session, because each tmux session carries `@sampan_id`: its id and folder follow.
+- Aliases: `sampan alias NAME ALIAS` / `--clear` and `L` on the screen. An alias is free text (not empty, no control characters, at most 50 characters), shown as 「名稱 · 別名」, and is used for Claude's `--name` and the Remote Control name at the next launch. Unset means the session name. Refused for an agent while `[mcp] confirm` is on.
+- Remote Control reset: after reattach (`R` / restore), restart (`S` / `sampan restart`), switch, move and adopt, when the profile has Remote Control on, sampan types `/remote-control`, presses Enter once the cursor is verified on "Disconnect this session", then types `/remote-control <alias>`. It runs on every launch and never judges whether the name is right, so the phone app's RC list gets a new entry each time. If the screen is not recognised it presses Esc and prints `RC 校正沒做：<原因>`; the operation is otherwise unaffected. `new` does not do it. Pressing Enter on a stopped row now waits until the reattach and the reset are done before taking you in. An agent can run `sampan restart <name>` for other sessions to fix a wrong name.
+- `sampan migrate [--dry-run | --revert]`. `--dry-run` tries the upgrade on a copy and prints the difference; `--revert` writes the 0.14 formats back (see Upgrading). `sampan doctor` shows the data versions and the last backup.
+- `machine.toml` next to `config.toml` (an id and an editable name, default the hostname without `.local`), `sampan machine` and `sampan machine --name X` (refused for an agent while confirm is on). MCP `list_sessions` returns the top-level `machine` and, per session, `id`, `alias` and `machine`. The cross-machine reference `<machine id>:<session id>` is defined, nothing uses it yet.
+- Switching several sessions at once: `sampan switch NAME… PROFILE`, `--folder PATH` (subfolders included), `--from PROFILE`, `--dry-run`, `--yes`; `P` on the screen with 2 or more rows marked or on a folder row. Busy or waiting, Codex, retired, worktree, own-pane, already-on-target and not-`--from` sessions are skipped, and one table lists the result of each. Refused for an agent while confirm is on (except `--dry-run`).
+
+### Changed
+- `registry.json` is version 3 (adds `id` and `alias`) and `folders.json` is version 2 (folders and sessions are held by id, with parent folder ids), so renaming a session or a folder no longer loses its folder: only the entry touched changes. `dispatches.json` stays version 2; its records now carry `to_id`, `from_id` and `machine`, so a rename while a dispatch is in flight keeps the reply and the notice. `actions.log` names sessions as `name#<id8>`.
+- Older sampan versions refuse the version 3 / 2 files rather than reading and damaging them.
+
+### Fixed
+- A session renamed in tmux (outside sampan) used to look like a new session and lose its folder and dispatches.
+- An unreadable `folders.json` no longer blocks commands: it is kept as it is with a warning while the registry still migrates.
+
+### Upgrading
+- The first 0.15 command migrates `registry.json` to version 3 and `folders.json` to version 2 automatically. It first copies the state files into `backup-0.15-<time>/` in the state directory (never deleted), then compares sessions, names, conversation ids and folder membership before and after, and puts the backup back if anything differs. It can be run again safely; `sampan migrate --dry-run` shows what it would do.
+- **Restart every session once after upgrading** (`S` on the screen, or `sampan restart`). A session still running an older `sampan mcp serve` cannot read the new registry, so its sampan MCP tools fail until it is restarted; the restart also does the Remote Control reset. During the transition, 0.14 servers still match dispatches by name.
+- To go back to 0.14: run `sampan migrate --revert` with 0.15 first (registry back to version 2, folders to version 1, after a backup), then downgrade. Ids and aliases are not kept; ids are made again at the next upgrade.
+
 ## [0.14.2] - 2026-10-31
 
 ### Changed

@@ -7,6 +7,8 @@
 sampan 記住每個 session 跑的是哪一段對話。agent 結束、tmux 關掉，或機器重開機之後，可以一個個接回原本的對話。
 它也能讓多個 Claude profile 的 plugin 保持一致。
 
+每個 session 有固定的 id 和可自訂的別名（改名、搬資料夾都不會弄丟歸屬與派工）；接回、重開、換帳號後會校正 Remote Control 的名稱，也能一次把整個資料夾的 session 換到另一個 profile。
+
 主畫面會用 ⚠／⛔ 提醒額度快用完，也能唯讀地看 Codex 常駐服務（`codex remote-control start`）裡的狀態、額度與其他對話；沒在跑時打開畫面會自動啟動一次，仍不行就退回讀紀錄。
 
 ## 需求
@@ -42,6 +44,7 @@ sampan init
 
 - 設定放 `~/.config/sampan/`，登記表與歷史放 `~/.local/state/sampan/`。
 - macOS：新增一個 launchd 排程，每 5 分鐘跑 `sampan save`，只存檔。
+- 升到 0.15 的第一次執行會把登記表與資料夾檔升到新格式，先備份到 `backup-0.15-<時間>/`（`sampan migrate --revert` 可寫回 0.14 的格式）。
 - 不會動 Claude 的 `settings.json`，除非你自己跑 `sampan init --hook`（或同意修復以前裝的 hook）。
 - 只有你動手（開、接回、停止、搬目錄、`sampan send`／`send-batch` 傳訊息）時，才會對 tmux 的 pane 打字；傳訊息只送進空的輸入框。直接送（`--raw`）只貼一行 `/` 開頭的指令再按 Enter，不替它按其他鍵。
 - 只有你自己跑 `sampan mcp install` 時，才會用 `claude mcp add --scope user` 與 `codex mcp add` 把 sampan MCP 寫進各 profile 與 Codex 的設定（`sampan mcp uninstall` 移除）。這兩個指令也會改 Codex 的 `config.toml`：`[mcp] confirm` 開著（預設）時 `install` 加上讓 Codex 在 sampan 會動作的工具前先問你的設定，confirm 關著時的 `install` 與 `uninstall` 只拿掉設成 `prompt` 的那幾段（使用者自己改成 `approve` 的不動）；只動 sampan 自己的 `[mcp_servers.sampan.tools.*]` 幾段，每次改之前先備份成 `config.toml.bak-sampan-<時間>`。

@@ -8,6 +8,8 @@ sampan remembers which conversation each session is running. After an agent exit
 you can put every session back into its original conversation, one by one. It also keeps the plugins of several Claude
 profiles in sync.
 
+Every session has a fixed id and an optional alias (renaming or moving it to another folder loses neither its folder nor its dispatches); after a reattach, restart or account switch sampan resets the Remote Control name, and a whole folder of sessions can be switched to another profile in one go.
+
 The main screen warns with ⚠ / ⛔ when a quota runs low, and reads the Codex daemon (`codex remote-control start`) read-only for status, quota and other conversations; if it is not running it is started once automatically when you open the screen, and if it still is not running sampan falls back to reading Codex's rollout files.
 
 ## Requirements
@@ -43,6 +45,7 @@ Tip: sampan is a long name to type, and on macOS `sam` plus Tab collides with `/
 
 - Config goes in `~/.config/sampan/`; the registry and history in `~/.local/state/sampan/`.
 - macOS: one launchd job runs `sampan save` every 5 minutes. It only saves.
+- The first run of 0.15 upgrades the registry and folders files to the new format, after a backup into `backup-0.15-<time>/` (`sampan migrate --revert` writes the 0.14 format back).
 - Claude's `settings.json` is not touched unless you run `sampan init --hook` (or accept repairing a hook installed earlier).
 - It types into tmux panes only when you act: open, resume, stop, move or send (`sampan send` / `send-batch`, only into an empty prompt). A direct send (`--raw`) pastes one line starting with `/` and presses Enter, and no other key.
 - Only when you run `sampan mcp install` does it add the sampan MCP to each profile's and Codex's config (`claude mcp add --scope user`, `codex mcp add`); `sampan mcp uninstall` removes it. Both also edit Codex's `config.toml`: with `[mcp] confirm` on (the default) `install` adds the settings that make Codex ask before sampan's acting tools, and `install` with confirm off and `uninstall` remove only the ones set to `prompt` (tables a user set to `approve` are left); only sampan's own `[mcp_servers.sampan.tools.*]` tables change, each time after a backup `config.toml.bak-sampan-<time>`.

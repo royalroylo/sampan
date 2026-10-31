@@ -6,7 +6,8 @@
 
 - **一個 tmux session = 一個 agent。** 每個 session 裡跑一個 Claude Code（某個 profile）或 Codex，做一件事、放在一個專案目錄。
 - **sampan 有一本登記表**，記住每個 session 的名稱、agent、profile、目錄，以及**它正在進行的那段對話**。所以 agent 結束、tmux 關掉、甚至重開機之後，都能接回同一段對話，就像沒停過。
-- **Claude 的 session 名稱固定成 tmux 名稱**：sampan 每次開 Claude（新開、接回／`R`、重開／`S`、換帳號、搬目錄、接手）都帶 `--name <tmux 名稱>`，所以提示列、`/resume`、終端機標題和 Remote Control 看到的名稱不會在換帳號或接回後變成自動產生的標題。如果該 profile 開了啟動時的 Remote Control（settings.json 的 `remoteControlAtStartup`，沒有就看舊的 `.claude.json`），sampan 還會帶 `--remote-control <tmux 名稱>`，因為只有 `--name` 時，Remote Control 只有新對話會用這個名稱；沒開就不會替它打開。Codex 不受影響。
+- **Claude 的 session 名稱固定成 tmux 名稱（或你設的別名）**：sampan 每次開 Claude（新開、接回／`R`、重開／`S`、換帳號、搬目錄、接手）都帶 `--name <名稱>`，所以提示列、`/resume`、終端機標題和 Remote Control 看到的名稱不會在換帳號或接回後變成自動產生的標題。如果該 profile 開了啟動時的 Remote Control（settings.json 的 `remoteControlAtStartup`，沒有就看舊的 `.claude.json`），sampan 還會帶 `--remote-control <名稱>`；沒開就不會替它打開。接回、重開、換帳號、搬目錄、接手之後，sampan 還會替有開 Remote Control 的 session 做一次「RC 校正」，見下面「常見情境」。Codex 不受影響。
+- **名稱、別名、id 是三樣東西。** 每個 session 有一個固定的 id（建立時產生，畫面和 `sampan status` 顯示前 8 碼），改名、搬資料夾、換 profile 都不會變；在 tmux 裡直接改 session 名稱，sampan 也認得是同一個（id 與所在資料夾跟著走）。名稱在這台機器上不能重複；別名是給人看的名字（可含空白與中文，最長 50 字，沒設就是名稱），用在 Claude 的 `--name` 與 Remote Control 名稱，畫面上顯示成「名稱 · 別名」。指令與 MCP 工具指定 session 時，可以給名稱、完整 id，或 id 的前 8 碼以上（不唯一時會列出候選）。
 - **每個 session 有三種狀態：**
 
   | 狀態 | 意思 | 怎麼變成這樣 |
@@ -35,8 +36,9 @@
 | 整理成資料夾 | `g` 包成新資料夾、`f` 搬進資料夾；資料夾列上 Enter 收合／展開、`e` 改名、`X` 刪除 | 只改 `folders.json`，不動任何 session，見下面「資料夾」 |
 | 一次接回好幾個 | `R` | 勾選清單（預設勾最近 7 天有動過的），接回後進到第一個 |
 | 把 tmux 外的終端機（任何終端機程式）裡的 Claude 收進來 | `A` | 勾選要接手的，逐一取名；你自己在原本那個終端機分頁打 `/exit`，sampan 等它結束後在 tmux 接回同一段對話，然後進去 |
-| 改名 | `e` | tmux 與登記表一起改，agent 照常跑 |
-| 換帳號繼續（例如額度用完） | `P`（只有 Claude） | 列出 profile 讓你選，確認後 claude 結束、用新的 profile 在同一個目錄接回同一段對話；新帳號第一次進這個目錄時自動信任（規則同 `m`）。已停止的 session 直接用新 profile 接回。新 profile 沒裝原本有的 plugin 時會先列出來，但照樣可以換。卡在額度選單、等不到 claude 結束時，sampan 不亂按鍵，會請你自己按 Esc 再打 `/exit`，之後再按 `P` 一次 |
+| 改名 | `e` | tmux 與登記表一起改，agent 照常跑；id 與資料夾歸屬不變 |
+| 設別名 | `L` | 設（或清掉）這個 session 的別名；不動 tmux、不動 id，下次啟動時才套用到 Claude 的名稱與 Remote Control |
+| 換帳號繼續（例如額度用完） | `P`（只有 Claude） | 列出 profile 讓你選，確認後 claude 結束、用新的 profile 在同一個目錄接回同一段對話；新帳號第一次進這個目錄時自動信任（規則同 `m`）。已停止的 session 直接用新 profile 接回。新 profile 沒裝原本有的 plugin 時會先列出來，但照樣可以換。卡在額度選單、等不到 claude 結束時，sampan 不亂按鍵，會請你自己按 Esc 再打 `/exit`，之後再按 `P` 一次。標記 2 個以上、或游標在資料夾列上按 `P`，是一次換好幾個（見「常見情境」） |
 | 換工作目錄 | `m` | 用選目錄畫面挑新目錄（從它現在的目錄開始；那個目錄已經不在時，從 `[ui] start_dir` 開始，和 `n` 一樣），確認後 agent 結束、在新目錄接回同一段對話 |
 | 這件事做完了 | `r` | 標成 retired，之後不會出現在接回清單 |
 | 從登記表移除一個不用的 session | `X`（只有已停止或 retired 的列） | 在畫面底部問確定（之後不會再列出，也不會被 `R` 接回）；移除後印出手動接回的指令。對話紀錄不會刪，舊的登記表留在 `history/` |
@@ -176,6 +178,16 @@ Claude Code 只在狀態列指令的輸入裡提供 5h／週額度，所以要�
 
 **在 tmux 裡要回到清單**：按 `Ctrl-q`（`[ui] detach_key`，只在 sampan 管的 session 裡有效）或 detach（預設 `Ctrl-b d`）就會回到 sampan 的清單；按 `q` 才離開 sampan。也可以在 tmux 裡開一個專門放 sampan 的 session 或 pane：在那裡選了之後會切過去，sampan 留在原處，切回來看到的還是清單。
 
+**Remote Control 的名稱不對（手機 app 的列表顯示舊名稱）**：接回舊對話時，Claude 會沿用舊的 Remote Control 連線和舊名稱。所以只要 profile 開了 Remote Control，sampan 在每次啟動後（接回／`R`、重開／`S`、換帳號、搬目錄、接手）都會做一次「RC 校正」：Claude 回來之後打 `/remote-control`，確認游標停在「Disconnect this session」才按 Enter，再打 `/remote-control <別名>`。每次都做、不先判斷名稱對不對，所以 app 的 RC 列表每次會多一個新項目（舊的消失）。`new` 不做（新對話一開始就是對的名稱）；在 sampan 自己那個 pane 裡原地接回時 sampan 已先結束，也做不了。畫面上單按 Enter 接回一個 session，會等接回與校正做完（幾秒）才帶你進去。認不得畫面時 sampan 按 Esc 離開，印出 `RC 校正沒做：<原因>`，其他動作不受影響。要修一個現有 session 的名稱：`sampan restart <名稱>`（畫面上 `S`）；agent 也可以在自己的 shell 對**別的** session 跑它（自己的 pane 與忙碌中的會略過）。手動做法：`/remote-control` → Disconnect this session → `/remote-control <名稱>`。
+
+**給 session 一個好認的別名**：`sampan alias <名稱> "RC 校正 一"`（畫面上 `L`），清掉用 `--clear`。別名只在下次啟動時套用，所以改完再 `sampan restart <名稱>` 就會出現在 Remote Control 列表。agent 在 `[mcp] confirm` 開著時不能自己改別名。
+
+**把整個資料夾的 session 換到另一個 profile**：`sampan switch --folder 客戶/甲 team-b --from main --yes`（或 `sampan switch 名稱1 名稱2 team-b`；畫面上標記多個、或在資料夾列按 `P`）。`--from` 只換目前在那個 profile 的（別人的跳過），`--dry-run` 先看。忙碌或等人、Codex、retired、worktree、自己所在的 pane、已經在目標 profile 的都會跳過，最後用一張表列出每個 session 的結果；對話 id 不變。
+
+**升級到 0.15、資料格式與降版**：第一次跑 0.15 的任何指令時，登記表自動升到版本 3、資料夾升到版本 2，先備份到狀態資料夾的 `backup-0.15-<時間>/`（不會被刪），升完比對，不一致就寫回原樣。`sampan migrate --dry-run` 在複本上試做、印出差異；`sampan doctor` 顯示資料版本與最近備份。**升級後每個 session 都要重開一次**（`S` 或 `sampan restart`）：還在跑舊版 `sampan mcp serve` 的 session 讀不懂新的登記表，它的 sampan 工具會失敗，重開也順便做 RC 校正。要降回 0.14：先用 0.15 跑 `sampan migrate --revert` 再降版（別名與 id 不會留下，再升級時會重新產生）；舊版 sampan 讀到新格式的檔案會拒絕而不是弄壞它。
+
+**多台機器**：`machine.toml` 在 `config.toml` 旁邊，記這台機器的 id 與名稱（預設是去掉 `.local` 的主機名稱）。`sampan machine` 看，`sampan machine --name X` 改名（id 不變；agent 在 confirm 開著時不能改）。MCP `list_sessions` 會回傳最上層的 `machine`，每個 session 帶 `id`、`alias`、`machine`。跨機器引用的寫法 `<機器 id>:<session id>` 目前只有定義，還沒有功能用它。
+
 **不想用全螢幕畫面**（例如在腳本或很窄的終端機）：`sampan ui --plain` 用輸入編號，打 `/文字` 可搜尋（只有一個符合就直接進去，多個會列出編號讓你挑）；每個動作也都有獨立指令，見下面「指令一覽」。
 
 ## 指令一覽
@@ -195,6 +207,10 @@ Claude Code 只在狀態列指令的輸入裡提供 5h／週額度，所以要�
 | 重開機後接回 | `sampan restore [名稱…] [--all] [--dry-run]` |
 | 接手在 tmux 外（例如終端機程式的分頁）跑的 claude／codex | `sampan adopt [--dry-run]`（或 ui 按 A）：列出 tmux 外的 claude／codex（目錄、最後活動、最後一句話），勾選後逐一問 session 名稱；你自己在原視窗 `/exit`（Codex：`/quit`），sampan 等它結束後才在新的 tmux session 接回同一段對話並登記。sampan 不對原視窗按任何鍵；判斷不出對話 id 或 profile 的不能選（Codex：新開的要先送出第一個 prompt、剛 `codex resume` 的要先送一則訊息，sampan 才認得出是哪段對話） |
 | 改 session 名稱 | `sampan rename <名稱> <新名稱>`（或 ui 按 e）：tmux session 與登記表一起改，agent 照常執行、不送任何按鍵。名稱不能含 `.` 或 `:` |
+| 設／清別名 | `sampan alias <名稱> <別名>`、`sampan alias <名稱> --clear`（或 ui 按 L）：別名下次啟動時套用 |
+| 這台機器的 id 與名稱 | `sampan machine [--name X]` |
+| 資料格式升級／降版 | `sampan migrate [--dry-run｜--revert]`：平常第一次跑 0.15 就自動做（先備份）；`--dry-run` 只試做看差異；`--revert` 寫回 0.14 的格式，降版前跑 |
+| 好幾個 session 換 profile | `sampan switch <名稱…> <profile>` 或 `sampan switch --folder <路徑> <profile>`，可加 `--from <profile>`、`--dry-run`、`--yes`（ui：標記多個或資料夾列按 P）。見「常見情境」 |
 | session 換 profile（換帳號）繼續同一段對話 | `sampan switch <名稱> <profile> [--dry-run]`（或 ui 按 P）：執行中的照 `sampan move` 的流程在原目錄、用新 profile 接回；已停止的改登記表後直接接回。逐字稿在新 profile 讀不到時（各 profile 的 `projects/` 沒共用）會**搬**過去而不是複製，永遠只有一份；新 profile 已經有同一段對話的逐字稿時不動，請你先決定留哪份。Codex 沒有 profile，不適用 |
 | session 換到別的工作目錄 | `sampan move <名稱> <目錄>`（或 ui 按 m）：結束 agent、在新目錄接回同一段對話、自動信任新目錄（只在提示顯示的路徑就是新目錄時）、更新登記表。目錄不存在會建立；忙碌中、worktree、自己的 pane 不動 |
 | 某個 session 以後不用重開 | `sampan retire <名稱>`（恢復：`sampan activate <名稱>`）；對 retired 的 session 打 `sampan restore <名稱>` 會說「<名稱> 是 retired；先 sampan activate <名稱>」 |

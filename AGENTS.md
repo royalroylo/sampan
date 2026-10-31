@@ -31,6 +31,8 @@ which conversation each session runs, so sessions can be resumed after an agent 
   and records its conversation, so it can be resumed later.
 - `sampan mcp install` / `uninstall` edit the Claude profiles' and Codex's config (through `claude mcp add` / `codex mcp add`): they also edit Codex's `config.toml` directly, only sampan's `[mcp_servers.sampan.tools.*]` tables and each time after a backup `config.toml.bak-sampan-<time>`: `mcp install` with `[mcp] confirm` on adds them, `mcp install` with confirm off and `mcp uninstall` remove only the ones set to `prompt` (tables a user set to `approve` are left). Run them only when the user asks, and `--dry-run` first if unsure.
 - While `[mcp] confirm` is on, `sampan send`, `sampan new … --message` and `sampan dispatches cancel` run by an agent are refused; use the sampan MCP tools instead (the user is asked each time).
+- `sampan migrate` is not read-only: it rewrites the registry and folders files (after a backup). It also runs by itself on the first 0.15 command. Run it only when the user asks; `sampan migrate --dry-run` is read-only. `--revert` is for downgrading to 0.14 and only on the user's say-so.
+- `sampan alias` and `sampan machine --name` change state (and are refused for an agent while `[mcp] confirm` is on); `sampan machine` alone only reads. `sampan restart <name>` for other sessions is fine when the user asks; never for your own pane.
 - `sampan update` is not read-only: it reinstalls sampan. Only run it if the user asks, and do not pass `--yes` to `sampan update` on the user's behalf.
 
 ## Working on the code
