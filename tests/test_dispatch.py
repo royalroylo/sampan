@@ -40,6 +40,48 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(self.dir.stat().st_mode), 0o700)
         self.assertEqual(stat.S_IMODE((self.dir / "dispatches.lock").stat().st_mode), 0o600)
 
+    def _seed_future(self):
+        self.dir.mkdir(parents=True)
+        rec = {k: v for k, v in dataclasses.asdict(mk("aaaa")).items() if k != "extra"}
+        other = dict(rec, id="bbbb")
+        (self.dir / "dispatches.json").write_text(json.dumps(
+            {"version": 2, "dispatches": [dict(rec, future_field={"n": 1}), other]}))
+
+    def _raw(self):
+        return {r["id"]: r for r in json.loads((self.dir / "dispatches.json").read_text())["dispatches"]}
+
+    def test_unknown_key_survives_a_change_to_another_dispatch(self):
+        self._seed_future()
+        with dispatch.transaction(self.dir) as cur:
+            cur[1].state = "sent"
+        raw = self._raw()
+        self.assertEqual(raw["aaaa"]["future_field"], {"n": 1})
+        self.assertEqual(raw["bbbb"]["state"], "sent")
+        self.assertNotIn("extra", raw["aaaa"])
+
+    def test_unknown_key_survives_a_change_to_the_same_dispatch_and_replace(self):
+        self._seed_future()
+        with dispatch.transaction(self.dir) as cur:
+            cur[0] = dataclasses.replace(cur[0], state="sent")
+        raw = self._raw()
+        self.assertEqual(raw["aaaa"]["future_field"], {"n": 1})
+        self.assertEqual(raw["aaaa"]["state"], "sent")
+        self.assertNotIn("future_field", raw["bbbb"])
+
+    def test_new_dispatch_writes_no_extra_keys(self):
+        with dispatch.transaction(self.dir) as cur:
+            cur.append(mk("aaaa"))
+        rec = self._raw()["aaaa"]
+        self.assertNotIn("extra", rec)
+        self.assertEqual(set(rec), {f.name for f in dataclasses.fields(Dispatch)} - {"extra"})
+
+    def test_known_field_wins_over_an_extra_key_of_the_same_name(self):
+        self._seed_future()
+        with dispatch.transaction(self.dir) as cur:
+            cur[0].extra["state"] = "failed"
+            cur[0].state = "done"
+        self.assertEqual(self._raw()["aaaa"]["state"], "done")
+
     def test_from_kind_round_trips_and_is_inferred_for_old_records(self):
         items = [mk("aaaa", from_kind="unregistered"), mk("bbbb")]
         with dispatch.transaction(self.dir) as cur:

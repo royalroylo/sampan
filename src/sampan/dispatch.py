@@ -9,7 +9,7 @@ import os
 import secrets
 import time
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from datetime import timedelta
 from pathlib import Path
 
@@ -55,6 +55,8 @@ class Dispatch:
     raw: bool = False  # a direct send: text is the bare message (no source line), a slash command for the target itself
     batch: str | None = None  # id of the batch send this dispatch belongs to
     batch_skipped: int = 0  # on the first item of a batch only: how many sessions the batch skipped
+    # keys of the JSON object this sampan does not know (written by a newer sampan); written back as they were
+    extra: dict = field(default_factory=dict, compare=False, repr=False)
 
     def __post_init__(self):
         if self.from_kind is None:
@@ -81,8 +83,9 @@ def load(state_dir):
         data = json.loads(path.read_text())
         if data["version"] not in READABLE_VERSIONS:
             raise DispatchError(f"{path} 是未知的版本 {data['version']!r}（只認得 {'、'.join(map(str, READABLE_VERSIONS))}）。不會覆蓋它。")
-        known = {f.name for f in fields(Dispatch)}  # a field written by a newer sampan is ignored, not an error
-        items = [Dispatch(**{k: v for k, v in d.items() if k in known}) for d in data["dispatches"]]
+        known = {f.name for f in fields(Dispatch)}  # a field written by a newer sampan is kept in `extra`, not an error
+        items = [Dispatch(**{k: v for k, v in d.items() if k in known and k != "extra"},
+                          extra={k: v for k, v in d.items() if k not in known}) for d in data["dispatches"]]
     except DispatchError:
         raise
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
@@ -95,8 +98,15 @@ def load(state_dir):
     return items
 
 
+def _record(d):
+    """The JSON object of one dispatch: the unknown keys it was read with, then the known fields (which win a clash)."""
+    rec = asdict(d)
+    extra = rec.pop("extra")
+    return {**extra, **rec}
+
+
 def _write(state_dir, items):
-    text = json.dumps({"version": VERSION, "dispatches": [asdict(d) for d in items]}, ensure_ascii=False, indent=2) + "\n"
+    text = json.dumps({"version": VERSION, "dispatches": [_record(d) for d in items]}, ensure_ascii=False, indent=2) + "\n"
     atomic_write(_path(state_dir), text, mode=PRIVATE_FILE)
 
 

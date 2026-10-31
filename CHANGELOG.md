@@ -13,6 +13,7 @@ All notable changes to this project are documented here. The format follows
 - Lights on the screen: a `◆` before each running session, 執行中 / 等人 / 閒置, and 待看 (counted as 等人): idle with output nobody has looked at since the last attach, a preview held for 3 seconds, or the last collected dispatch reply. The seen times are kept in `seen.json`; on first launch every running session counts as seen. Folder rows show a count per light (`2 等人　1 執行中`), folded or not.
 - Screen keys: `!` jumps to the 等人 filter and back, `v` shows or hides the preview (remembered in `ui.json`), `t` sends a message (one row queues like `sampan send`, several marked rows go as a batch, a message starting with `/` asks whether to send it directly).
 - 升級到 0.14 後，要先重開 session（畫面按 `S`），它們的 sampan MCP 工具才能再送派工、看回覆：派工檔 `dispatches.json` 升成版本 2，沒重開的舊版 `sampan mcp serve` 會拒絕讀它，不會再讀了又寫回、把 `raw`、`batch` 默默弄丟。
+- `dispatches.json` 現在會保留它不認得的欄位：之後的版本可以新增欄位，不必再靠升版本號逼舊 session 重開。
 
 ### Changed
 - The Tab filters are now 全部 / 等人 / 執行中 / 閒置 / 已停止 / 異常: the old 忙碌 is 執行中 and no longer holds sessions waiting for you (those are 等人). 閒置 means the same as before (what `S` restarts). The folder count 「N 忙」 is replaced by the per-light counts. The key help line is shorter to fit the new keys.
