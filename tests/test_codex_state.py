@@ -519,6 +519,14 @@ class ReplyToTest(unittest.TestCase):
         f = _jl([_item("t1", "UserMessage", "hi"), _item("t1", "AgentMessage", "partial", "commentary")])
         self.assertEqual(reply_to(f, "hi"), Reply(True, False, "partial"))
 
+    def test_reports_aborted_turn(self):
+        ab = {"type": "event_msg", "payload": {"type": "turn_aborted", "turn_id": "t1", "reason": "interrupted"}}
+        f = _jl([_item("t1", "UserMessage", "hi"), _item("t1", "AgentMessage", "half", "commentary"), ab])
+        self.assertEqual(reply_to(f, "hi"), Reply(True, False, "half", aborted=True))
+        other = dict(ab, payload=dict(ab["payload"], turn_id="t0"))
+        f = _jl([_item("t1", "UserMessage", "hi"), other, _done("t1", "ok")])
+        self.assertEqual(reply_to(f, "hi"), Reply(True, True, "ok"))  # another turn's abort, and a completed turn
+
     def test_prefers_final_answer(self):
         f = _jl([_item("t1", "UserMessage", "hi"), _item("t1", "AgentMessage", "final", "final_answer"),
                  _item("t1", "AgentMessage", "late comment", "commentary"), _done("t1", "final")])

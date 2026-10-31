@@ -345,7 +345,7 @@ def _reply_to(path, sent):
 
 
 def _reply_from(turn, events):
-    finals, others, complete, done, closed = [], [], None, False, False
+    finals, others, complete, done, closed, aborted = [], [], None, False, False, False
     for kind, payload in events:
         text, uturn = _user_event(kind, payload)
         if text is not None and (turn is None or uturn != turn):  # the next message starts another turn (legacy: no turn ids)
@@ -359,10 +359,12 @@ def _reply_from(turn, events):
                 (finals if payload["item"].get("phase") == "final_answer" else others).append(msg)
         elif kind == "agent_message" and isinstance(payload.get("message"), str) and payload["message"].strip():
             others.append(payload["message"])
+        elif kind == "turn_aborted":
+            aborted = True
         elif kind == "task_complete":
             done = True
             last = payload.get("last_agent_message")
             if isinstance(last, str) and last.strip():
                 complete = last
     text = (finals or others)[-1] if (finals or others) else (complete or "")
-    return Reply(True, done, text, closed)
+    return Reply(True, done, text, closed, aborted)

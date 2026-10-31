@@ -1003,6 +1003,31 @@ class StuckSentTest(Base):
         d = self.advance(FakeRunner(strict=True), d.id, later(5))
         self.assertEqual((d.state, d.reason), ("failed", "對方這輪結束了，但沒有回覆文字"))
 
+    def test_codex_with_text_but_no_task_complete_is_not_failed_by_idle_looks(self):
+        d = self.sent("c")
+        self.rollout(TID_C, [codex_item("t1", "UserMessage", d.text), codex_item("t1", "AgentMessage", "working on it", "commentary")])
+        for i in range(5):  # idle looks misread mid-turn: only the rollout says the turn is over
+            d = self.advance(FakeRunner(strict=True), d.id, later(20 + 3 * i))
+            self.assertEqual(d.state, "sent")
+        self.rollout(TID_C, [codex_item("t1", "UserMessage", d.text), codex_item("t1", "AgentMessage", "working on it", "commentary"),
+                             codex_item("t1", "AgentMessage", "the final", "final_answer"), codex_done("t1", "the final")])
+        d = self.advance(FakeRunner(strict=True), d.id, later(60))
+        self.assertEqual((d.state, d.reply), ("done", "the final"))
+
+    def test_codex_turn_aborted_fails_with_reason(self):
+        d = self.sent("c")
+        self.rollout(TID_C, [codex_item("t1", "UserMessage", d.text), codex_item("t1", "AgentMessage", "half", "commentary"),
+                             {"type": "event_msg", "payload": {"type": "turn_aborted", "turn_id": "t1", "reason": "interrupted"}}])
+        d = self.advance(FakeRunner(strict=True), d.id, later(20))
+        self.assertEqual((d.state, d.reason), ("failed", send.REASON_ABORTED))
+        self.assertEqual(send.REASON_ABORTED, "對方這輪被中斷了")
+
+    def test_codex_task_complete_without_text_still_fails_no_text(self):
+        d = self.sent("c")
+        self.rollout(TID_C, [codex_item("t1", "UserMessage", d.text), codex_done("t1", None)])
+        d = self.advance(FakeRunner(strict=True), d.id, later(20))
+        self.assertEqual((d.state, d.reason), ("failed", send.REASON_NO_TEXT))
+
     def test_codex_interrupted_then_next_message_fails(self):
         d = self.sent("c")
         self.rollout(TID_C, [codex_item("t1", "UserMessage", d.text), codex_item("t2", "UserMessage", "other"),

@@ -44,6 +44,7 @@ REASON_STARTING = "對方 session 還在啟動"
 REASON_SKIPPED = "對方沒回這則就換了下一則"
 REASON_NO_TEXT_YET = "對方閒著，但還沒看到回覆文字"
 REASON_NO_TEXT = "對方這輪結束了，但沒有回覆文字"
+REASON_ABORTED = "對方這輪被中斷了"
 REASON_STOP_WATCHING = "不再等回覆"
 REASON_RAN = "指令已執行（沒有文字回覆）"  # a direct send done without reply text: its reply
 REASON_NEW_THREAD = "對方換成新對話（{sid8}）"  # a direct send (/clear…) after which the target's conversation id changed
@@ -603,6 +604,19 @@ def _check(cfg, d, row, now, run=None):
     grace = STARTUP_GRACE_S if d.startup else NOT_SEEN_GRACE_S
     # the first look at a new session that has just come up never judges either
     early = was_starting or (sent is not None and (now - sent).total_seconds() < grace)
+    if reply.found and row.agent == "codex":
+        # Codex: only the rollout says the turn is over; idle looks (the screen can be misread mid-turn) never do
+        if reply.text and (reply.done or reply.closed):
+            _finish(d, "done", now, reply=reply.text)
+        elif reply.aborted:
+            _finish(d, "failed", now, REASON_ABORTED)
+        elif reply.closed:
+            _finish(d, "failed", now, REASON_SKIPPED)
+        elif reply.done:  # the turn is complete and said nothing
+            _finish(d, "failed", now, REASON_NO_TEXT)
+        else:  # no task_complete and no turn_aborted yet: still working
+            d.reason = ""
+        return
     if reply.found:
         if reply.text and (reply.done or reply.closed):
             _finish(d, "done", now, reply=reply.text)

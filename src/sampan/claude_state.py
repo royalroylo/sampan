@@ -164,11 +164,13 @@ def _last_user_text(path):
 @dataclass(frozen=True)
 class Reply:
     """found: the sent message is in the transcript; done: text is the reply (an assistant text exists after it);
-    closed: a later message was typed after it, so no more reply text can come."""
+    closed: a later message was typed after it, so no more reply text can come;
+    aborted: (Codex) the turn was interrupted."""
     found: bool
     done: bool
     text: str
     closed: bool = False
+    aborted: bool = False  # Codex only: the turn ended with turn_aborted
 
 
 def _assistant_text(rec):
