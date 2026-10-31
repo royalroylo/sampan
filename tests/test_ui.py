@@ -896,6 +896,19 @@ class PickerFolderTest(unittest.TestCase):
         p.key(" ")
         self.assertEqual(p.marked_folders, set())
 
+    def test_ui_p_on_folder_row_goes_batch(self):
+        p = self.picker()  # cursor on the folder 客戶
+        self.assertEqual(p.key("P"), ("switch_many", ["a1", "b1", "x"]))
+        p = self.picker(current="a1")
+        self.assertEqual(p.key("P"), ("switch", ["a1"]))  # one session: the single flow
+        self.press(p, " ", "j", " ")  # a1 and the next session marked
+        names = p.key("P")
+        self.assertEqual(names[0], "switch_many")
+        self.assertEqual(len(names[1]), 2)
+        p = self.picker(current="a1")
+        p.key(" ")  # one session marked: still the single flow, on the cursor row
+        self.assertEqual(p.key("P")[0], "switch")
+
     def test_g_returns_marked_items(self):
         p = self.picker(current="top")
         p.key(" ")  # top
@@ -917,7 +930,7 @@ class PickerFolderTest(unittest.TestCase):
         p = self.picker()
         self.assertEqual(p.key("e"), ("rename_folder", ["客戶"]))
         self.assertEqual(p.key("X"), ("rm_folder", ["客戶"]))
-        for k in "mPra":
+        for k in "mra":
             self.assertIsNone(p.key(k))
         p = self.picker(current="a1")
         self.assertEqual(p.key("e"), ("rename", ["a1"]))
@@ -1120,6 +1133,17 @@ class InteractiveUiTest(UiTest):
                switch_fn=lambda cfg, run, out, name, prof, **kw: self.calls.append(("switch", name, prof)) or 0)
         self.assertIn("會用新 profile 接回這段對話", "\n".join(self.msgs))
         self.assertEqual(self.calls, [("switch", "a", "work")])
+
+    def test_switch_many_picks_profile_asks_and_runs_batch(self):
+        rows = [row("a"), row("b"), row("c", agent_status="busy")]
+        answers = iter(["2", "y"])
+        asked = []
+        cmd_ui(self.cfg, self.r, self.msgs.append, lambda p: asked.append(p) or next(answers), own_pane="%9",
+               rows_fn=lambda c, r: rows, picker_fn=lambda rows, cur: ("switch_many", ["a", "b", "c"]),
+               switch_fn=lambda cfg, run, out, name, prof, **kw: self.calls.append(("switch", name, prof, kw)) or 0)
+        self.assertIn("開始？ y/N: ", asked)
+        self.assertEqual([c[:3] for c in self.calls], [("switch", "a", "work"), ("switch", "b", "work")])
+        self.assertIn("跳過 1 個：c（忙碌中）", self.text())
 
     def test_move_confirms_first(self):
         self.ui_keys(("move", ["a"]), ["/tmp", "y"])

@@ -207,6 +207,32 @@ class CliTest(unittest.TestCase):
             cli.main(["switch", "abcdef", "work"])  # shorter than 8: not an id, passed on as typed
             self.assertEqual(sw.call_args.args[3], "abcdef")
 
+    def test_switch_many_goes_to_batch_and_single_does_not(self):
+        import dataclasses
+        os.environ["TMUX_PANE"] = "%4"
+        with mock.patch("sampan.cli.load_config", return_value=dataclasses.replace(self.cfg, mcp_confirm=False)), \
+                mock.patch("sampan.switch_many.cmd_switch_many", return_value=0) as sm, \
+                mock.patch("sampan.session_run.cmd_switch", return_value=0) as sw, \
+                mock.patch("sys.stdin.isatty", return_value=False):
+            self.assertEqual(cli.main(["switch", "a", "b", "work", "--from", "alice", "--yes", "--dry-run"]), 0)
+            self.assertEqual(sm.call_args.args[3:6], (None, ["a", "b"], "work"))
+            kw = sm.call_args.kwargs
+            self.assertEqual((kw["from_profile"], kw["yes"], kw["dry_run"], kw["folder"], kw["own_pane"]),
+                             ("alice", True, True, None, "%4"))
+            self.assertEqual(cli.main(["switch", "--folder", "客戶", "work"]), 0)
+            self.assertEqual((sm.call_args.args[4:6], sm.call_args.kwargs["folder"]), (([], "work"), "客戶"))
+            self.assertEqual(sw.call_count, 0)
+            self.assertEqual(cli.main(["switch", "a", "work"]), 0)
+            self.assertEqual(sw.call_count, 1)
+            self.assertEqual(sm.call_count, 2)
+
+    def test_switch_needs_names_or_folder_not_both(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            self.assertEqual(cli.main(["switch", "work"]), 2)
+            self.assertEqual(cli.main(["switch", "--folder", "x", "a", "work"]), 2)
+        self.assertIn("用法：sampan switch NAME... PROFILE", buf.getvalue())
+
     def test_cli_ambiguous_prefix_refused(self):
         from sampan.registry import Row, write_rows
         write_rows(self.cfg.registry_path, [Row("a", "claude", "alice", "sa", "/c", id="abcdef12-0000-4000-8000-000000000001"),
@@ -601,6 +627,13 @@ class AgentRefusedTest(unittest.TestCase):
         with mock.patch("sampan.send.cmd_send") as cs:
             rc, text, _ = self.run_cli(["send", "api", "hi"], self.SESSION)
         self.assertEqual((rc, cs.call_count), (2, 0))
+        self.assertIn(AGENT_REFUSED, text)
+
+    def test_agent_batch_switch_refused_when_confirm(self):
+        from sampan.send import AGENT_REFUSED
+        with mock.patch("sampan.switch_many.cmd_switch_many") as sm:
+            rc, text, _ = self.run_cli(["switch", "a", "b", "work", "--yes"], self.SESSION)
+        self.assertEqual((rc, sm.call_count), (2, 0))
         self.assertIn(AGENT_REFUSED, text)
 
     def test_send_raw_is_refused_for_an_agent_when_confirm_is_on(self):

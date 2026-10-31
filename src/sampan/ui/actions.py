@@ -221,6 +221,25 @@ def _switch(cfg, run, out, ask, r, own_pane, switch_fn, prompt_kw=None):
     return switch_fn(cfg, run, out, r.name, new, own_pane=own_pane, warn_gap=False, **(prompt_kw or {}))
 
 
+def _switch_batch(cfg, run, out, ask, names, own_pane, switch_fn, rows_fn, prompt_kw=None):
+    """P with several sessions (marked, or a folder): pick the profile, then switch_many plans, confirms and runs."""
+    from .. import switch_many  # lazy: keep ui import-light
+    profiles = list(cfg.profiles)
+    for i, p in enumerate(profiles, 1):
+        label = cfg.profiles[p].label
+        out(f"  [{i}] {p}{f'（{label}）' if label else ''}")
+    raw = _ask(ask, f"{len(names)} 個 session 換到哪個 profile？(編號，Enter 取消): ")
+    if not raw:
+        out("已取消")
+        return 0
+    if not raw.isdigit() or not 1 <= int(raw) <= len(profiles):
+        out(f"無效編號：{raw}")
+        return 1
+    return switch_many.cmd_switch_many(
+        cfg, run, out, lambda prompt: _ask(ask, prompt + ": "), names, profiles[int(raw) - 1], own_pane=own_pane,
+        on_prompt=(prompt_kw or {}).get("on_prompt"), switch_fn=switch_fn, status_fn=rows_fn)
+
+
 def _rename(cfg, run, out, ask, name, rename_fn):
     new = (_ask(ask, f"{name} 的新名稱（Enter 取消）: ") or "").strip()
     if not new:
@@ -541,6 +560,9 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
             return 1, None
         return _switch(cfg, run, out, ask, r, own_pane, switch_fn, kw), None
 
+    def _switch_many_rows(names, rows, kw):
+        return _switch_batch(cfg, run, out, ask, names, own_pane, switch_fn, rows_fn, kw), None
+
     def _plugins(names, rows, kw):
         if plugins_fn is not None:
             return plugins_fn(ask=ask, own_pane=own_pane, on_prompt=kw.get("on_prompt")), None
@@ -598,6 +620,7 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
         "alias": lambda names, rows, kw: (_alias(cfg, out, ask, names[0], alias_fn), None),
         "move": _move_row,
         "switch": _switch_row,
+        "switch_many": _switch_many_rows,
         "forget": lambda names, rows, kw: (_forget(cfg, run, out, ask, names[0], forget_fn), None),
         "plugins": _plugins,
         "profiles": _profiles,

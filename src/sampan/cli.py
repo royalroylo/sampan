@@ -63,8 +63,10 @@ def build_parser():
     mv.add_argument("--timeout", type=int, default=60, help="等 agent 結束／接回的秒數（預設 60）")
     mv.add_argument("--dry-run", action="store_true")
     sw = sub.add_parser("switch", help="換 profile（換帳號）繼續同一段對話，例如額度用完時；已停止的直接用新 profile 接回")
-    sw.add_argument("name")
-    sw.add_argument("profile")
+    sw.add_argument("words", nargs="+", metavar="NAME... PROFILE", help="session 名稱（可多個）或 id，最後一個是 profile；用 --folder 時只給 profile")
+    sw.add_argument("--folder", help="換這個資料夾裡（含子資料夾）的所有 session")
+    sw.add_argument("--from", dest="from_profile", metavar="PROFILE", help="只換目前在這個 profile 的（別人的會跳過）")
+    sw.add_argument("--yes", action="store_true", help="多個一起換時不再問「開始？」")
     sw.add_argument("--timeout", type=int, default=60, help="等 claude 結束／接回的秒數（預設 60）")
     sw.add_argument("--dry-run", action="store_true")
     fg = sub.add_parser("forget", help="從登記表移除沒在跑的 session（可一次多個；對話紀錄不刪，會印出手動接回的指令）")
@@ -414,6 +416,22 @@ def _folder_sessions(cfg, folder):
     return names or f"資料夾「{path}」裡沒有 session"
 
 
+def _switch_many(cfg, run, out, args, refs):
+    """sampan switch with several names, --folder or --from: plan, confirm, switch one by one."""
+    import os
+
+    from .send import command_caller
+    from .switch_many import cmd_switch_many
+    if not args.dry_run and _agent_refused(cfg, command_caller(cfg, run, os.getpid()) if cfg.mcp_confirm else None, out):
+        return 2
+    tty = sys.stdin.isatty() and sys.stdout.isatty()
+    on_prompt, want = _prompt_fn()
+    rc = cmd_switch_many(cfg, run, out, input if tty else None, refs, args.profile, folder=args.folder,
+                         from_profile=args.from_profile, dry_run=args.dry_run, yes=args.yes,
+                         own_pane=os.environ.get("TMUX_PANE"), on_prompt=on_prompt)
+    return _go_in(run, want, rc)
+
+
 def _go_in(run, want, rc):
     """"Go in and handle it myself" was chosen: attach to that session (switch-client inside tmux, exec tmux attach outside)."""
     if not want:
@@ -613,6 +631,14 @@ def _dispatch(cfg, args):
             if rc == 0 and not args.dry_run and not want:  # the command returns to the shell: say where the session went
                 out(f"✔ {args.name} 在背景執行；要進去：sampan 畫面選它，或 tmux attach -t {args.name}")
             return _go_in(run, want, rc)
+        if cmd == "switch":
+            args.profile, refs = args.words[-1], args.words[:-1]
+            if bool(refs) == (args.folder is not None):
+                out("用法：sampan switch NAME... PROFILE，或 sampan switch --folder 路徑 PROFILE")
+                return 2
+            if args.folder is not None or len(refs) > 1 or args.from_profile:
+                return _switch_many(cfg, run, out, args, refs)
+            args.name = refs[0]
         if cmd in ("rename", "alias", "move", "switch", "retire", "activate"):
             args.name = _resolve_one(cfg, args.name, out)  # name, id or unique id prefix → the session's name
             if args.name is None:

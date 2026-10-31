@@ -350,7 +350,9 @@ class Picker:
             return True, ("rename_folder", [it.path])
         if k == "X":
             return True, ("rm_folder", [it.path])
-        if len(k) == 1 and k in "mPra":
+        if k == "P":
+            return True, self._switch_many()
+        if len(k) == 1 and k in "mra":
             return True, None
         return False, None
 
@@ -371,6 +373,14 @@ class Picker:
             self._lost = False
         else:
             self.clear_marks()
+
+    def _switch_many(self):
+        """P on a folder row, or with folders / 2+ sessions marked: every session under the targets, as one batch."""
+        names = self._names(*self._targets())
+        if names:
+            return ("switch_many", names)
+        self._notice = "資料夾裡沒有 session"
+        return None
 
     def _ask_restart(self):
         sessions, paths = self._targets()
@@ -485,6 +495,8 @@ class Picker:
         if k == "m":
             return ("move", [self._here()])
         if k == "P":
+            if len(self.marked) >= 2 or self.marked_folders:
+                return self._switch_many()
             return ("switch", [self._here()])
         if k == "e":
             return ("rename", [self._here()])
