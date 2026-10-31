@@ -1,0 +1,25 @@
+env -u CLAUDE_CONFIG_DIR claude --session-id 61181f66-00f8-45d2-b40e-bbe2ad25c16
+▝▜██████▀  Opus 5.5 · Claude Max
+ ▝▝   ▝▝   /tmp/work-root/work · /rc
+
+
+❯ 〔sampan 轉送｜來自 終端機｜派工 ccf4｜直接回覆文字即可，sampan 會帶回〕
+  請只回覆兩個字：收到
+
+  /remote-control is active · Continue here, on your phone, or at
+  https://claude.ai/code/session_XXXX
+
+⏺ 收到
+
+✻ Baked for 1s · done 下午8:20
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ ◐ medium · /effort ▔
+   Remote Control
+
+   This session is available in the Claude mobile app and at
+   https://claude.ai/code/session_XXXX.
+
+     Disconnect this session
+     Show QR code   Scan with your phone to open this session
+   ❯ Continue
+
+   Enter to select · Esc to continue
