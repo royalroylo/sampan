@@ -246,8 +246,8 @@ class PickPreviewTest(unittest.TestCase):
         self.assertEqual(action, ("attach", ["a"]))  # cursor is still on a
         self.assertEqual([r.name for r in rows], ["0new", "a", "b", "m"])  # cmd_ui got the new list
         shown = "\n".join(self.scr.screens[-1])
-        self.assertIn("2 ● ● a", shown)  # tick preserved (then a's light)
-        self.assertRegex(shown, r"● b +claude +carol +執行中 +執行中")  # b's light: running
+        self.assertIn("2 ● ◆ a", shown)  # tick preserved (● is the mark, ◆ the light)
+        self.assertRegex(shown, r"◆ b +claude +carol +執行中 +執行中")  # b's light: running
 
     def test_refresh_error_keeps_old_rows(self):
         rows = self.rows()

@@ -132,8 +132,9 @@ class LightRenderTest(unittest.TestCase):
             with self.subTest(label=label):
                 cells = _list_cells(row("a"), set(), None, light=label)
                 runs = cells[0]
-                self.assertIn(("●", style), runs)
-                self.assertEqual("".join(t for t, _s in runs), "  ● a")
+                self.assertIn(("◆", style), runs)
+                self.assertEqual("".join(t for t, _s in runs), "  ◆ a")
+                self.assertNotIn("●", "".join(t for t, _s in runs))  # ● is only ever the mark
                 self.assertEqual(cells[4], (label, style))  # the activity column says the light
         plain = _list_cells(row("s", "-", State.STOPPED), set(), None)
         self.assertEqual(plain[0], "    s")  # no light: a blank cell where the dot would be

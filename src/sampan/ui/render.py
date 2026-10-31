@@ -294,12 +294,13 @@ def list_cols(rows):
 
 
 LIGHT_STYLE = {RUNNING: "info", WAITING: "warn", UNSEEN: "warn", IDLE: "muted"}
+LIGHT_DOT = "◆"  # not ●: that is the mark, and the two sit side by side
 
 
 def _list_cells(r, marked, current, num=None, total=0, *, depth=0, prefix="", light=None):
     """One session list row. With num, the row starts with its 1-based position in the unfiltered list, right-aligned to the width of total
     (num "" keeps the space blank). depth indents the name two cells per folder level; prefix (a search hit's
-    "folder path · ") goes dim before the name. light (lights.light) puts a coloured ● before the name and its label
+    "folder path · ") goes dim before the name. light (lights.light) puts a coloured LIGHT_DOT before the name and its label
     in the activity column; without one that cell is blank and the column keeps the agent's own status."""
     mark = "●" if r.name in marked else " "
     here = " ←" if r.name == current else ""
@@ -307,7 +308,7 @@ def _list_cells(r, marked, current, num=None, total=0, *, depth=0, prefix="", li
     head = f"{lead}{mark} {'  ' * depth}"
     style = LIGHT_STYLE.get(light)
     if prefix or style:
-        name = [(head, ""), ("●", style) if style else (" ", ""), (" ", ""), (prefix, "dim"), (f"{r.name}{here}", "")]
+        name = [(head, ""), (LIGHT_DOT, style) if style else (" ", ""), (" ", ""), (prefix, "dim"), (f"{r.name}{here}", "")]
     else:
         name = f"{head}  {r.name}{here}"
     status = (light, style) if style else (r.agent_status, agent_style(r.agent_status))
