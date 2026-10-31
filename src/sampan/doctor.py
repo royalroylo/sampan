@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
 
-from . import actionlog, codex_approval, codex_daemon, launchd, mcp_install
+from . import actionlog, codex_approval, codex_daemon, launchd, mcp_install, migrate
 from . import deps as deps_mod
 from . import update as update_mod
 from .claude_state import stale_session_files
@@ -278,6 +278,16 @@ def _action_log(cfg):
                   "plugin、來源、重開、forget、switch 的訊息都記在這裡")]
 
 
+def _data_format(cfg):
+    reg, fol = migrate.versions(cfg)
+    backup = migrate.last_backup(cfg.state_dir)
+    title = (f"資料格式：登記表 v{reg if reg is not None else '（沒有）'}、資料夾 v{fol if fol is not None else '（沒有）'}"
+             f"；上次備份 {backup if backup else '（沒有）'}")
+    if migrate.needed(cfg):
+        return [Check("warn", title, "還是舊格式：下一個指令會自動升級，或先跑 sampan migrate --dry-run 看")]
+    return [Check("info", title, "降版到 0.14 前先跑 sampan migrate --revert")]
+
+
 def _save_log(cfg, now):
     label = launchd.LABEL
     try:
@@ -521,7 +531,7 @@ def run_checks(cfg, run, *, now, uid, sampan_path=None, proc_root=PROC_ROOT, whi
     current = current or update_mod.current_version()
     latest_fn = latest_fn or (lambda: update_mod.check(cfg.state_dir, run=run)[0])
     return (_version(current, latest_fn) + _deps(cfg, which, env, platform) + _profile_dirs(cfg) + _owners(cfg, uid) + _plugins(cfg) + _auth(cfg, run) + _two_logins(cfg, run, platform) + _stale(cfg, run)
-            + _hooks(cfg) + _statusline(cfg, now) + _codex(cfg) + _codex_daemon(cfg, run, daemon_fn) + _mcp(cfg) + _detach_key(cfg, run) + _tmux_conf(cfg, run) + _multi_agent(cfg, run, proc_root) + _action_log(cfg)
+            + _hooks(cfg) + _statusline(cfg, now) + _codex(cfg) + _codex_daemon(cfg, run, daemon_fn) + _mcp(cfg) + _detach_key(cfg, run) + _tmux_conf(cfg, run) + _multi_agent(cfg, run, proc_root) + _action_log(cfg) + _data_format(cfg)
             + (_launchd(cfg, run, sampan_path) + _save_log(cfg, now) if platform == "darwin" else
                [Check("info", "這台不是 macOS，沒有自動存檔排程（需要時自己跑 sampan save，或用 cron／systemd timer）")]))
 

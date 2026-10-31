@@ -12,6 +12,11 @@ def out(msg=""):
     print(msg, flush=True)
 
 
+def _err(msg=""):
+    """out() for `mcp serve`, whose stdout carries only protocol messages."""
+    print(msg, file=sys.stderr, flush=True)
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="sampan", description="Claude Code／Codex 的 tmux session 與 plugin 管理（不帶指令 = ui）")
     p.add_argument("--version", action="version", version=f"sampan {version()}")
@@ -115,6 +120,10 @@ def build_parser():
     sy.add_argument("--prune", action="store_true",
                     help="也移除清單外的 plugin／marketplace 與 local scope 的重複安裝（先用 --dry-run 看）")
     sub.add_parser("doctor", help="檢查已知的設定問題")
+    mg = sub.add_parser("migrate", help="把資料升到 0.15 的格式（平常第一次執行任何指令就會自動做，先備份、做完比對）")
+    mgx = mg.add_mutually_exclusive_group()
+    mgx.add_argument("--dry-run", action="store_true", help="在複本上試做，印前後差異與會產生幾個 id；原檔不動")
+    mgx.add_argument("--revert", action="store_true", help="寫回 0.14 讀得懂的格式（先備份）；降版前跑")
     it = sub.add_parser("init", help="偵測 profile、產生設定檔（已有設定時只提議新增的項目）、hook 與自動存檔排程")
     it.add_argument("--no-launchd", action="store_true", help="不安裝自動存檔排程")
     it.add_argument("--yes", action="store_true", help="所有問題都用預設值，不讀 stdin（沒有終端機時用）")
@@ -392,6 +401,15 @@ def _dispatch(cfg, args):
     from .runner import run
 
     cmd = args.cmd
+    if cmd == "migrate":
+        from .migrate import cmd_migrate
+        return cmd_migrate(cfg, out, dry_run=args.dry_run, revert=args.revert)
+    if cmd != "doctor":
+        # every command that reads or writes state sees the 0.15 format; a failed migration stops it (files as they were)
+        from . import migrate
+        rc = migrate.ensure(cfg, _err if cmd == "mcp" and args.action == "serve" else out)
+        if rc:
+            return rc
     if cmd == "ui":
         from .detach_key import ensure as detach_fn
         from .ui import cmd_ui, curses_ui
