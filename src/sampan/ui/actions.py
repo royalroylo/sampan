@@ -229,6 +229,11 @@ def _rename(cfg, run, out, ask, name, rename_fn):
     return rename_fn(cfg, run, out, name, new)
 
 
+def _alias(cfg, out, ask, name, alias_fn):
+    new = (_ask(ask, "別名（空白＝清掉）：") or "").strip()
+    return alias_fn(cfg, out, name, new) if new else alias_fn(cfg, out, name, "", clear=True)
+
+
 def _forget(cfg, run, out, ask, name, forget_fn):
     """X: confirm, then remove the row from the registry (the conversation itself is not deleted)."""
     if (_ask(ask, f"從登記表移除 {name}？之後不會再列出，也不會被 R 接回；對話紀錄不刪 (y/N): ") or "").lower() != "y":
@@ -352,6 +357,8 @@ def _plain_action(ask, out, rows, current, tree=None):
         picked = _pick(ask, out, rows, "要搬哪一個？(編號): ", many=False)
     elif c == "e":
         picked = _pick(ask, out, rows, "要改哪一個的名稱？(編號): ", many=False)
+    elif choice == "L":
+        picked = _pick(ask, out, rows, "要改哪一個的別名？(編號): ", many=False)
     elif c in ("r", "a"):
         picked = _pick(ask, out, rows, f"要 {'retire' if c == 'r' else 'activate'} 哪一個？(編號): ", many=False)
     else:
@@ -361,7 +368,7 @@ def _plain_action(ask, out, rows, current, tree=None):
         return ("quit", [])
     if picked is False:
         return ("invalid", [])
-    return ({"s": "stop", "m": "move", "e": "rename", "r": "retired", "a": "active"}[c], picked)
+    return ({"s": "stop", "m": "move", "e": "rename", "l": "alias", "r": "retired", "a": "active"}[c], picked)
 
 
 UPDATED = object()  # second value of act(): update succeeded, sampan must be restarted
@@ -419,7 +426,7 @@ def _first_opened(out, opened, verb):
 def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, picker_fn=None,
            rows_fn=status_rows, exec_fn=os.execvp, stop_fn=session_run.cmd_stop,
            new_fn=session_run.cmd_new, set_state_fn=session_run.cmd_set_state, move_fn=session_run.cmd_move,
-           rename_fn=session_run.cmd_rename, switch_fn=session_run.cmd_switch, forget_fn=session_run.cmd_forget,
+           rename_fn=session_run.cmd_rename, alias_fn=session_run.cmd_alias, switch_fn=session_run.cmd_switch, forget_fn=session_run.cmd_forget,
            restore_fn=restore_mod.cmd_restore, restore_picker_fn=None,
            adopt_fn=adopt_mod.cmd_adopt, adopt_picker_fn=None, save_fn=save_mod.cmd_save, loop=False,
            attach_fn=None, choose_dir_fn=None, updater=None, update_fn=update_mod.do_update, argv=(), prompt_fn=None, plugins_fn=None,
@@ -588,6 +595,7 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
         "restore": _restore,
         "adopt": _adopt,
         "rename": lambda names, rows, kw: (_rename(cfg, run, out, ask, names[0], rename_fn), None),
+        "alias": lambda names, rows, kw: (_alias(cfg, out, ask, names[0], alias_fn), None),
         "move": _move_row,
         "switch": _switch_row,
         "forget": lambda names, rows, kw: (_forget(cfg, run, out, ask, names[0], forget_fn), None),

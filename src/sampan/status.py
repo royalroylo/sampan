@@ -60,6 +60,7 @@ class StatusRow:
     pane: str | None = None
     tmux_alive: bool = False  # the tmux session exists (a STOPPED row may still have its tmux, e.g. while starting)
     id: str = ""  # the registry row's sampan id ("" for a live session that is not registered)
+    alias: str = ""  # the registry row's alias ("" = unset)
 
     @property
     def display(self):
@@ -118,7 +119,7 @@ def status_rows(cfg, run, snapshot_fn=None):
         last, tokens, window = _activity(cfg, agent, src.profile if src is not None else None, sid)
         result.append(StatusRow(name, agent, (src.profile or "-") if src else "-", sid, state, detail,
                                 lc.status if lc else "-", last, tokens, window, lc.pane_id if lc else None,
-                                name in alive, row.id if row is not None else ""))
+                                name in alive, row.id if row is not None else "", row.alias if row is not None else ""))
     return result
 
 
@@ -131,7 +132,7 @@ def _unreadable_rows(cfg, rows, warning):
         last, tokens, window = _activity(cfg, row.agent, row.profile, row.session_id)
         result.append(StatusRow(name, row.agent, row.profile or "-", row.session_id,
                                 State.RETIRED if row.state == "retired" else State.UNKNOWN, "", "-", last, tokens, window, None,
-                                False, row.id))
+                                False, row.id, row.alias))
     return result
 
 

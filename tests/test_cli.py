@@ -595,6 +595,20 @@ class AgentRefusedTest(unittest.TestCase):
             rc, _, _ = self.run_cli(["send-batch", "a", "b", "-m", "hi"], self.SESSION)
         self.assertEqual((rc, cs.call_count), (0, 1))
 
+    def test_cli_alias_refused_for_agent_when_confirm_on(self):
+        from sampan.send import AGENT_REFUSED
+        with mock.patch("sampan.session_run.cmd_alias") as ca:
+            rc, text, _ = self.run_cli(["alias", "a", "讀書"], self.SESSION)
+        self.assertEqual((rc, ca.call_count), (2, 0))
+        self.assertIn(AGENT_REFUSED, text)
+        self.set_confirm(False)
+        with mock.patch("sampan.session_run.cmd_alias", return_value=0) as ca:
+            rc, _, _ = self.run_cli(["alias", "a", "讀書"], self.SESSION)
+            self.assertEqual((rc, ca.call_count), (0, 1))
+            rc, _, _ = self.run_cli(["alias", "a", "--clear"], self.SESSION)
+        self.assertEqual(rc, 0)
+        self.assertEqual(ca.call_args.kwargs, {"clear": True})
+
     def test_terminal_caller_still_sends(self):
         with mock.patch("sampan.send.cmd_send", return_value=0) as cs:
             rc, _, _ = self.run_cli(["send", "api", "hi"], TERMINAL)

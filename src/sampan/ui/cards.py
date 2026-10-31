@@ -101,9 +101,9 @@ def row_keys(row, info):
     if state is State.RETIRED:
         keys = (["Enter 接上"] if live else []) + ["a activate", "X 移除"]
     elif state is State.STOPPED:
-        keys = ["Enter 接回", "S 背景接回"] + (["P 換 profile"] if row.agent == "claude" else []) + ["e 改名", "r retire", "X 移除"]
+        keys = ["Enter 接回", "S 背景接回"] + (["P 換 profile"] if row.agent == "claude" else []) + ["e 改名", "L 別名", "r retire", "X 移除"]
     elif state is State.RUNNING:
-        keys = ["Enter 接上", "s 停掉", "S 重開", "m 搬"] + (["P 換 profile"] if row.agent == "claude" else []) + ["e 改名", "r retire"]
+        keys = ["Enter 接上", "s 停掉", "S 重開", "m 搬"] + (["P 換 profile"] if row.agent == "claude" else []) + ["e 改名", "L 別名", "r retire"]
     else:
         keys = ["Enter 接上"] if live else []
     return "　".join(keys)
@@ -130,12 +130,17 @@ def _activity_line(last, now):
     return _label("最後活動", f"{_fmt_time(last)}（{_ago(last, now)}）")
 
 
+def name_with_alias(row):
+    """"name · alias" when the row has an alias that differs from its name, else the name."""
+    return f"{row.name} · {row.alias}" if row.alias and row.alias != row.name else row.name
+
+
 def card_lines(cfg, row, info, now):
     info = info or {}
     state = show_state(row)
     if row.agent_status not in ("-", "", None):
         state += f"（{row.agent_status}）"
-    lines = [row.name, "─" * 200, StateLine(_label("狀態", state), row.state)]
+    lines = [name_with_alias(row), "─" * 200, StateLine(_label("狀態", state), row.state)]
     if row.agent == "codex":
         lines.append(_label("agent", "codex"))
     elif row.agent not in ("-", ""):

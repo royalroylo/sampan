@@ -50,7 +50,7 @@ def _str(desc):
 
 TOOLS = [
     {"name": "list_sessions",
-     "description": "列出 sampan 登記的 session：名稱、agent、profile、目錄、所在資料夾（folder，\"\" 是最上層）、"
+     "description": "列出 sampan 登記的 session：名稱、agent、profile、目錄、所在資料夾（folder，\"\" 是最上層）、別名（alias，沒設是 \"\"）、"
                     "狀態（running 才收得到訊息）、忙／閒（activity）、最後活動。唯讀。",
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "send",
@@ -411,17 +411,17 @@ class Server:
     def tool_list_sessions(self, args):
         rows = self._rows()
         try:
-            cwd = {r.tmux: r.cwd for r in load_rows(self.cfg.registry_path, codex_profile=self.cfg.codex.profile)}
+            reg = {r.tmux: r for r in load_rows(self.cfg.registry_path, codex_profile=self.cfg.codex.profile)}
         except RegistryError:
-            cwd = {}
+            reg = {}
         warnings = [getattr(rows, "warning", None)]
         try:
             where = folders.load(self.cfg.state_dir).sessions
         except folders.FoldersError as e:
             where = {}
             warnings.append(f"讀不到資料夾設定，folder 全部當成最上層：{e}")
-        out = {"sessions": [{"name": r.name, "agent": r.agent, "profile": r.profile, "cwd": cwd.get(r.name, ""),
-                             "folder": where.get(r.name, ""), "state": r.state.value, "activity": r.agent_status,
+        out = {"sessions": [{"name": r.name, "agent": r.agent, "profile": r.profile, "cwd": reg[r.name].cwd if r.name in reg else "",
+                             "folder": where.get(r.name, ""), "alias": reg[r.name].alias if r.name in reg else "", "state": r.state.value, "activity": r.agent_status,
                              "last": r.last.astimezone(timezone.utc).isoformat(timespec="seconds") if r.last else None}
                             for r in rows]}
         warning = "；".join(w for w in warnings if w)

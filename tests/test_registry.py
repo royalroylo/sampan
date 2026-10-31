@@ -188,7 +188,7 @@ class StorageTest(unittest.TestCase):
             out = json.loads(self.path.read_text())
             self.assertEqual((out["version"], out["machine"], out["saved_at"]), (3, "m", data["saved_at"]))
             for old, new in zip(data["sessions"], out["sessions"]):
-                self.assertEqual({k: v for k, v in new.items() if k != "id"}, old)
+                self.assertEqual({k: v for k, v in new.items() if k not in ("id", "alias")}, old)
                 self.assertTrue(new["id"])
         write_rows(self.path, rows, data["saved_at"], self.hist, machine="m")
         check()
@@ -220,6 +220,32 @@ class StorageTest(unittest.TestCase):
             {"tmux": "x", "agent": "claude", "profile": "a", "session_id": A, "cwd": "/c"}]}))
         self.assertEqual(load_rows(self.path)[0].id, "")
         self.assertEqual(load_machine(self.path), "")
+
+    def test_alias_round_trips_v3(self):
+        write_rows(self.path, [Row("a", "claude", "p", A, "/c", alias="讀書工具 PM")], NOW, self.hist)
+        self.assertEqual(json.loads(self.path.read_text())["sessions"][0]["alias"], "讀書工具 PM")
+        self.assertEqual(load_rows(self.path)[0].alias, "讀書工具 PM")
+
+    def test_v2_row_has_empty_alias(self):
+        self.path.parent.mkdir(parents=True)
+        self.path.write_text(json.dumps({"version": 2, "saved_at": NOW, "sessions": [
+            {"tmux": "x", "agent": "claude", "profile": "a", "session_id": A, "cwd": "/c"}]}))
+        self.assertEqual(load_rows(self.path)[0].alias, "")
+
+    def test_merge_keeps_alias(self):
+        old = [Row("x", "claude", "alice", A, "/c", "active", "old", SRV, id=I1, alias="別名")]
+        r = merge(old, [Observed("x", "claude", "alice", A, "/c", 1)], {"x"}, NOW, SRV)
+        self.assertEqual(r.rows[0].alias, "別名")
+        r = merge(old, [Observed("y", "claude", "alice", A, "/c", 1)], {"y"}, NOW, SRV)  # renamed by session id
+        self.assertEqual(r.rows[0].alias, "別名")
+
+    def test_display_name(self):
+        from sampan.registry import display_name
+        from tests.helpers import status_row
+        self.assertEqual(display_name(Row("x", "claude", "p", A, "/c")), "x")
+        self.assertEqual(display_name(Row("x", "claude", "p", A, "/c", alias="讀書")), "讀書")
+        self.assertEqual(display_name(status_row("s")), "s")
+        self.assertEqual(display_name(status_row("s", alias="a b")), "a b")
 
     def test_write_fills_missing_ids_and_keeps_existing(self):
         rows = [Row("a", "claude", "p", A, "/c"), Row("b", "claude", "p", B, "/c", id=I2)]

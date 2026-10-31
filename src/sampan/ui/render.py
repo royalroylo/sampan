@@ -2,7 +2,7 @@
 from .. import update as update_mod
 from ..lights import IDLE, RUNNING, UNSEEN, WAITING
 from ..prompts import prompt_choices, prompt_lines
-from .cards import Keys, StateLine, Wrap, agent_style, message_style, state_style
+from .cards import Keys, StateLine, Wrap, agent_style, message_style, name_with_alias, state_style
 from .codex_others import ListNote, OwnCols
 from .dirpick import tilde
 from .state import list_state
@@ -304,13 +304,14 @@ def _list_cells(r, marked, current, num=None, total=0, *, depth=0, prefix="", li
     in the activity column; without one that cell is blank and the column keeps the agent's own status."""
     mark = "●" if r.name in marked else " "
     here = " ←" if r.name == current else ""
+    shown = name_with_alias(r)
     lead = f"{num:>{len(str(total))}} " if num is not None else ""
     head = f"{lead}{mark} {'  ' * depth}"
     style = LIGHT_STYLE.get(light)
     if prefix or style:
-        name = [(head, ""), (LIGHT_DOT, style) if style else (" ", ""), (" ", ""), (prefix, "dim"), (f"{r.name}{here}", "")]
+        name = [(head, ""), (LIGHT_DOT, style) if style else (" ", ""), (" ", ""), (prefix, "dim"), (f"{shown}{here}", "")]
     else:
-        name = f"{head}  {r.name}{here}"
+        name = f"{head}  {shown}{here}"
     status = (light, style) if style else (r.agent_status, agent_style(r.agent_status))
     return (name, r.agent, _profile_cell(r), (list_state(r), state_style(r.state)), status)
 

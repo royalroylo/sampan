@@ -33,6 +33,7 @@ class Row:
     server: str = ""  # tmux server when it was last seen (pid-start_time)
     pid: int | None = None  # agent process last seen
     id: str = ""  # stable sampan id (uuid4), kept across saves and renames; "" until write_rows fills it
+    alias: str = ""  # free-form name people recognise; "" = unset (the session name stands in)
 
 
 @dataclass(frozen=True)
@@ -86,7 +87,7 @@ def merge(old, observed, tmux_sessions, now, server, keep_silently=frozenset()):
             used.add(prev.tmux)
         state = prev.state if prev is not None else "active"
         new_rows[ob.tmux] = Row(ob.tmux, ob.agent, ob.profile, ob.session_id, ob.cwd, state, now, server, ob.pid,
-                                prev.id if prev is not None else ids.new_id())
+                                prev.id if prev is not None else ids.new_id(), prev.alias if prev is not None else "")
     for r in old:
         if r.tmux in used or r.tmux in new_rows:
             continue
@@ -102,6 +103,11 @@ def merge(old, observed, tmux_sessions, now, server, keep_silently=frozenset()):
     res.pending.sort()
     res.rows = sorted(new_rows.values(), key=lambda r: r.tmux)
     return res
+
+
+def display_name(row):
+    """What people call a session: its alias, else its session name (Row.tmux, StatusRow.name)."""
+    return row.alias or getattr(row, "tmux", None) or row.name
 
 
 def id_problem(session_id):

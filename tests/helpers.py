@@ -65,10 +65,10 @@ def local_tz(name):
 
 
 def status_row(name, state=State.RUNNING, *, agent="claude", profile="alice", agent_status="idle", tokens=None,
-               sid="x", last=None, detail="", pane=None, tmux_alive=None):
+               sid="x", last=None, detail="", pane=None, tmux_alive=None, alias=""):
     """A StatusRow for the ui tests; the one place that knows the row's field order. tmux_alive None: alive unless the
     state says there is no tmux (stopped, retired)."""
     if tmux_alive is None:
         tmux_alive = state not in (State.STOPPED, State.RETIRED)
     return StatusRow(name, agent, profile, sid, state, detail, agent_status, last, tokens, pane=pane,
-                     tmux_alive=tmux_alive)
+                     tmux_alive=tmux_alive, alias=alias)

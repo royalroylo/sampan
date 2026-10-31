@@ -288,6 +288,44 @@ def cmd_set_state(cfg, out, name, state):
     return 0
 
 
+ALIAS_MAX = 50
+
+
+def alias_problem(alias):
+    """Why an alias cannot be used, or None: empty, control characters, or longer than ALIAS_MAX characters."""
+    if not alias or has_control(alias):
+        return f"別名不能是空的，也不能含換行或控制字元：{alias!r}"
+    if len(alias) > ALIAS_MAX:
+        return f"別名最多 {ALIAS_MAX} 個字，這個有 {len(alias)} 個"
+    return None
+
+
+def cmd_alias(cfg, out, name, alias, *, clear=False):
+    """Set (or with clear, remove) the alias of a registry row. Touches neither tmux nor the id; it applies at the next launch."""
+    out = actionlog.tee(cfg, f"alias {name}", out)
+    alias = "" if clear else (alias or "").strip()
+    if not clear:
+        problem = alias_problem(alias)
+        if problem:
+            out(f"❌ {problem}")
+            return 2
+    with lock(cfg.state_dir):
+        rows = _load(cfg, out)
+        if rows is None:
+            return 2
+        row = next((r for r in rows if r.tmux == name), None)
+        if row is None:
+            out(f"❌ 登記表沒有 {name}")
+            return 2
+        row.alias = alias
+        write_rows(cfg.registry_path, rows, now_iso(), cfg.history_dir, machine=registry_machine(cfg))
+    if clear:
+        out(f"✔ {name} 的別名清掉了；下次啟動（S、接回、換 profile）套用到 Claude 與 Remote Control")
+    else:
+        out(f"✔ {name} 的別名改成「{alias}」；下次啟動（S、接回、換 profile）套用到 Claude 與 Remote Control")
+    return 0
+
+
 def cmd_rename(cfg, run, out, old, new):
     """Rename a tmux session and sync the registry; the agent keeps running and no keys are sent. Only the name of the registry row changes, other fields are untouched."""
     new = (new or "").strip()

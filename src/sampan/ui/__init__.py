@@ -21,7 +21,7 @@ line per enabled profile (sessions running, 5h／週額度); at the bottom are t
 
 Keys: up/down move, space checks, Enter attaches (a stopped session is reattached first), s stops (confirmed in place), S restarts (confirmed
 in place: idle ones are stopped and reattached in the background, a stopped one on its own row is reattached, never going in), m moves to another
-directory, e renames, R reattaches, A adopts claude/codex running outside tmux, r retire, a activate, n new session (into the folder under the
+directory, e renames, L sets the alias, R reattaches, A adopts claude/codex running outside tmux, r retire, a activate, n new session (into the folder under the
 cursor), w save now, U update sampan, p opens the plugin screen, o opens the profile (帳號) screen, X removes a stopped or retired session from
 the registry, Tab / Shift+Tab filter the list by state (全部 閒置 忙碌 已停止 異常; the title shows the filter and its count),
 * checks every session row shown (again: clears all), q / Esc quit. The key help line leaves the digits, the arrows, w, Enter, R and A

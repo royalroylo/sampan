@@ -555,9 +555,17 @@ class SendToolTest(Base):
         c = self.serve(Client([init(1), call(2, "list_sessions", {})]))
         rows = {r["name"]: r for r in tool_json(c.response(2))["sessions"]}
         self.assertEqual(rows["b"], {"name": "b", "agent": "claude", "profile": "alice", "cwd": "/w/b", "folder": "",
-                                     "state": "running", "activity": "busy", "last": "2026-10-26T12:00:00+00:00"})
+                                     "alias": "", "state": "running", "activity": "busy",
+                                     "last": "2026-10-26T12:00:00+00:00"})
         self.assertEqual(rows["a"]["cwd"], "")
         self.assertIsNone(rows["a"]["last"])
+
+    def test_list_sessions_returns_alias(self):
+        write_rows(self.cfg.registry_path, [Row("b", "claude", "alice", "sb", "/w/b", alias="讀書工具 PM")], "t",
+                   self.cfg.history_dir)
+        c = self.serve(Client([init(1), call(2, "list_sessions", {})]))
+        rows = {r["name"]: r for r in tool_json(c.response(2))["sessions"]}
+        self.assertEqual((rows["b"]["alias"], rows["a"]["alias"]), ("讀書工具 PM", ""))  # unset: "", not the name
 
     def test_dispatch_result_reports_state_and_reply(self):
         self.rows["b"] = dataclasses.replace(self.rows["b"], agent_status="busy")

@@ -38,6 +38,7 @@ class UiTest(unittest.TestCase):
             move_fn=lambda cfg, run, out, name, dest, **kw: self.calls.append(("move", name, dest, kw)) or 0,
             switch_fn=lambda cfg, run, out, name, prof, **kw: self.calls.append(("switch", name, prof, kw)) or 0,
             rename_fn=lambda cfg, run, out, old, new: self.calls.append(("rename", old, new)) or 0,
+            alias_fn=lambda cfg, out, name, alias, **kw: self.calls.append(("alias", name, alias, kw)) or 0,
             forget_fn=lambda cfg, run, out, name: self.calls.append(("forget", name)) or 0,
             restore_fn=lambda cfg, run, out, ask, **kw: self.calls.append(("restore", kw)) or 0,
             restore_picker_fn=restore_picker,
@@ -1088,6 +1089,7 @@ class InteractiveUiTest(UiTest):
             move_fn=lambda cfg, run, out, name, dest, **kw: self.calls.append(("move", name, dest)) or 0,
             switch_fn=lambda cfg, run, out, name, prof, **kw: self.calls.append(("switch", name, prof, kw)) or 0,
             rename_fn=lambda cfg, run, out, old, new: self.calls.append(("rename", old, new)) or 0,
+            alias_fn=lambda cfg, out, name, alias, **kw: self.calls.append(("alias", name, alias, kw)) or 0,
             forget_fn=lambda cfg, run, out, name: self.calls.append(("forget", name)) or 0,
             restore_fn=lambda cfg, run, out, ask, **kw: self.calls.append(("restore",)) or 0,
             adopt_fn=lambda cfg, run, out, ask, **kw: self.calls.append(("adopt",)) or 0,
@@ -1146,6 +1148,20 @@ class InteractiveUiTest(UiTest):
     def test_rename_asks_new_name(self):
         self.ui_keys(("rename", ["a"]), ["fresh"])
         self.assertEqual(self.calls, [("rename", "a", "fresh")])
+
+    def test_ui_L_key_sets_alias(self):
+        self.assertEqual(Picker(ROWS, current="b").key("L"), ("alias", ["b"]))
+        self.ui_keys(("alias", ["a"]), ["讀書工具 PM"])
+        self.assertEqual(self.calls, [("alias", "a", "讀書工具 PM", {})])
+        self.assertIn("別名（空白＝清掉）：", self.asked)
+
+    def test_ui_L_blank_answer_clears_alias(self):
+        self.ui_keys(("alias", ["a"]), [""])
+        self.assertEqual(self.calls, [("alias", "a", "", {"clear": True})])
+
+    def test_plain_L_picks_by_number(self):
+        self.ui(["L", "2", "x y"])
+        self.assertEqual(self.calls[0][:3], ("alias", "b", "x y"))
 
     def test_rename_empty_answer_cancels(self):
         self.ui_keys(("rename", ["a"]), [""])

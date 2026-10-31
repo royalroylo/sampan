@@ -9,7 +9,16 @@ from sampan import actionlog, deliver, dispatch, folders
 from sampan.prompts import SKIP
 from sampan.registry import Row, load_rows, write_rows
 from sampan.send import Caller
-from sampan.session_run import check_new, cmd_forget, cmd_new, cmd_rename, cmd_set_state, cmd_stop
+from sampan.session_run import (
+    alias_problem,
+    check_new,
+    cmd_alias,
+    cmd_forget,
+    cmd_new,
+    cmd_rename,
+    cmd_set_state,
+    cmd_stop,
+)
 from tests.fakes import FakeRunner, cp, pane_line, ps_line
 from tests.helpers import make_env
 from tests.test_claude_state import write_session
@@ -678,6 +687,37 @@ class RenameTest(Base):
         rows = {x.tmux: x for x in load_rows(self.cfg.registry_path)}
         self.assertEqual(set(rows), {"webshop", "other"})
         self.assertEqual(rows["webshop"].session_id, A)
+
+    def test_rename_keeps_alias(self):
+        self.assertEqual(cmd_alias(self.cfg, self.msgs.append, "u", "讀書工具 PM"), 0)
+        self.assertEqual(cmd_rename(self.cfg, self.runner(), self.msgs.append, "u", "webshop"), 0)
+        rows = {x.tmux: x for x in load_rows(self.cfg.registry_path)}
+        self.assertEqual(rows["webshop"].alias, "讀書工具 PM")
+
+    def test_cmd_alias_sets_and_clears(self):
+        self.assertEqual(cmd_alias(self.cfg, self.msgs.append, "u", "  讀書工具 PM "), 0)
+        rows = {x.tmux: x for x in load_rows(self.cfg.registry_path)}
+        self.assertEqual((rows["u"].alias, rows["other"].alias), ("讀書工具 PM", ""))
+        self.assertIn("✔ u 的別名改成「讀書工具 PM」；下次啟動（S、接回、換 profile）套用到 Claude 與 Remote Control",
+                      self.msgs)
+        self.assertEqual(cmd_alias(self.cfg, self.msgs.append, "u", "", clear=True), 0)
+        self.assertEqual({x.tmux: x for x in load_rows(self.cfg.registry_path)}["u"].alias, "")
+        self.assertTrue(any("[alias u]" in x for x in action_lines(self.cfg)))
+
+    def test_alias_problem_rejects_control_and_long(self):
+        for bad in ("", "a\nb", "x\x1b[0m", "a" * 51):
+            self.assertIsNotNone(alias_problem(bad), repr(bad))
+        for good in ("讀書工具 PM", "a.b:c", "a" * 50):
+            self.assertIsNone(alias_problem(good), repr(good))
+
+    def test_alias_bad_value_changes_nothing(self):
+        self.assertEqual(cmd_alias(self.cfg, self.msgs.append, "u", "a\nb"), 2)
+        self.assertEqual(cmd_alias(self.cfg, self.msgs.append, "u", "   "), 2)
+        self.assertEqual({x.alias for x in load_rows(self.cfg.registry_path)}, {""})
+
+    def test_alias_unknown_session_rc2(self):
+        self.assertEqual(cmd_alias(self.cfg, self.msgs.append, "nope", "x"), 2)
+        self.assertTrue(any("nope" in m for m in self.msgs))
 
     def test_registry_only_when_tmux_session_not_running(self):
         self.live = set()

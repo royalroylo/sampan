@@ -48,6 +48,10 @@ def build_parser():
     rn = sub.add_parser("rename", help="改 session 名稱（tmux 與登記表一起改，agent 照常執行）")
     rn.add_argument("name")
     rn.add_argument("new")
+    al = sub.add_parser("alias", help="設別名（人認得的名稱，可含空白與中文；不動 tmux session 名稱，下次啟動套用）")
+    al.add_argument("name")
+    al.add_argument("alias", nargs="?")
+    al.add_argument("--clear", action="store_true", help="清掉別名")
     mv = sub.add_parser("move", help="換到另一個目錄繼續同一段對話（自動信任新目錄、更新登記表）")
     mv.add_argument("name")
     mv.add_argument("dest", help="新的工作目錄；不存在會建立")
@@ -515,7 +519,7 @@ def _dispatch(cfg, args):
             return 1
         on_prompt, _want = _prompt_fn()
         return restart.cmd_restart(cfg, run, out, input, plan, own_pane=own, on_prompt=on_prompt)
-    if cmd in ("new", "stop", "move", "switch", "rename", "forget", "retire", "activate"):
+    if cmd in ("new", "stop", "move", "switch", "rename", "alias", "forget", "retire", "activate"):
         from . import session_run
         if cmd == "new":
             on_prompt, want = _prompt_fn()
@@ -541,6 +545,14 @@ def _dispatch(cfg, args):
                                         own_pane=os.environ.get("TMUX_PANE"))
         if cmd == "rename":
             return session_run.cmd_rename(cfg, run, out, args.name, args.new)
+        if cmd == "alias":
+            from .send import command_caller
+            if _agent_refused(cfg, command_caller(cfg, run, os.getpid()) if cfg.mcp_confirm else None, out):
+                return 2
+            if args.clear == (args.alias is not None):
+                out("用法：sampan alias NAME ALIAS，或 sampan alias NAME --clear")
+                return 2
+            return session_run.cmd_alias(cfg, out, args.name, args.alias, clear=args.clear)
         if cmd == "forget":
             # each name on its own (own lock, own log line); a failure does not stop the rest, the worst code is returned
             return max(session_run.cmd_forget(cfg, run, out, n, dry_run=args.dry_run) for n in dict.fromkeys(args.names))
