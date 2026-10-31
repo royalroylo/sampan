@@ -281,8 +281,9 @@ def _action_log(cfg):
 def _data_format(cfg):
     reg, fol = migrate.versions(cfg)
     backup = migrate.last_backup(cfg.state_dir)
-    title = (f"資料格式：登記表 v{reg if reg is not None else '（沒有）'}、資料夾 v{fol if fol is not None else '（沒有）'}"
-             f"；上次備份 {backup if backup else '（沒有）'}")
+    def v(n):
+        return "（沒有）" if n is None else f" v{n}"
+    title = f"資料格式：登記表{v(reg)}、資料夾{v(fol)}；上次備份 {backup if backup else '（沒有）'}"
     if migrate.needed(cfg):
         return [Check("warn", title, "還是舊格式：下一個指令會自動升級，或先跑 sampan migrate --dry-run 看")]
     return [Check("info", title, "降版到 0.14 前先跑 sampan migrate --revert")]

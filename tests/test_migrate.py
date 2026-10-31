@@ -196,13 +196,155 @@ class MigrateTest(unittest.TestCase):
         self.assertIn("disk full", text)
         self.assertEqual(self.bytes_of("registry.json", "folders.json"), original)
 
-    def test_unreadable_folders_touches_nothing(self):
-        self.put_v2(folders_doc=None)
-        (self.state / "folders.json").write_text("{not json")
+    def test_unreadable_registry_touches_nothing(self):
+        self.put_v2()
+        (self.state / "registry.json").write_text('{"version": 2, "sessions": [{"tmux": 1}]}')
         files = self.all_files()
         rc, text = self.ensure()
         self.assertEqual(rc, 2)
         self.assertIn("沒有升級", text)
+        self.assertEqual(self.all_files(), files)
+
+    def check_broken_folders_kept(self, broken):
+        self.put_v2(folders_doc=None)
+        (self.state / "folders.json").write_text(broken)
+        sessions = sorted((s["tmux"], s["session_id"], s["agent"], s["profile"] or self.cfg.codex.profile, s["state"])
+                          for s in v2_sessions())
+        rc, text = self.ensure()
+        self.assertEqual(rc, 0, text)
+        self.assertEqual((self.state / "folders.json").read_text(), broken)  # byte for byte
+        self.assertEqual(self.read("registry.json")["version"], 3)
+        rows = registry.load_rows(self.cfg.registry_path, codex_profile=self.cfg.codex.profile)
+        self.assertEqual(sorted((r.tmux, r.session_id, r.agent, r.profile, r.state) for r in rows), sessions)
+        warnings = [ln for ln in text.splitlines() if ln.startswith("⚠")]
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("folders.json", warnings[0])
+        self.assertIn("原檔保留", warnings[0])
+        self.assertIn("backup-0.15-20261031-120000", warnings[0])
+        [backup] = self.backups()
+        self.assertEqual((backup / "folders.json").read_text(), broken)
+        # no backup storm and no repeated warning: later commands find nothing to do
+        self.assertFalse(migrate.needed(self.cfg))
+        self.assertEqual(self.ensure(LATER), (0, ""))
+        self.assertEqual(len(self.backups()), 1)
+
+    def test_unparseable_folders_kept_registry_migrates(self):
+        self.check_broken_folders_kept("{not json")
+
+    def test_malformed_v1_folders_kept_registry_migrates(self):
+        self.check_broken_folders_kept('{"version": 1, "folders": {"a/": {"collapsed": false}}, "sessions": {}}\n')
+
+    def test_broken_folders_migrates_once_fixed(self):
+        self.put_v2(folders_doc=None)
+        (self.state / "folders.json").write_text('{"version": 1, "folders": {"a/": {}}, "sessions": {}}')
+        self.ensure()
+        (self.state / "folders.json").write_text(json.dumps(V1_FOLDERS, ensure_ascii=False))  # the user fixed it
+        self.assertTrue(migrate.needed(self.cfg))
+        before = migrate.snapshot(self.cfg)
+        ids = {s["tmux"]: s["id"] for s in self.read("registry.json")["sessions"]}
+        rc, text = self.ensure(LATER)
+        self.assertEqual(rc, 0, text)
+        self.assertEqual(self.read("folders.json")["version"], 2)
+        self.assertEqual(migrate.snapshot(self.cfg), before)
+        self.assertEqual({s["tmux"]: s["id"] for s in self.read("registry.json")["sessions"]}, ids)
+
+    def test_cli_save_runs_with_broken_folders(self):
+        self.put_v2(folders_doc=None)
+        (self.state / "folders.json").write_text("{not json")
+        with mock.patch("sampan.cli.load_config", return_value=self.cfg), \
+                mock.patch("sampan.save.cmd_save", return_value=0) as save, redirect_stdout(io.StringIO()):
+            self.assertEqual(cli.main(["save", "--quiet"]), 0)
+        save.assert_called_once()
+
+    def lock_is_held(self):
+        import fcntl
+        with open(self.state / "registry.lock", "w") as fh:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            fcntl.flock(fh, fcntl.LOCK_UN)
+            return False
+
+    def test_folders_step_check_and_restore_run_under_the_lock(self):
+        self.put_v2()
+        seen = {}
+        real_save, real_snap, real_restore = folders.save, migrate._read, migrate._restore
+
+        def save(*a, **kw):
+            seen["save"] = self.lock_is_held()
+            a[1].sessions.pop("gamma", None)  # force a mismatch so the restore runs too
+            return real_save(*a, **kw)
+
+        def read(cfg):
+            seen.setdefault("reads", []).append(self.lock_is_held())
+            return real_snap(cfg)
+
+        def restore(*a):
+            seen["restore"] = self.lock_is_held()
+            return real_restore(*a)
+
+        with mock.patch("sampan.folders.save", side_effect=save), mock.patch("sampan.migrate._read", side_effect=read), \
+                mock.patch("sampan.migrate._restore", side_effect=restore):
+            rc, _text = self.ensure()
+        self.assertEqual(rc, 2)
+        self.assertEqual(seen, {"save": True, "reads": [True, True], "restore": True})
+        self.assertFalse(self.lock_is_held())
+
+    def test_restore_puts_folders_back_before_registry(self):
+        self.put_v2()
+        order = []
+        real = migrate._write_bytes
+
+        def write(path, data):
+            if Path(path).parent == self.state:
+                order.append(Path(path).name)
+            return real(path, data)
+
+        real_save = folders.save
+
+        def lossy_save(state_dir, tree, rows=None):
+            tree.sessions.pop("gamma", None)
+            return real_save(state_dir, tree, rows)
+
+        with mock.patch("sampan.migrate._write_bytes", side_effect=write), \
+                mock.patch("sampan.folders.save", side_effect=lossy_save):
+            self.assertEqual(self.ensure()[0], 2)
+        self.assertEqual(order, ["folders.json", "registry.json"])
+
+    def test_retried_failure_reuses_the_backup(self):
+        self.put_v2()
+        original = self.bytes_of("registry.json", "folders.json")
+        real_save = folders.save
+
+        def lossy_save(state_dir, tree, rows=None):
+            tree.sessions.pop("gamma", None)
+            return real_save(state_dir, tree, rows)
+
+        with mock.patch("sampan.folders.save", side_effect=lossy_save):
+            self.assertEqual(self.ensure()[0], 2)
+            self.assertEqual(self.ensure(LATER)[0], 2)
+            self.assertEqual(self.ensure(LATER)[0], 2)
+        self.assertEqual([p.name for p in self.backups()], ["backup-0.15-20261031-120000"])
+        self.assertEqual(self.bytes_of("registry.json", "folders.json"), original)
+        (self.state / "dispatches.json").write_text('{"version": 2, "dispatches": []}\n')  # inputs changed: a new one
+        with mock.patch("sampan.folders.save", side_effect=lossy_save):
+            self.ensure(LATER)
+        self.assertEqual(len(self.backups()), 2)
+
+    def test_dry_run_problem_is_rc_2(self):
+        self.put_v2()
+        real_save = folders.save
+
+        def lossy_save(state_dir, tree, rows=None):
+            tree.sessions.pop("gamma", None)
+            return real_save(state_dir, tree, rows)
+
+        files = self.all_files()
+        with mock.patch("sampan.folders.save", side_effect=lossy_save):
+            rc, text = self.cmd(dry_run=True)
+        self.assertEqual(rc, 2)
+        self.assertIn("gamma", text)
         self.assertEqual(self.all_files(), files)
 
     def test_backup_has_all_three_files(self):
@@ -298,6 +440,10 @@ class MigrateTest(unittest.TestCase):
         self.assertEqual(c.level, "warn")
         self.assertIn("登記表 v2、資料夾 v1", c.title)
         self.assertIn("上次備份 （沒有）", c.title)
+        (self.state / "folders.json").unlink()
+        [c] = _data_format(self.cfg)
+        self.assertIn("登記表 v2、資料夾（沒有）", c.title)
+        self.put_v2()
         self.ensure()
         self.ensure(LATER)  # nothing to do: no second backup
         [c] = _data_format(self.cfg)
