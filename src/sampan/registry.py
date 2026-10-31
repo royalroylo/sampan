@@ -71,16 +71,20 @@ def merge(old, observed, tmux_sessions, now, server, keep_silently=frozenset()):
     new_rows = {}
     for ob in observed:
         prev = by_name.get(ob.tmux)
-        if prev is None:
-            if ob.sampan_id:  # the stamped id names the row first; session_id is the fallback
-                prev = next((o for o in old if o.id == ob.sampan_id and o.tmux not in used), None)
-            if prev is None:
-                prev = next((o for o in old if o.session_id == ob.session_id
-                             and o.tmux not in tmux_sessions and o.tmux not in used), None)
+        if ob.sampan_id:  # the stamped id decides first: a session carrying another row's id is that row, renamed
+            by_id = next((o for o in old if o.id == ob.sampan_id and o.tmux not in used
+                          and (o.tmux == ob.tmux or o.tmux not in tmux_sessions)), None)
+            if by_id is not None:
+                prev = by_id
+        if prev is None or prev.tmux in used:
+            prev = next((o for o in old if o.session_id == ob.session_id
+                         and o.tmux not in tmux_sessions and o.tmux not in used), None)
             if prev is None:
                 res.added.append(ob.tmux)
             else:
                 res.renamed.append((prev.tmux, ob.tmux))
+        elif prev.tmux != ob.tmux:
+            res.renamed.append((prev.tmux, ob.tmux))
         elif (prev.agent, prev.profile, prev.session_id, prev.cwd) != (ob.agent, ob.profile, ob.session_id, ob.cwd):
             res.updated.append(ob.tmux)
         if prev is not None:
@@ -89,7 +93,11 @@ def merge(old, observed, tmux_sessions, now, server, keep_silently=frozenset()):
         new_rows[ob.tmux] = Row(ob.tmux, ob.agent, ob.profile, ob.session_id, ob.cwd, state, now, server, ob.pid,
                                 prev.id if prev is not None else ids.new_id(), prev.alias if prev is not None else "")
     for r in old:
-        if r.tmux in used or r.tmux in new_rows:
+        if r.tmux in used:
+            continue
+        if r.tmux in new_rows:  # an older row holding the name a renamed session now has: the live session wins the name
+            if new_rows[r.tmux].id != r.id:
+                res.warnings.append(f"{r.tmux}：這個名稱已被改名後的 session 用掉，舊的同名登記列（{r.session_id[:8]}）不再保留")
             continue
         if r.tmux in tmux_sessions:
             new_rows[r.tmux] = r

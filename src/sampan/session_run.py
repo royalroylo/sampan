@@ -221,6 +221,7 @@ def _cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.slee
         if not _register(cfg, out, row):
             abort("session 沒登記成功，開場訊息沒送")
             return 2
+        tmux.set_session_id(name, row.id)
         send_line(tmux, pane, agent, cmd, sleep)
         out(f"▶ {name}（{profile}，{session_id[:8]}）已登記")
     else:
@@ -257,6 +258,7 @@ def _cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.slee
             row = Row(name, "codex", cfg.codex.profile, la.session_id, cwd, "active", now_iso(), tmux.server_id() or "", la.pid, ids.new_id())
             if not _register(cfg, out, row):
                 return 2
+            tmux.set_session_id(name, row.id)
             out(f"▶ {name}（codex，{la.session_id[:8]}）已登記")
             return 0
         screen = tmux.capture(pane) if relay is not None or agent == "codex" else None

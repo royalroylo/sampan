@@ -126,6 +126,7 @@ def observe(cfg, run, panes, procs, proc_root=PROC_ROOT):
     skipped = sessions with more than one agent, which sampan does not record."""
     found, warnings = live_by_pane(cfg, run, panes, procs, proc_root)
     observed, skipped = [], set()
+    stamped = Tmux(run).session_ids() or {}  # unreadable counts as "no ids": merge then falls back to the conversation id
     for session, items in agent_panes(procs, panes, found).items():
         if len(items) > 1:
             skipped.add(session)
@@ -134,5 +135,5 @@ def observe(cfg, run, panes, procs, proc_root=PROC_ROOT):
         la = found.get(items[0].pane_id)
         if la is None or la.session_id is None:
             continue
-        observed.append(Observed(session, la.agent, la.profile, la.session_id, la.cwd, la.pid))
+        observed.append(Observed(session, la.agent, la.profile, la.session_id, la.cwd, la.pid, stamped.get(session, "")))
     return observed, warnings, skipped

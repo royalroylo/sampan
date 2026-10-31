@@ -78,6 +78,7 @@ class Base(unittest.TestCase):
         r.on(["tmux", "-u", "list-panes"], list_panes)
         r.on(["tmux", "-u", "list-sessions"], lambda a: cp() if self.server else cp(rc=1))
         r.on(["tmux", "-u", "new-session"], new_session)
+        r.on(["tmux", "-u", "set-option"], cp())
         r.on(["tmux", "-u", "send-keys"], send)
         r.on(["tmux", "-u", "capture-pane"], lambda a: cp(out=self.screen))
         r.on(["ps", "-A"], lambda a: cp(out="\n".join(self.procs) + "\n"))
@@ -301,6 +302,18 @@ class RestoreTest(Base):
         self.restore(r)
         self.assertEqual(r.called(["tmux", "-u", "new-session"]), [])
         self.assertEqual(self.keys(), [["%7", "C-u"], ["%7", f"cd {self.cwd} && env -u CLAUDE_CONFIG_DIR claude --resume {A} --name x", "Enter"]])
+
+    def test_restore_stamps_the_row_id_on_new_and_existing_sessions(self):
+        self.transcript(A)
+        self.registry([Row("x", "claude", "alice", A, str(self.cwd), id="x-id")])
+        r = self.runner()
+        self.restore(r)  # no tmux session yet: created
+        self.assertEqual([c["args"][3:] for c in r.called(["tmux", "-u", "set-option"])], [["-t", "=x", "@sampan_id", "x-id"]])
+        self.panes = [pane_line("x", "%7", 100, "zsh", "/Users/u")]
+        self.procs = [ps_line(100, 1, "-zsh", "-zsh")]
+        r = self.runner()
+        self.restore(r)  # a shell pane reused
+        self.assertEqual([c["args"][3:] for c in r.called(["tmux", "-u", "set-option"])], [["-t", "=x", "@sampan_id", "x-id"]])
 
     def test_session_without_shell_pane_skipped(self):
         self.transcript(A)

@@ -16,6 +16,16 @@ def append_log(cfg, msg):
         fh.write(f"{now_iso()} {msg}\n")
 
 
+def stamp_missing(tmux, observed, rows):
+    """Stamp @sampan_id on registered sessions whose tmux session has none. One that carries a different id is
+    another session's: left alone. Best effort, a failure changes nothing."""
+    by_name = {r.tmux: r for r in rows}
+    for ob in observed:
+        row = by_name.get(ob.tmux)
+        if row is not None and row.id and not ob.sampan_id:
+            tmux.set_session_id(ob.tmux, row.id)
+
+
 def cmd_save(cfg, run, out, *, quiet=False, dry_run=False, proc_root=PROC_ROOT):
     tmux = Tmux(run)
     server = tmux.server_id()
@@ -49,6 +59,7 @@ def cmd_save(cfg, run, out, *, quiet=False, dry_run=False, proc_root=PROC_ROOT):
         now = now_iso()
         res = merge(old, observed, {p.session for p in panes}, now, server, keep_silently=quiet_keep)
         if not dry_run:
+            stamp_missing(tmux, observed, res.rows)
             write_rows(cfg.registry_path, res.rows, now, cfg.history_dir, machine=registry_machine(cfg))
     warnings += res.warnings
     summary = (f"新增 {len(res.added)}、更新 {len(res.updated)}、改名 {len(res.renamed)}、"

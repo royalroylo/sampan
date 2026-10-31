@@ -110,6 +110,7 @@ class Base(unittest.TestCase):
         r.on(["tmux", "-u", "has-session"], lambda a: cp(rc=0 if any(
             p.split("\t")[0] == a[-1][1:] for p in self.panes) else 1))
         r.on(["tmux", "-u", "new-session"], cp(out="%50\n"))
+        r.on(["tmux", "-u", "set-option"], cp())
         r.on(["tmux", "-u", "send-keys"], send)
         r.on(["tmux", "-u", "capture-pane"], lambda a: cp(out=self.screen))
         r.on(["ps", "-A"], lambda a: cp(out="\n".join(self.procs) + "\n"))
@@ -352,6 +353,15 @@ class FlowTest(Base):
             if count[0] == n:
                 self.gone(*pids)
         self.on_sleep = on_sleep
+
+    def test_adopt_stamps_the_new_row_id(self):
+        self.iterm_claude(600)
+        self.exit_after(1, 600)
+        self.come_up(A)
+        r = self.runner()
+        self.adopt(r, answers=[""], timeout=5)
+        row = load_rows(self.cfg.registry_path)[0]
+        self.assertEqual([c["args"][3:] for c in r.called(["tmux", "-u", "set-option"])], [["-t", "=proj-v2", "@sampan_id", row.id]])
 
     def test_waits_until_gone_then_resumes_same_conversation_and_registers(self):
         self.iterm_claude(600)

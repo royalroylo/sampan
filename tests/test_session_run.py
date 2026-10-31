@@ -58,6 +58,7 @@ class Base(unittest.TestCase):
         r = FakeRunner(strict=True)
         r.on(["tmux", "-u", "list-panes"], lambda a: cp(out="\n".join(self.panes) + "\n"))
         r.on(["tmux", "-u", "new-session"], cp(out="%50\n"))
+        r.on(["tmux", "-u", "set-option"], cp())
         r.on(["tmux", "-u", "has-session"], cp(rc=1))
         r.on(["tmux", "-u", "list-sessions", "-F"], cp())
         r.on(["tmux", "-u", "send-keys"], cp())
@@ -80,6 +81,12 @@ class NewAndStateTest(Base):
         self.assertEqual(self.keys_sent(r)[0][1],
                          f"env CLAUDE_CONFIG_DIR={self.cfg.profiles['work'].config_dir} claude --session-id {B} --name new-x")
         self.assertTrue(any("信任" in m for m in self.msgs))
+
+    def test_new_stamps_the_registered_id_on_the_tmux_session(self):
+        r = self.runner()
+        cmd_new(self.cfg, r, self.msgs.append, "new-x", "claude:work", str(self.cwd), sleep=lambda _: None, timeout=1, uuid4=lambda: B)
+        row = load_rows(self.cfg.registry_path)[0]
+        self.assertEqual([c["args"][3:] for c in r.called(["tmux", "-u", "set-option"])], [["-t", "=new-x", "@sampan_id", row.id]])
 
     def test_new_has_no_rc_step(self):
         from sampan import steps

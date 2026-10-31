@@ -363,6 +363,7 @@ def _adopt_one(cfg, run, out, c, name, sid, sleep, timeout):
     row = Row(name, c.agent, c.profile, sid, c.cwd, "active", now_iso(), tmux.server_id() or "", None, ids.new_id())
     if not _register(cfg, out, row):
         return "登記表寫入失敗"
+    tmux.set_session_id(name, row.id)
     steps.launch(cfg, tmux, pane, row, cwd=_launch_cwd(c), sleep=sleep, clear=False)  # a new pane: nothing to clear
     resumed, at_trust, _unconfirmed = _watch(cfg, run, {pane: row}, timeout, sleep)
     if resumed:

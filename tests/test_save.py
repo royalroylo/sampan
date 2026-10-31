@@ -24,6 +24,8 @@ class Env:
         self.server = True
         self.server_id = SRV
         self.messages = []
+        self.stamps = {}  # tmux session → the @sampan_id it carries
+        self.stamped = []  # set-option calls: (target, value)
 
     def pane(self, session, pane_id, pane_pid, command="claude", path="/c"):
         self.panes.append(pane_line(session, pane_id, pane_pid, command, path))
@@ -38,8 +40,15 @@ class Env:
         def list_sessions(args):
             if not self.server:
                 return cp(rc=1)
+            if "#{session_name}\t#{@sampan_id}" in args:
+                return cp(out="".join(f"{n}\t{i}\n" for n, i in self.stamps.items()))
             return cp(out=self.server_id + "\n") if "-F" in args else cp()
         r.on(["tmux", "-u", "list-sessions"], list_sessions)
+
+        def set_option(args):
+            self.stamped.append((args[4], args[6]))
+            return cp()
+        r.on(["tmux", "-u", "set-option"], set_option)
         r.on(["tmux", "-u", "list-panes"], cp(out="\n".join(self.panes) + "\n") if self.server else cp(rc=1))
         r.on(["ps", "-A"], cp(out="\n".join(self.procs) + "\n"))
         r.on(["ps", "eww"], lambda args: cp(out=self.env_out.get(int(args[-1]), "claude")))
@@ -66,6 +75,52 @@ class SaveTest(unittest.TestCase):
                          [("001-proj", "work", A, SRV)])
         self.assertIn(" ok ", e.cfg.save_log.read_text())
         self.assertTrue(e.messages[0].startswith("sampan save："), e.messages)
+
+    def test_manual_tmux_rename_keeps_id_and_folder(self):
+        e = Env()
+        e.seed([Row("old", "claude", "work", A, "/c", id="x-id")])
+        e.pane("new-name", "%3", 100)
+        e.claude(200, 100)
+        write_session(e.cfg, "work", 200, sid=B, cwd="/c")  # the conversation id changed too
+        e.stamps = {"new-name": "x-id"}
+        self.assertEqual(e.save(), 0)
+        self.assertEqual([(r.tmux, r.id, r.session_id) for r in e.rows()], [("new-name", "x-id", B)])
+        self.assertEqual(e.stamped, [])  # already stamped: nothing to write
+        self.assertTrue(any("old → new-name" in m for m in e.messages), e.messages)
+
+    def test_stamped_id_beats_the_name_of_a_stopped_row(self):
+        e = Env()
+        e.seed([Row("A", "claude", "work", A, "/c", id="a-id"), Row("B", "claude", "work", C, "/d", "active", id="b-id")])
+        e.pane("B", "%3", 100)
+        e.claude(200, 100)
+        write_session(e.cfg, "work", 200, sid=B, cwd="/c")
+        e.stamps = {"B": "a-id"}
+        e.save()
+        rows = e.rows()
+        self.assertEqual([(r.tmux, r.id, r.session_id) for r in rows], [("B", "a-id", B)])
+        self.assertTrue(any("b-id" not in m and "B：這個名稱" in m for m in e.messages), e.messages)
+
+    def test_save_writes_missing_option(self):
+        e = Env()
+        e.seed([Row("x", "claude", "work", A, "/c", id="x-id"), Row("y", "claude", "work", B, "/d", id="y-id")])
+        e.pane("x", "%3", 100)
+        e.claude(200, 100)
+        write_session(e.cfg, "work", 200, sid=A, cwd="/c")
+        e.pane("y", "%4", 101)
+        e.claude(201, 101)
+        write_session(e.cfg, "work", 201, sid=B, cwd="/d")
+        e.stamps = {"x": "", "y": "other-id"}  # y carries someone else's id: left alone
+        e.save()
+        self.assertEqual(e.stamped, [("=x", "x-id")])
+
+    def test_dry_run_writes_no_option(self):
+        e = Env()
+        e.seed([Row("x", "claude", "work", A, "/c", id="x-id")])
+        e.pane("x", "%3", 100)
+        e.claude(200, 100)
+        write_session(e.cfg, "work", 200, sid=A, cwd="/c")
+        e.save(dry_run=True)
+        self.assertEqual(e.stamped, [])
 
     def test_tmux_server_down_leaves_registry_untouched(self):
         # Review Focus 2

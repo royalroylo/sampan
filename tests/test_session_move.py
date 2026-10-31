@@ -99,6 +99,7 @@ class MoveFixture(unittest.TestCase):
     def runner(self):
         r = FakeRunner(strict=True)
         r.on(["tmux", "-u", "list-sessions"], lambda a: cp(out="srv\n") if "-F" in a else cp())
+        r.on(["tmux", "-u", "set-option"], cp())
         r.on(["tmux", "-u", "list-panes"], self.panes)
         r.on(["tmux", "-u", "has-session"], cp())
         r.on(["tmux", "-u", "capture-pane"], lambda a: cp(out=self.screen))
@@ -520,6 +521,7 @@ class CodexMoveTest(unittest.TestCase):
     def runner(self):
         r = FakeRunner(strict=True)
         r.on(["tmux", "-u", "list-sessions"], lambda a: cp(out="srv\n") if "-F" in a else cp())
+        r.on(["tmux", "-u", "set-option"], cp())
         r.on(["tmux", "-u", "list-panes"], self.panes)
         r.on(["tmux", "-u", "capture-pane"], lambda a: cp(out=self.screen))
         r.on(["tmux", "-u", "send-keys"], self.send)

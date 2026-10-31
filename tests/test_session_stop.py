@@ -40,6 +40,7 @@ class StopTest(unittest.TestCase):
     def runner(self):
         r = FakeRunner(strict=True)
         r.on(["tmux", "-u", "list-sessions"], lambda a: cp(out="srv\n") if "-F" in a else cp())
+        r.on(["tmux", "-u", "set-option"], cp())
         r.on(["tmux", "-u", "list-panes"], lambda a: cp(out="\n".join(self.panes) + "\n"))
         r.on(["ps", "-A"], self.ps)
         r.on(["ps", "eww"], cp())  # no environment readable
@@ -295,6 +296,7 @@ class CodexStopTest(unittest.TestCase):
         rollout = self.cfg.codex.home / "sessions/2026/10/20" / f"rollout-2026-10-20T07-42-25-{TID}.jsonl"
         r = FakeRunner(strict=True)
         r.on(["tmux", "-u", "list-sessions"], lambda a: cp(out="srv\n") if "-F" in a else cp())
+        r.on(["tmux", "-u", "set-option"], cp())
         r.on(["tmux", "-u", "list-panes"], lambda a: cp(out="\n".join(self.panes) + "\n"))
         r.on(["tmux", "-u", "capture-pane"], lambda a: cp(out=self.screen))
         r.on(["ps", "-A"], self.ps)

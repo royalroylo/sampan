@@ -56,6 +56,22 @@ class Tmux:
             out[parts[0]] = (int(parts[1]), last)
         return out
 
+    def session_ids(self):
+        """{session: the @sampan_id stamped on it ("" when not stamped)}; None when tmux is unreadable."""
+        r = self._tmux("list-sessions", "-F", "#{session_name}\t#{@sampan_id}")
+        if r.returncode != 0:
+            return {} if _no_server(r.stderr or "") else None
+        out = {}
+        for line in r.stdout.splitlines():
+            parts = line.split("\t")
+            if len(parts) == 2:
+                out[parts[0]] = parts[1]
+        return out
+
+    def set_session_id(self, session, sid):
+        """Stamp the session with its sampan id, so a rename done in tmux is still recognised. Failure is only False."""
+        return self._tmux("set-option", "-t", f"={session}", "@sampan_id", sid).returncode == 0
+
     def panes(self):
         r = self._tmux("list-panes", "-a", "-F", FMT)
         if r.returncode != 0:

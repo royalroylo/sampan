@@ -174,6 +174,8 @@ def _launch(cfg, tmux, row, live, out, sleep, dry_run):
         target = tmux.new_session(row.tmux, row.cwd)
         if target is None:
             return None
+    if row.id:
+        tmux.set_session_id(row.tmux, row.id)
     steps.launch(cfg, tmux, target, row, cwd=cwd, sleep=sleep, clear=pane is not None)
     out(f"▶ {row.tmux}（{row.agent}{'：' + row.profile if row.profile else ''}，{row.session_id[:8]}）")
     return target
