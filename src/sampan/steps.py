@@ -181,12 +181,19 @@ def _on_disconnect(menu):
     return 0 <= menu.cursor < len(menu.options) and menu.options[menu.cursor] == RC_DISCONNECT
 
 
-def launch(cfg, tmux, target, row, *, profile=None, cwd=None, sleep):
-    """Clear the pane's input line and start the row's agent on its conversation, named by its alias (also the Remote
-    Control name when the profile has it on). Returns the line sent; dry runs are the caller's business."""
-    line = launch_line(cfg, row.agent, profile or row.profile, resume=row.session_id, cwd=cwd,
+def launch_cmd(cfg, row, *, profile=None, cwd=None):
+    """The line `launch` sends (also what dry runs print): resume the row's conversation, named by its alias."""
+    return launch_line(cfg, row.agent, profile or row.profile, resume=row.session_id, cwd=cwd,
                        name=display_name(row))
-    tmux.send_keys(target, "C-u")
+
+
+def launch(cfg, tmux, target, row, *, profile=None, cwd=None, sleep, clear=True):
+    """Clear the pane's input line and start the row's agent on its conversation, named by its alias (also the Remote
+    Control name when the profile has it on). Returns the line sent; dry runs are the caller's business.
+    clear=False: a pane sampan has just created has no input to clear."""
+    line = launch_cmd(cfg, row, profile=profile, cwd=cwd)
+    if clear:
+        tmux.send_keys(target, "C-u")
     send_line(tmux, target, row.agent, line, sleep)
     return line
 

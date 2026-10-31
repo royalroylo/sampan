@@ -6,6 +6,7 @@ from sampan.restart import BUSY, RestartPlan, cmd_restart, confirm_line, plan_re
 from sampan.status import State
 from sampan.textwidth import text_width
 from tests.helpers import make_env, status_row
+from tests.test_restore import NOW, A, B, StepsFixture, dead
 
 
 class PlanTest(unittest.TestCase):
@@ -152,6 +153,30 @@ class CmdTest(unittest.TestCase):
                     restore_fn=self.restore_fn)
         self.assertEqual(self.calls, [])
         self.assertIn("略過：a", "\n".join(self.lines))
+
+
+class RestartStepsTest(StepsFixture):
+    """Restart = stop + the real restore: each session reattached gets one RC reset."""
+
+    def test_restart_runs_rc_step_once_per_session(self):
+        from sampan.registry import Row
+        from sampan.restore import cmd_restore
+        self.transcript(A)
+        self.transcript(B)
+        self.registry([Row("a", "claude", "alice", A, str(self.cwd)), Row("b", "claude", "alice", B, str(self.cwd))])
+        r = self.runner()
+
+        def stop_fn(cfg, run, out, **kw):
+            kw["stopped"] += ["a"]
+            return 0
+
+        def restore_fn(cfg, run, out, ask, **kw):
+            return cmd_restore(cfg, run, out, ask, sleep=self.sleep, now_fn=lambda: NOW, timeout=3, alive=dead, **kw)
+        with self.recorded():
+            rc = cmd_restart(self.cfg, r, self.msgs.append, None, RestartPlan(["a"], ["b"], []),
+                             stop_fn=stop_fn, restore_fn=restore_fn)
+        self.assertEqual(rc, 0)
+        self.assertEqual([o[:2] for o in self.order], [("launch", "a"), ("launch", "b"), ("rc", "a"), ("rc", "b")])
 
 
 if __name__ == "__main__":

@@ -81,6 +81,25 @@ class NewAndStateTest(Base):
                          f"env CLAUDE_CONFIG_DIR={self.cfg.profiles['work'].config_dir} claude --session-id {B} --name new-x")
         self.assertTrue(any("信任" in m for m in self.msgs))
 
+    def test_new_has_no_rc_step(self):
+        from sampan import steps
+        (self.cfg.profiles["work"].config_dir / "settings.json").write_text('{"remoteControlAtStartup": true}')
+        calls = []
+        self.panes = [pane_line("new-x", "%50", 100, "claude", str(self.cwd))]
+        self.procs = [ps_line(100, 1, "-zsh", "-zsh"), ps_line(200, 100, "claude", "claude")]
+        write_session(self.cfg, "work", 200, sid=B, cwd=str(self.cwd), tmux="new-x:@1.%50")
+        r = self.runner()
+        r.on(["ps", "eww"], cp())
+        with mock.patch.multiple(steps, rc_step=lambda *a, **k: calls.append("rc_step"),
+                                 rc_reset=lambda *a, **k: calls.append("rc_reset")):
+            rc = cmd_new(self.cfg, r, self.msgs.append, "new-x", "claude:work", str(self.cwd),
+                         sleep=lambda _: None, timeout=2, uuid4=lambda: B)
+        self.assertEqual(rc, 0, self.msgs)
+        self.assertEqual(calls, [])
+        keys = self.keys_sent(r)
+        self.assertEqual(len(keys), 1)  # only the launch command: nothing typed after it
+        self.assertTrue(keys[0][1].endswith("--name new-x --remote-control new-x"), keys[0][1])
+
     def test_new_and_adopt_rows_have_ids(self):
         r = self.runner()
         cmd_new(self.cfg, r, self.msgs.append, "new-x", "claude:work", str(self.cwd),

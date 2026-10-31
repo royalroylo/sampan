@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import actionlog, claude_state, codex_daemon, codex_state, ids
+from . import actionlog, claude_state, codex_daemon, codex_state, ids, steps
 from .claude_state import find_transcript, read_session_files, transcript_problem, transcript_stats
 from .clock import now_iso
 from .codex_state import (
@@ -27,7 +27,6 @@ from .codex_state import (
     threads_fallback,
 )
 from .hook import read_hook_records
-from .launch import launch_line, send_line
 from .observe import PROC_ROOT, profile_for_dir
 from .procs import claude_pids, list_procs, proc_env
 from .registry import Row, id_problem
@@ -340,10 +339,14 @@ def _resume_problem(cfg, run, c, sid):
     return f"這個對話已在 {where} 執行，不重複開" if where else None
 
 
-def _launch_cmd(cfg, c, sid, name):
+def _launch_cwd(c):
     # codex gets -C <cwd> (added when launch_line is given a cwd); claude, like restore, relies on new-session -c for the directory
-    return launch_line(cfg, c.agent, c.profile, resume=sid, cwd=c.cwd if c.agent == "codex" else None,
-                       name=name)
+    return c.cwd if c.agent == "codex" else None
+
+
+def _launch_cmd(cfg, c, sid, name):
+    """The line a dry run prints: what steps.launch sends for the row _adopt_one registers."""
+    return steps.launch_cmd(cfg, Row(name, c.agent, c.profile, sid, c.cwd), cwd=_launch_cwd(c))
 
 
 def _adopt_one(cfg, run, out, c, name, sid, sleep, timeout):
@@ -360,9 +363,10 @@ def _adopt_one(cfg, run, out, c, name, sid, sleep, timeout):
     row = Row(name, c.agent, c.profile, sid, c.cwd, "active", now_iso(), tmux.server_id() or "", None, ids.new_id())
     if not _register(cfg, out, row):
         return "登記表寫入失敗"
-    send_line(tmux, pane, c.agent, _launch_cmd(cfg, c, sid, name), sleep)
+    steps.launch(cfg, tmux, pane, row, cwd=_launch_cwd(c), sleep=sleep, clear=False)  # a new pane: nothing to clear
     resumed, at_trust, _unconfirmed = _watch(cfg, run, {pane: row}, timeout, sleep)
     if resumed:
+        steps.rc_step(cfg, tmux, row, pane, out, sleep=sleep)
         out(f"✔ 開好 tmux session「{name}」，接回同一段對話（{c.profile or 'codex'}）")
         return "ok"
     if at_trust:

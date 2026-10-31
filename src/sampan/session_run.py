@@ -1,3 +1,4 @@
+import dataclasses
 import os
 import re
 import signal
@@ -7,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import actionlog, folder_cmd, folders, ids
+from . import actionlog, folder_cmd, folders, ids, steps
 from .claude_state import move_transcript, transcript_carry, transcript_problem
 from .clock import now_iso
 from .codex_state import _is_codex, codex_pid_in_pane, find_rollout
@@ -17,7 +18,7 @@ from .machine import registry_machine
 from .observe import PROC_ROOT, SPLIT_HINT, live_by_pane, multi_agent_sessions
 from .procs import descendant_claude, is_descendant, list_procs
 from .prompts import ANSWERED, ATTACH, SKIP, Relay
-from .registry import STATES, RegistryError, Row, id_problem, load_rows, lock, set_state, write_rows
+from .registry import STATES, RegistryError, Row, display_name, id_problem, load_rows, lock, set_state, write_rows
 from .screens import CLAUDE_TRUST_OPTION, CODEX_TRUST_YES, bottom_trust_path, codex_activity
 from .send import TERMINAL, TERMINAL_NAME, UNREGISTERED_NAME, abort_new, submit_new
 from .tmux import SHELLS, Tmux, TmuxUnreadable
@@ -388,7 +389,7 @@ def cmd_forget(cfg, run, out, name, *, dry_run=False):
     if not dry_run:
         folder_cmd.sync_session(cfg, out, "forget", name)  # after the lock: the registry lock is not reentrant
     try:
-        out(f"  對話還在：{launch_line(cfg, row.agent, row.profile, resume=row.session_id, cwd=row.cwd, name=row.tmux)}")
+        out(f"  對話還在：{launch_line(cfg, row.agent, row.profile, resume=row.session_id, cwd=row.cwd, name=display_name(row))}")
     except (ValueError, KeyError):
         out(f"  對話 id {row.session_id}")
     return 0
@@ -724,7 +725,8 @@ def cmd_move(cfg, run, out, name, dest, *, dry_run=False, sleep=time.sleep, time
         if why:
             out(f"❌ {name}：{why}，不動")
             return 1
-    cmd = launch_line(cfg, agent, new_prof, resume=session_id, cwd=str(target), name=name)
+    launched = dataclasses.replace(row, session_id=session_id)  # the conversation running now (it may have changed)
+    cmd = steps.launch_cmd(cfg, launched, profile=new_prof, cwd=str(target))
     if dry_run:
         made = "" if target.is_dir() else "（目錄不存在，將建立）"
         moved = f"搬逐字稿到 {new_prof} → " if carry else ""
@@ -762,8 +764,7 @@ def cmd_move(cfg, run, out, name, dest, *, dry_run=False, sleep=time.sleep, time
         # registry and transcript must agree before anything is launched: if the relaunch then fails (e.g. the new
         # account is not logged in), restore and switch still find the conversation under the new profile
         out(f"⚠ {name}：登記表沒能改成 {new_prof}；之後 sampan save 會依實際狀態更新")
-    tmux.send_keys(pane.pane_id, "C-u")
-    send_line(tmux, pane.pane_id, agent, cmd, sleep)
+    steps.launch(cfg, tmux, pane.pane_id, launched, profile=new_prof, cwd=str(target), sleep=sleep)
     out(f"▶ {name}：{f'用 {new_prof}' if switching else f'在 {target}'} 接回 {session_id[:8]}")
     trusted, announced, redraw_left = False, False, None
     waiting = []  # filled when auto itself answered SKIP (slow redraw), so a SKIP chosen by the user is never mistaken for it
@@ -799,6 +800,7 @@ def cmd_move(cfg, run, out, name, dest, *, dry_run=False, sleep=time.sleep, time
                 out(f"  已信任 {target}")
             cmd_save(cfg, run, lambda _m: None, quiet=True, proc_root=proc_root)  # report only the move result
             now = next((r for r in load_rows(cfg.registry_path, codex_profile=cfg.codex.profile) if r.tmux == name), None)
+            steps.rc_step(cfg, tmux, launched, pane.pane_id, out, sleep=sleep, profile=new_prof)
             if switching:
                 out(f"✔ {name} 已換到 {now.profile if now else new_prof}（{hit.session_id[:8]}）")
             else:

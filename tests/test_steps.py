@@ -333,6 +333,12 @@ class LaunchStepTest(unittest.TestCase):
         self.assertNotIn("--name", line)
         self.assertEqual(tmux.sent, [["C-u"], [line], ["Enter"]])
 
+    def test_launch_into_a_new_pane_does_not_clear(self):
+        tmux = FakeTmux("")
+        line = steps.launch(rc_cfg(False), tmux, "%1", row(ALIAS), sleep=Sleeps(), clear=False)
+        self.assertEqual(tmux.sent, [[line, "Enter"]])
+        self.assertEqual(line, steps.launch_cmd(rc_cfg(False), row(ALIAS)))
+
 
 if __name__ == "__main__":
     unittest.main()

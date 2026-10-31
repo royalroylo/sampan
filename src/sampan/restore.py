@@ -10,10 +10,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import actionlog, codex_daemon
+from . import actionlog, codex_daemon, steps
 from .claude_state import transcript_problem
 from .codex_state import _is_codex, find_rollout
-from .launch import launch_line, send_line
 from .observe import agent_sessions, live_by_pane
 from .procs import list_procs
 from .prompts import ATTACH, SKIP, Relay
@@ -164,19 +163,18 @@ def text_picker(out, ask, cands, *, key=_row_key, label=None, prompt=RESTORE_PRO
 def _launch(cfg, tmux, row, live, out, sleep, dry_run):
     """Start one row. Returns the pane id it was sent to; None on dry-run or when tmux new-session fails."""
     pane = next((p for p in live.panes if p.session == row.tmux and p.command in SHELLS), None)
-    cmd = launch_line(cfg, row.agent, row.profile, resume=row.session_id, cwd=row.cwd if pane else None,
-                      name=row.tmux)
+    cwd = row.cwd if pane else None  # a new session starts in row.cwd (new-session -c)
     if dry_run:
+        cmd = steps.launch_cmd(cfg, row, cwd=cwd)
         out(f"[dry-run] {row.tmux}：{'送進既有 shell pane' if pane else '建立 tmux session'} → {cmd}")
         return None
     if pane is not None:
         target = pane.pane_id
-        tmux.send_keys(target, "C-u")
     else:
         target = tmux.new_session(row.tmux, row.cwd)
         if target is None:
             return None
-    send_line(tmux, target, row.agent, cmd, sleep)
+    steps.launch(cfg, tmux, target, row, cwd=cwd, sleep=sleep, clear=pane is not None)
     out(f"▶ {row.tmux}（{row.agent}{'：' + row.profile if row.profile else ''}，{row.session_id[:8]}）")
     return target
 
@@ -233,6 +231,8 @@ def cmd_restore(cfg, run, out, ask, *, names=(), select_all=False, dry_run=False
                 confirm=True, opened=None, on_prompt=None, wait=True):
     """confirm=False: do not ask, reattach the default-selected ones directly (used when the ui presses Enter on a single stopped session).
     wait=False: finish once the reattach command is sent, without waiting or looking at the screen (when the ui reattaches one with Enter, it then goes straight into tmux and the user handles any menu).
+    Unless a launched row gets the Remote Control reset (steps.rc_wanted): then it waits as with wait=True, so the ui
+    goes in only after the reset.
     opened: given a list, append the names of tmux sessions created / sent the reattach command, in order (the ui then attaches to the first).
     on_prompt(name, agent, prompt): asked when an agent stops at a startup menu during the wait (see prompts.Relay); None = press no keys."""
     try:
@@ -313,7 +313,7 @@ def cmd_restore(cfg, run, out, ask, *, names=(), select_all=False, dry_run=False
             skipped.append((name, "tmux new-session 失敗"))
     if dry_run:
         return 0
-    if launched and not wait:
+    if launched and not wait and not any(steps.rc_wanted(cfg, r) for r in launched.values()):
         out(f"sampan restore：已送出接回指令 {len(launched)}、跳過 {len(skipped)}")
         for name, why in skipped:
             out(f"  ↷ {name}：{why}")
@@ -336,4 +336,9 @@ def cmd_restore(cfg, run, out, ask, *, names=(), select_all=False, dry_run=False
         out(f"  ⚠ {name}：停在提示或尚未接回，請到視窗確認")
     for name in at_prompt:
         out(f"  ⚠ {name} 停在提示，進去處理")
+    # one after another, after the watch: a slow reset must not use up the other sessions' watch time
+    pane_of = {row.tmux: pane for pane, row in launched.items()}
+    rows_of = {row.tmux: row for row in launched.values()}
+    for name in resumed:
+        steps.rc_step(cfg, tmux, rows_of[name], pane_of[name], out, sleep=sleep)
     return 1 if skipped or at_trust or unconfirmed or at_prompt else 0

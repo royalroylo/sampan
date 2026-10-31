@@ -380,6 +380,37 @@ class FlowTest(Base):
         self.assertIn("[接手] 接手：claude ~/proj.v2（pid 600）", lines[0])
         self.assertTrue(any("開好 tmux session「proj-v2」" in x for x in lines), lines)
 
+    def test_adopt_rc_step(self):
+        from unittest import mock
+
+        from sampan import steps
+        order = []
+        launch = steps.launch
+
+        def rec_launch(cfg, tmux, target, row, **kw):
+            order.append(("launch", row.tmux, target))
+            return launch(cfg, tmux, target, row, **kw)
+        self.iterm_claude(600)
+        self.exit_after(1, 600)
+        self.come_up(A)
+        with mock.patch.multiple(steps, launch=rec_launch,
+                                 rc_step=lambda cfg, tmux, row, pane, out, **kw: order.append(
+                                     ("rc", row.tmux, row.session_id, pane, len(self.msgs)))):
+            self.assertEqual(self.adopt(self.runner(), answers=[""], timeout=5), 0)
+        self.assertEqual([o[:4] for o in order], [("launch", "proj-v2", "%50"), ("rc", "proj-v2", A, "%50")])
+        self.assertTrue(self.msgs[order[1][4]].startswith("✔ 開好 tmux session「proj-v2」"))
+
+    def test_adopt_unconfirmed_has_no_rc_step(self):
+        from unittest import mock
+
+        from sampan import steps
+        calls = []
+        self.iterm_claude(600)
+        self.exit_after(1, 600)
+        with mock.patch.object(steps, "rc_step", lambda *a, **k: calls.append(a)):
+            self.assertEqual(self.adopt(self.runner(), answers=[""], timeout=2), 1)
+        self.assertEqual(calls, [])
+
     def test_reports_opened_sessions(self):
         self.iterm_claude(600)
         self.exit_after(1, 600)

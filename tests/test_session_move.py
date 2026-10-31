@@ -856,5 +856,81 @@ class SwitchTest(MoveFixture):
         self.assertEqual(self.row().profile, "alice")
 
 
+class StepsTest(MoveFixture):
+    """move / switch launch through steps.launch and end with steps.rc_step once the agent is back."""
+
+    def setUp(self):
+        super().setUp()
+        self.order = []
+
+    def recorded(self):
+        from unittest import mock
+
+        from sampan import steps
+        launch = steps.launch
+
+        def rec_launch(cfg, tmux, target, row, **kw):
+            self.order.append(("launch", row.tmux, kw.get("profile")))
+            return launch(cfg, tmux, target, row, **kw)
+
+        def rec_rc(cfg, tmux, row, pane, out, **kw):
+            self.order.append(("rc", row.tmux, pane, kw.get("profile"), len(self.keys), len(self.msgs)))
+        return mock.patch.multiple(steps, launch=rec_launch, rc_step=rec_rc)
+
+    def test_move_rc_step_after_trust(self):
+        self.trust_shows = str(self.dest)
+        with self.recorded():
+            self.assertEqual(self.move(), 0)
+        self.assertEqual(self.order[0], ("launch", "994-monitor", "alice"))
+        rc = self.order[1]
+        self.assertEqual(rc[:4], ("rc", "994-monitor", "%1", "alice"))
+        self.assertEqual(self.keys[rc[4] - 1], ["Enter"])  # after the trust prompt was answered
+        self.assertTrue(self.msgs[rc[5]].startswith("✔ 994-monitor 已搬到"))  # before the final line
+        self.assertEqual(len(self.order), 2)
+
+    def test_move_launch_uses_the_alias(self):
+        write_rows(self.cfg.registry_path, [Row("994-monitor", "claude", "alice", A, str(self.old), alias="監控 994")],
+                   "t", self.cfg.history_dir)
+        self.assertEqual(self.move(), 0)
+        self.assertIn(f"cd {self.dest} && env -u CLAUDE_CONFIG_DIR claude --resume {A} --name '監控 994'", self.keys[3][0])
+        self.assertEqual(self.row().alias, "監控 994")
+
+    def test_move_failure_has_no_rc_step(self):
+        self.exits_on_exit = False
+        with self.recorded():
+            self.assertEqual(self.move(timeout=2), 1)
+        self.assertEqual(self.order, [])
+
+    def test_switch_running_rc_step_with_new_profile(self):
+        self.relaunch_cwd = str(self.old)
+        with self.recorded():
+            rc = cmd_switch(self.cfg, self.runner(), self.msgs.append, "994-monitor", "work", sleep=lambda _: None,
+                            proc_root=NO_PROC, own_pane="%9")
+        self.assertEqual(rc, 0)
+        self.assertEqual([o[:4] for o in self.order],
+                         [("launch", "994-monitor", "work"), ("rc", "994-monitor", "%1", "work")])
+
+    def test_switch_stopped_goes_through_restore_rc(self):
+        from sampan.restore import cmd_restore
+        self.relaunch_cwd = str(self.old)
+        self.claude = None
+        self.sync_files()
+        r = self.runner()
+        r.on(["tmux", "-u", "list-panes"], lambda a: cp(out=(
+            pane_line("994-monitor", "%1", 100, "claude", str(self.old)) if self.started
+            else pane_line("other", "%5", 500, "zsh", "/x")) + "\n"))
+        r.on(["tmux", "-u", "new-session"], cp(out="%1\n"))
+
+        def restore_fn(*a, **k):
+            return cmd_restore(*a, sleep=lambda _: None, timeout=3, alive=lambda *_: (_ for _ in ()).throw(OSError()),
+                               **k)
+        with self.recorded():
+            rc = cmd_switch(self.cfg, r, self.msgs.append, "994-monitor", "work", sleep=lambda _: None,
+                            proc_root=NO_PROC, restore_fn=restore_fn)
+        self.assertEqual(rc, 0, self.msgs)
+        self.assertEqual(self.row().profile, "work")
+        self.assertEqual([o[:3] for o in self.order], [("launch", "994-monitor", None), ("rc", "994-monitor", "%1")])
+
+
 if __name__ == "__main__":
     unittest.main()

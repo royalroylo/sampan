@@ -584,6 +584,114 @@ class RestoreTest(Base):
         self.assertEqual(self.restore(self.runner()), 2)
 
 
+class StepsFixture(Base):
+    """Panes where a sent claude resume command brings the conversation up; steps.launch / steps.rc_step recorded."""
+
+    def setUp(self):
+        super().setUp()
+        self.order = []
+        self.up = {}  # session name → (pane, claude pid) once its resume command is sent
+        self.on_send = self.come_up
+
+    def rc_on(self, on=True):
+        (self.cfg.profiles["alice"].config_dir / "settings.json").write_text(
+            '{"remoteControlAtStartup": %s}' % ("true" if on else "false"))
+
+    up_only = None  # names whose conversation comes up (None = all)
+
+    def come_up(self, keys):
+        """A claude resume command sent to a pane brings the conversation up there."""
+        if len(keys) < 2 or "claude --resume" not in keys[1]:
+            return
+        sid = keys[1].split("--resume ")[1].split()[0]
+        name = next(r.tmux for r in _rows(self.cfg) if r.session_id == sid)
+        if self.up_only is not None and name not in self.up_only:
+            return
+        pid = 200 + len(self.up)
+        self.up[name] = keys[0]
+        self.panes.append(pane_line(name, keys[0], 100 + len(self.up), "claude", str(self.cwd)))
+        self.procs += [ps_line(100 + len(self.up), 1, "-zsh", "-zsh"), ps_line(pid, 100 + len(self.up), "claude", "claude")]
+        write_session(self.cfg, "alice", pid, sid=sid, cwd=str(self.cwd), tmux=f"{name}:@1.{keys[0]}")
+
+    def recorded(self):
+        from unittest import mock
+
+        from sampan import steps
+        launch = steps.launch
+
+        def rec_launch(cfg, tmux, target, row, **kw):
+            self.order.append(("launch", row.tmux))
+            return launch(cfg, tmux, target, row, **kw)
+
+        def rec_rc(cfg, tmux, row, pane, out, **kw):
+            self.order.append(("rc", row.tmux, pane, len(self.msgs)))
+        return mock.patch.multiple(steps, launch=rec_launch, rc_step=rec_rc)
+
+
+class StepsTest(StepsFixture):
+    """Every reattach goes through steps.launch, and a confirmed one ends with steps.rc_step."""
+
+    def test_restore_calls_rc_step_after_resumed(self):
+        self.transcript(A)
+        self.transcript(B)
+        self.registry([Row("a", "claude", "alice", A, str(self.cwd)), Row("b", "claude", "alice", B, str(self.cwd))])
+        self.up_only = {"a"}
+        with self.recorded():
+            rc = self.restore(self.runner(), select_all=True, timeout=2)
+        self.assertEqual(rc, 1)  # b never came up
+        self.assertEqual([o[:3] for o in self.order], [("launch", "a"), ("launch", "b"), ("rc", "a", self.up["a"])])
+        # the reset runs after the summary and the per-session lines
+        at = self.order[2][3]
+        self.assertTrue(any(m.startswith("sampan restore：接回 1") for m in self.msgs[:at]))
+        self.assertIn("  ✔ a", self.msgs[:at])
+
+    def test_restore_launch_line_uses_the_alias(self):
+        self.transcript(A)
+        self.rc_on()
+        self.registry([Row("a", "claude", "alice", A, str(self.cwd), alias="讀書 PM")])
+        self.up_only = set()
+        self.restore(self.runner(), select_all=True)
+        self.assertIn("--name '讀書 PM' --remote-control '讀書 PM'", self.keys()[0][1])
+        self.restore(self.runner(), select_all=True, dry_run=True)
+        self.assertIn("--name '讀書 PM' --remote-control '讀書 PM'", self.text())
+
+    def test_restore_no_wait_still_resets_rc_when_wanted(self):
+        self.transcript(A)
+        self.rc_on()
+        self.registry([Row("a", "claude", "alice", A, str(self.cwd))])
+        opened = []
+        with self.recorded():
+            rc = self.restore(self.runner(), names=("a",), confirm=False, opened=opened, wait=False, timeout=5)
+        self.assertEqual(rc, 0)
+        self.assertEqual(opened, ["a"])
+        self.assertEqual([o[:2] for o in self.order], [("launch", "a"), ("rc", "a")])
+        self.assertNotIn("已送出接回指令", self.text())
+        self.assertIn("  ✔ a", self.msgs)
+
+    def test_restore_no_wait_off_profile_returns_immediately(self):
+        self.transcript(A)
+        self.rc_on(False)
+        self.registry([Row("a", "claude", "alice", A, str(self.cwd))])
+        r = self.runner()
+        with self.recorded():
+            rc = self.restore(r, names=("a",), confirm=False, wait=False, timeout=5)
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.order, [("launch", "a")])
+        self.assertEqual(r.called(["tmux", "-u", "capture-pane"]), [])
+        self.assertTrue(any("已送出接回指令 1" in m for m in self.msgs))
+
+    def test_rc_failure_is_reported_not_fatal(self):
+        self.transcript(A)
+        self.rc_on()
+        self.registry([Row("a", "claude", "alice", A, str(self.cwd))])
+        self.screen = "nothing like Remote Control here\n"
+        rc = self.restore(self.runner(), select_all=True, timeout=2)
+        self.assertEqual(rc, 0)
+        t = self.text()
+        self.assertIn("  ⚠ a：RC 校正沒做：沒看到 Remote Control 連上", self.msgs)
+        self.assertLess(t.index("  ✔ a"), t.index("RC 校正沒做"))
+
+
 class IsolationTest(unittest.TestCase):
     def test_save_module_does_not_import_restore(self):
         code = "import sys, sampan.save, sampan.cli; print('sampan.restore' in sys.modules)"

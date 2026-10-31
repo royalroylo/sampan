@@ -377,11 +377,11 @@ RESUME_HERE = object()  # second value of act() (RESUME_HERE, command): sampan s
 
 def _resume_line(cfg, name):
     """The reattach command for the row called name in the registry (cd to its directory, with the profile environment); None if unreadable or the id is wrong."""
-    from ..launch import launch_line
+    from ..steps import launch_cmd
 
     try:
         row = next((r for r in load_rows(cfg.registry_path, codex_profile=cfg.codex.profile) if r.tmux == name), None)
-        return launch_line(cfg, row.agent, row.profile, resume=row.session_id, cwd=row.cwd, name=row.tmux) if row else None
+        return launch_cmd(cfg, row, cwd=row.cwd) if row else None
     except (RegistryError, ValueError, KeyError):
         return None
 
