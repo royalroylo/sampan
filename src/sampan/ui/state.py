@@ -47,17 +47,21 @@ class Picker:
     target), keeps the plan in restart_plan and on y/Y returns
     ("restart!", names). g / f return the marked items (else the cursor item) as "folder:<path>" / "session:<name>".
     Without a tree the list is rows in the given order, as before folders existed.
-    Tab / Shift+Tab (KEY_BTAB) step the state filter through tree.FILTERS (filter indexes it, 0 = 全部): only the
+    Tab / Shift+Tab (KEY_BTAB) step the state filter through tree.FILTERS (filter indexes it, 0 = 全部; ! jumps to
+    等人 and back to 全部; lights, {name: lights label}, decide 等人 and 執行中): only the
     matching rows are listed (a search narrows them further), folders with none are left out, others only show under
     全部, and marks (and what a folder row targets) never reach a session the filter hides. * marks every session row
     shown (not those in collapsed folders); when they all are already marked it clears every mark instead. When marks
     disappear because their sessions left the filter (a refresh, a filter change), the next s / S / g / f does nothing
     but say so, rather than fall back to the cursor row.
+    v returns ("preview", []) for the screen to show or hide the preview.
     width (None = unlimited) is how many cells the prompt row has: the s / S questions shorten their name lists to fit
     it, so 確定？(y/N) always shows; what y returns always carries every name."""
 
-    def __init__(self, rows, current=None, *, clock=time.monotonic, others=(), tree=None, own_pane=None, filter=0):
+    def __init__(self, rows, current=None, *, clock=time.monotonic, others=(), tree=None, own_pane=None, filter=0,
+                 lights=None):
         self.rows = rows
+        self.lights = dict(lights or {})  # {name: lights label}: the 等人 / 執行中 filters and the folder counts
         self.own_pane = own_pane  # sampan's own pane id: S lists that session as skipped
         self.others = list(others)
         self.tree = _copy_tree(tree)
@@ -103,7 +107,7 @@ class Picker:
 
     def shown(self):
         """The rows the state filter lets through, in rows order."""
-        return [r for r in self.rows if matches(r, self.filter_name)]
+        return [r for r in self.rows if matches(r, self.filter_name, self.lights.get(r.name))]
 
     @property
     def filter_count(self):
@@ -113,7 +117,8 @@ class Picker:
         """items as they are without a search (row numbers follow these)."""
         rows = self.shown()
         return [(0, r) for r in rows] if self.tree is None else build_items(rows, self.tree, None,
-                                                                             hide_empty=self.filter != 0)
+                                                                             hide_empty=self.filter != 0,
+                                                                             lights=self.lights)
 
     def _filter(self):
         q = (self.query or "").lower()
@@ -121,7 +126,7 @@ class Picker:
         if self.tree is None:
             self.items = [(0, r) for r in rows if q in r.name.lower()]
         else:
-            self.items = build_items(rows, self.tree, self.query, hide_empty=self.filter != 0)
+            self.items = build_items(rows, self.tree, self.query, hide_empty=self.filter != 0, lights=self.lights)
         self.visible = [it for _, it in self.items]
         self.n_rows = len(self.visible)  # visible[n_rows:] are others
         if self.filter == 0:
@@ -191,13 +196,26 @@ class Picker:
     def _here_or_none(self):
         return self._here() if self.visible else None
 
-    def reload(self, rows, others=None):
-        """New rows from the periodic refresh (others None = keep them): keep query, jump and checkmarks, and the cursor on the same session if it is still visible.
+    def reload(self, rows, others=None, lights=None):
+        """New rows from the periodic refresh (others / lights None = keep them): keep query, jump and checkmarks, and the cursor on the same session if it is still visible.
         When that session is gone: while searching the cursor goes to the first match, otherwise it keeps its index (clamped)."""
         here = self._here_or_none()
         self.rows = rows
+        if lights is not None:
+            self.lights = dict(lights)
         if others is not None:
             self.others = list(others)
+        self._prune()
+        self._filter()
+        self._land(here)
+
+    def set_lights(self, lights):
+        """New lights (a refresh, a row just seen): re-filter only when they changed; the cursor stays on its item."""
+        lights = dict(lights or {})
+        if lights == self.lights:
+            return
+        here = self._here_or_none()
+        self.lights = lights
         self._prune()
         self._filter()
         self._land(here)
@@ -337,8 +355,11 @@ class Picker:
         return False, None
 
     def _step_filter(self, d):
+        self._set_filter((self.filter + d) % len(FILTERS))
+
+    def _set_filter(self, n):
         here = self._here_or_none()
-        self.filter = (self.filter + d) % len(FILTERS)
+        self.filter = n
         self._prune()
         self._filter()
         self._land(here)
@@ -405,6 +426,11 @@ class Picker:
         if k in ("\t", "KEY_BTAB"):
             self._step_filter(-1 if k == "KEY_BTAB" else 1)
             return None
+        if k == "!":  # straight to 等人; again goes back to 全部
+            self._set_filter(0 if self.filter_name == "等人" else FILTERS.index("等人"))
+            return None
+        if k == "v":
+            return ("preview", [])
         if k == "*":
             self._select_all()
             return None

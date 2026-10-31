@@ -1,4 +1,5 @@
 """curses adapter layer: CursesScreen provides pick / checklist / choose_dir / ask / out to cmd_ui, and handles keys, redrawing and preview capture."""
+import json
 import os
 import tempfile
 import time
@@ -6,13 +7,15 @@ from datetime import datetime, timezone
 
 from .. import codex_daemon, dispatch
 from .. import folders as F
+from ..fsutil import PRIVATE_FILE, atomic_write, private_dir
+from ..lights import SEEN_DWELL_S, light, load_seen, mark_seen, replied_at
 from ..marketplace_view import build_market_rows, market_card, market_choices
 from ..plugin_apply import check_latest
 from ..plugin_view import NO_SOURCE, _mkt, build_rows, catalog, profile_choices, snapshot
 from ..plugin_view import card_lines as plugin_card
 from ..prompts import SKIP, prompt_choices
-from ..status import status_rows
-from ..tmux import TMUX
+from ..status import State, status_rows
+from ..tmux import TMUX, Tmux
 from .actions import cancel_flow, cmd_ui, dir_context
 from .cards import Wrap, _quote_of, adopt_card, card_lines, folder_card, gather_cards, preview_header, restore_card
 from .codex_others import GO_DESKTOP, OTHER_KEY, ListNote, OwnCols, block_left, other_card, other_cells, other_rows
@@ -65,8 +68,8 @@ from .text import BACKSPACE, ENTER, MOVES, clean_capture, text_width
 from .tree import FolderItem, folder_key, folder_of
 
 # one line at 120 columns: digits (row numbers are on every row), the arrows, w (save now), Enter (on every row's
-# card), R and A still work, they are only left out here
-KEYS_HELP = "/ 搜尋　Tab 篩選　* 全選　空白 勾選　s 停　S 重開　g 包資料夾　f 搬進資料夾　n 開新　D 派工　p plugin　o 帳號　q 離開"
+# card), space (mark), * (mark all), R and A still work, they are only left out here
+KEYS_HELP = "/ 搜尋　Tab 篩選　! 等人　v 預覽　s 停　S 重開　g 包資料夾　f 搬進資料夾　n 開新　D 派工　p plugin　o 帳號　q 離開"
 RESTORE_HELP = "↑↓ 移動　空白 勾選　Enter 確認接回　q 取消"
 ADOPT_HELP = "↑↓ 移動　空白 勾選　Enter 確認接手　q 取消"
 PLUGINS_HELP = "↑↓ 移動　1-9 跳列　/ 搜尋　Enter 選 profile　u 更新這個　U 全部更新　a 新增　r 檢查新版　q 返回　Tab 切到來源"
@@ -81,12 +84,57 @@ FOLDER_PICK_TITLE = "sampan · 搬到哪個資料夾"
 TICK_MS = 1000  # while the list waits for a key, re-capture the preview this often
 REFRESH_S = 5  # while the list waits for a key, re-read the session list (state, info cards) this often
 USAGE_S = 60  # the account lines' 額度 are re-read at most this often (and whenever the list is entered again)
+UI_FILE = "ui.json"  # the screen's own settings in the state dir: {"preview": true|false}
 NO_SCREEN = "（看不到畫面）"
 SELF_SCREEN = "（sampan 自己就在這個 pane）"
 
 
 def _now():
     return datetime.now(timezone.utc)
+
+
+def load_preview_on(state_dir):
+    """Whether the list shows the preview (v): ui.json's "preview"; on when the file is missing or unreadable."""
+    try:
+        data = json.loads((state_dir / UI_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return True
+    on = data.get("preview") if isinstance(data, dict) else None
+    return on if isinstance(on, bool) else True
+
+
+def save_preview_on(state_dir, on):
+    """Keep v's choice in ui.json (other keys there are kept). Never raises: an unsaved choice lasts this run only."""
+    try:
+        private_dir(state_dir)
+        try:
+            data = json.loads((state_dir / UI_FILE).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        data = dict(data, preview=on) if isinstance(data, dict) else {"preview": on}
+        atomic_write(state_dir / UI_FILE, json.dumps(data, ensure_ascii=False), mode=PRIVATE_FILE, encoding="utf-8")
+    except (OSError, ValueError, TypeError):
+        pass
+
+
+class Dwell:
+    """How long the preview has stayed on one row: due once it has been shown for SEEN_DWELL_S without a break;
+    once per stay (moving away and back starts over)."""
+
+    def __init__(self):
+        self.name, self.since, self.done = None, None, False
+
+    def see(self, name, now):
+        """The row whose preview this frame shows (None: no preview)."""
+        if name != self.name:
+            self.name, self.since, self.done = name, now, False
+
+    def due(self, name, now):
+        """True the first time name has been looked at long enough (name: the row under the cursor now)."""
+        if name is None or name != self.name or self.done or now - self.since < SEEN_DWELL_S:
+            return False
+        self.done = True
+        return True
 
 
 def tmp_roots():
@@ -126,6 +174,8 @@ class CursesScreen:
         self.last_filter = 0  # the state filter, kept the same way across actions (not across runs)
         self._folders = None  # (stat of folders.json or None, Tree or None, error or None): read again only when it changes
         self._folders_said = None  # the folders.json error last shown: the same one is not shown again
+        self.preview_on = load_preview_on(cfg.state_dir) if cfg is not None else True  # v
+        self._looks = (None, {}, {})  # (tmux attach times, seen marks, collected replies) behind the lights
         try:
             import curses
             curses.curs_set(0)
@@ -286,8 +336,47 @@ class CursesScreen:
         self.warning = getattr(new, "warning", None)
         rows[:] = new
         self._apply_snap(rows)
-        picker.reload(rows)  # keeps the search, the digit buffer and the cursor session
+        self._read_looks(rows)
+        picker.reload(rows, lights=self._lights(rows))  # keeps the search, the digit buffer and the cursor session
         return True
+
+    def _read_looks(self, rows):
+        """Read what the lights need besides the rows (with the list, not every tick): tmux attach times, seen.json
+        and the collected dispatches. The first run with no seen.json marks every running session seen now, so it does
+        not light up everything nobody has attached to as 待看. Unreadable sources count as nothing seen."""
+        if self.cfg is None:
+            return
+        state_dir = self.cfg.state_dir
+        try:
+            attach = Tmux(self.run).attach_times() if self.run is not None else None
+        except Exception:  # noqa: BLE001  the lights are a hint: a failed read must not crash the screen
+            attach = None
+        if not (state_dir / "seen.json").exists():
+            now = self.now_fn()
+            for r in rows:
+                if r.state is State.RUNNING:
+                    mark_seen(state_dir, r.name, now)
+        try:
+            replied = replied_at(self.dispatches_load(state_dir))
+        except dispatch.DispatchError:
+            replied = {}
+        self._looks = (attach, load_seen(state_dir), replied)
+
+    def _lights(self, rows):
+        """{name: lights label or None} from rows and the last _read_looks."""
+        attach, seen, replied = self._looks
+        out = {}
+        for r in rows:
+            attached, last = (attach or {}).get(r.name, (0, None))
+            out[r.name] = light(r, attached=attached, last_attached=last, seen=seen.get(r.name),
+                                replied=replied.get(r.name))
+        return out
+
+    def _mark_seen(self, name):
+        """The preview stayed SEEN_DWELL_S on name: record it (seen.json and the lights at once)."""
+        now = self.now_fn()
+        mark_seen(self.cfg.state_dir, name, now)
+        self._looks[1][name] = now
 
     def _apply_snap(self, rows):
         """Give rows the watcher's latest Codex thread states. Returns True when the snapshot is a new one since the
@@ -376,10 +465,11 @@ class CursesScreen:
                 return folder_cells(it, picker.marked_folders, total)
             where = folder_of(picker.tree, it.name) if picker.query is not None else ""
             return _list_cells(it, picker.marked, current, nums.get(it.name, ""), total, depth=depth,
-                               prefix=f"{where} · " if where else "")
+                               prefix=f"{where} · " if where else "", light=picker.lights.get(it.name))
         left = [cells(d, it) for d, it in picker.items]
         full = [cells(d, it) for d, it in base] if picker.query is not None else left
-        name_w = max((text_width(_cell_text(c[0])) for c in full + left), default=None)
+        name_w = max((text_width(_cell_text(c[0])) for c in full + left if len(c) > 1),  # folder rows span the row
+                     default=None)
         lead = " " * (len(str(len(rows))) + 3 if rows else 2)  # under the number and the mark of a tmux row
         starting, failed = self._start_note(rows)
         block = [] if picker.filter else block_left(  # 「Codex 其他對話」 only under 全部
@@ -447,7 +537,8 @@ class CursesScreen:
             self._timeout(-1)
 
     def pick(self, rows, current):
-        """Arrow-key menu. While waiting for a key, re-capture the pane screen of the row under the cursor (a row with a tmux session) every TICK_MS and re-read the list every REFRESH_S seconds."""
+        """Arrow-key menu. While waiting for a key, re-capture the pane screen of the row under the cursor (a row with a tmux session) every TICK_MS and re-read the list every REFRESH_S seconds.
+        A preview that stays on one row for SEEN_DWELL_S marks that session seen; v hides / shows the preview."""
         def load():
             return (gather_cards(self.cfg, self.run, rows) if self.cfg is not None else {}), self.now_fn(), {}
         cards, now, built = load()
@@ -461,9 +552,11 @@ class CursesScreen:
         names = [r.name for r in rows] + [o.name for o in others]
         if tree is not None:
             names += [folder_key(p) for p in F.resolve(tree, [r.name for r in rows]).folders]
+        self._read_looks(rows)
         picker = Picker(rows, self.last_name if self.last_name in names else current, clock=self.clock,
-                        others=others, tree=tree, own_pane=self.own_pane, filter=self.last_filter)
-        shot, tick, refreshed = (None, None), False, self.clock()
+                        others=others, tree=tree, own_pane=self.own_pane, filter=self.last_filter,
+                        lights=self._lights(rows))
+        shot, tick, refreshed, dwell = (None, None), False, self.clock(), Dwell()
         self._timeout(TICK_MS)
         try:
             while True:
@@ -472,6 +565,10 @@ class CursesScreen:
                 others, extra, down = self._others(rows, now)
                 if others != picker.others:
                     picker.reload(rows, others)
+                under = picker.visible[picker.cursor].name if picker.visible else None
+                if self.preview_on and dwell.due(under, self.clock()):
+                    self._mark_seen(under)
+                picker.set_lights(self._lights(rows))  # the snapshot or a seen mark may have changed them
                 card, preview = [], None
                 if picker.visible:
                     r = picker.visible[picker.cursor]
@@ -483,7 +580,7 @@ class CursesScreen:
                         if name not in built:
                             built[name] = other_card(r, now, home=self.cfg.home if self.cfg is not None else None)
                         card = built[name]
-                    elif (info or {}).get("panes", 0) > 0 and self.run is not None:
+                    elif self.preview_on and (info or {}).get("panes", 0) > 0 and self.run is not None:
                         if tick or shot[0] != name:
                             shot = (name, self.capture(r, current))
                         preview = shot[1]
@@ -492,6 +589,8 @@ class CursesScreen:
                         if name not in built:
                             built[name] = card_lines(self.cfg, r, info, now)
                         card = built[name]
+                looked = preview is not None and preview not in ([NO_SCREEN], [SELF_SCREEN])  # a real screen only
+                dwell.see(picker.visible[picker.cursor].name if looked else None, self.clock())
                 left, cursor, name_w = self._left(picker, rows, current, now, extra, down)
                 title = self.title if not picker.filter else f"{self.title} › {picker.filter_name}（{picker.filter_count}）"
                 self.view = dict(title=title, left=left, cursor=cursor, card=card, preview=preview,
@@ -519,6 +618,12 @@ class CursesScreen:
                     continue
                 action = picker.key(k)
                 self.last_filter = picker.filter
+                if action is not None and action[0] == "preview":
+                    self.preview_on = not self.preview_on
+                    if self.cfg is not None:
+                        save_preview_on(self.cfg.state_dir, self.preview_on)
+                    shot = (None, None)  # shown again: capture now, not the screen from before
+                    continue
                 if action is not None and action[0] == "collapse":  # memory only: saved here, the list stays as it is
                     save_collapsed(self.cfg, action[1][0], action[1][1] == "1")
                     raw = self._load_folders()[0]  # our own write: not a change to apply

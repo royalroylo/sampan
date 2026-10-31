@@ -1,5 +1,6 @@
 """Screens (pure functions): turn state, info card and messages into lines of [(text, style), …]. Never touches curses."""
 from .. import update as update_mod
+from ..lights import IDLE, RUNNING, UNSEEN, WAITING
 from ..prompts import prompt_choices, prompt_lines
 from .cards import Keys, StateLine, Wrap, agent_style, message_style, state_style
 from .codex_others import ListNote, OwnCols
@@ -47,9 +48,12 @@ def _fit(segs, width):
 
 def _cells(cells, cols, width, cap=None):
     """One list row → [(text, style), …]: the first column uses the remaining width (at most cap cells when cap is given), the other columns follow cols, extra width stays on the right.
-    A cell may be a string or (string, style); the first one may also be a list of (string, style) runs."""
+    A cell may be a string or (string, style); the first one may also be a list of (string, style) runs. A row of one
+    cell takes the whole width."""
     runs = cells[0] if isinstance(cells[0], list) else None
     cells = [(_cell_text(runs), "") if runs else _cell(cells[0])] + [_cell(c) for c in cells[1:]]
+    if len(cells) == 1:  # a row with no other columns (a folder row) spans the whole width
+        return _fit(([(" ", "")] + runs) if runs else [(" " + cells[0][0], cells[0][1])], width)
     first = width - 1 - sum(cols) - len(cols)
     if first < 4:
         return _fit([(" " + " ".join(t for t, _s in cells), "")], width)
@@ -289,27 +293,37 @@ def list_cols(rows):
     return (6, min(PROFILE_MAX, pw), 10, 7)
 
 
-def _list_cells(r, marked, current, num=None, total=0, *, depth=0, prefix=""):
+LIGHT_STYLE = {RUNNING: "info", WAITING: "warn", UNSEEN: "warn", IDLE: "muted"}
+
+
+def _list_cells(r, marked, current, num=None, total=0, *, depth=0, prefix="", light=None):
     """One session list row. With num, the row starts with its 1-based position in the unfiltered list, right-aligned to the width of total
     (num "" keeps the space blank). depth indents the name two cells per folder level; prefix (a search hit's
-    "folder path · ") goes dim before the name."""
+    "folder path · ") goes dim before the name. light (lights.light) puts a coloured ● before the name and its label
+    in the activity column; without one that cell is blank and the column keeps the agent's own status."""
     mark = "●" if r.name in marked else " "
     here = " ←" if r.name == current else ""
     lead = f"{num:>{len(str(total))}} " if num is not None else ""
     head = f"{lead}{mark} {'  ' * depth}"
-    name = [(head, ""), (prefix, "dim"), (f"{r.name}{here}", "")] if prefix else f"{head}{r.name}{here}"
-    return (name, r.agent, _profile_cell(r),
-            (list_state(r), state_style(r.state)), (r.agent_status, agent_style(r.agent_status)))
+    style = LIGHT_STYLE.get(light)
+    if prefix or style:
+        name = [(head, ""), ("●", style) if style else (" ", ""), (" ", ""), (prefix, "dim"), (f"{r.name}{here}", "")]
+    else:
+        name = f"{head}  {r.name}{here}"
+    status = (light, style) if style else (r.agent_status, agent_style(r.agent_status))
+    return (name, r.agent, _profile_cell(r), (list_state(r), state_style(r.state)), status)
 
 
 def folder_cells(item, marked, total=0):
     """One folder row (ui.tree.FolderItem): no number, the mark, the indent, ▸ (collapsed) or ▾, the name and how many
-    sessions are under it; a collapsed one also says how many of those are busy. No agent / profile / state columns."""
+    sessions are under it, then how many of those wait for someone and how many are running (zero counts left out).
+    One cell spanning the row: no agent / profile / state columns."""
     mark = "●" if item.path in marked else " "
     lead = " " * (len(str(total)) + 1) if total else ""
-    busy = f"　{item.busy} 忙" if item.collapsed and item.busy else ""
-    text = f"{lead}{mark} {'  ' * item.depth}{'▸' if item.collapsed else '▾'} {item.path.rpartition('/')[2]} ({item.total}){busy}"
-    return (text, "", "", "", "")
+    counts = " ".join(f"{n} {k}" for k in ("等人", "執行中") if (n := item.counts.get(k, 0)))
+    text = (f"{lead}{mark} {'  ' * item.depth}{'▸' if item.collapsed else '▾'} {item.path.rpartition('/')[2]} "
+            f"({item.total}){'　' + counts if counts else ''}")
+    return (text,)
 
 
 def _restore_cells(c, box):

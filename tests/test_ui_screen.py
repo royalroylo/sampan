@@ -1,5 +1,6 @@
 """The ui screen: pure-function render, the right-hand info card, and the curses adapter layer (using a fake screen object, no real curses)."""
 import json
+import re
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -22,6 +23,7 @@ from sampan.ui import (
     show_state,
     text_width,
 )
+from sampan.ui.render import _cell_text
 from tests.fakes import FakeRunner, cp, pane_line, ps_line
 from tests.helpers import TOML, make_env, status_row
 
@@ -372,7 +374,7 @@ class CursesScreenTest(unittest.TestCase):
         self.assertIn("│ m", shown)  # info card for the cursor row
         self.assertEqual(s.messages, [])  # new action starts: message area is cleared
         first = self.scr.screens[-1][1]
-        self.assertRegex(first, r"^ +1 +a +claude alice +執行中 +idle +│")  # profile column follows agent, fields sit right against the name
+        self.assertRegex(first, r"^ +1 +● a +claude alice +執行中 +閒置 +│")  # profile column follows agent, fields sit right against the name
 
     def test_cursor_stays_on_same_session_after_an_action(self):
         rows = [row("a"), row("b"), row("c")]
@@ -439,20 +441,20 @@ class ListSearchScreenTest(unittest.TestCase):
         rows = [row(f"s{i}") for i in range(1, 13)]
         cells = [_list_cells(r, set(), None, i, len(rows))[0] for i, r in enumerate(rows, 1)]
         self.assertTrue(cells[0].startswith(" 1 "), cells[0])
-        self.assertEqual(cells[0], " 1   s1")
+        self.assertEqual(cells[0], " 1     s1")  # no light given: a blank cell before the name
         self.assertTrue(cells[11].startswith("12 "), cells[11])
         s = self.screen(["q"])
         s.pick(rows, None)
         shown = self.scr.screens[0]
-        self.assertTrue(shown[1].startswith("  1   s1 "), shown[1])
-        self.assertTrue(shown[12].startswith(" 12   s12 "), shown[12])
+        self.assertTrue(shown[1].startswith("  1   ● s1 "), shown[1])
+        self.assertTrue(shown[12].startswith(" 12   ● s12 "), shown[12])
 
     def test_row_numbers_stay_while_filtering(self):
         rows = [row(f"s{i}") for i in range(1, 13)]
         s = self.screen(["/", "1", "2", "\x1b", "q"])
         s.pick(rows, None)
         shown = self.scr.screens[3]
-        self.assertTrue(shown[1].startswith(" 12   s12 "), shown[1])
+        self.assertTrue(shown[1].startswith(" 12   ● s12 "), shown[1])
         self.assertIn("/12▏（1 筆，Enter 進入，Esc 取消）", "\n".join(shown))
 
     def test_search_no_match_enter_is_noop(self):
@@ -494,7 +496,7 @@ class ListSearchScreenTest(unittest.TestCase):
         s = self.screen(["q"], w=80)
         s.pick(rows, None)
         shown = self.scr.screens[0]
-        self.assertTrue(shown[1].startswith("  1   s1 "), shown[1])
+        self.assertTrue(shown[1].startswith("  1   ● s1 "), shown[1])
         self.assertNotIn("│", shown[1])  # info card is underneath, not to the right
 
     def test_filtering_keeps_name_column_width(self):
@@ -502,14 +504,14 @@ class ListSearchScreenTest(unittest.TestCase):
         s.pick([row("a"), row("zzzz-very-long-item")], None)
         full = self.scr.screens[0][1]
         just_a = self.scr.screens[2][1]  # after "/a": only row a is visible
-        self.assertIn(" 1   a", just_a)
+        self.assertIn(" 1   ● a", just_a)
         self.assertNotIn("zzzz", "\n".join(self.scr.screens[2][1:3]))
         self.assertEqual(full.index("claude"), just_a.index("claude"))
 
     def test_help_mentions_jump_and_search(self):
         s = self.screen(["q"])
         s.pick([row("a")], None)
-        self.assertIn("/ 搜尋　Tab 篩選　* 全選　空白 勾選", self.scr.screens[0][-1])
+        self.assertIn("/ 搜尋　Tab 篩選　! 等人　v 預覽", self.scr.screens[0][-1])
 
 
 class CursesUiTest(unittest.TestCase):
@@ -576,13 +578,13 @@ class WatcherScreenTest(unittest.TestCase):
     def test_ui_uses_watcher_latest(self):
         w = FakeWatcher(daemon_snap([codex_thread(TID, "active", ["waitingOnApproval"])]))
         s = self.pick(["q"], w)
-        cells = {c[0].split()[-1]: c[4] for c in s.view["left"]}
-        self.assertEqual(cells["cx"], ("waiting", "attn"))
-        self.assertEqual(cells["cl"], ("busy", "warn"))
+        cells = {_cell_text(c[0]).split()[-1]: c[4] for c in s.view["left"]}
+        self.assertEqual(cells["cx"], ("等人", "warn"))
+        self.assertEqual(cells["cl"], ("執行中", "info"))
         self.assertEqual(w.events, [])  # the screen never starts or stops the watcher itself
         plain = self.pick(["q"], None)
-        self.assertEqual({c[0].split()[-1]: c[4] for c in plain.view["left"]}["cx"], ("working", "warn"))
-        self.assertEqual([c[4] for c in plain.view["left"]], [("busy", "warn"), ("working", "warn")])
+        self.assertEqual({_cell_text(c[0]).split()[-1]: c[4] for c in plain.view["left"]}["cx"], ("執行中", "info"))
+        self.assertEqual([c[4] for c in plain.view["left"]], [("執行中", "info"), ("執行中", "info")])
 
     def test_new_snapshot_applies_and_rereads_usage_without_waiting(self):
         w = FakeWatcher(None)
@@ -590,7 +592,7 @@ class WatcherScreenTest(unittest.TestCase):
         shown = []
 
         def tick():
-            shown.append(dict((c[0].split()[-1], c[4][0]) for c in s.view["left"])["cx"])
+            shown.append(dict((_cell_text(c[0]).split()[-1], c[4][0]) for c in s.view["left"])["cx"])
             if len(shown) == 1:
                 w.latest = daemon_snap([codex_thread(TID, "active", ["waitingOnUserInput"])])
         self.scr = FakeScr([TICK, TICK, "q"], on_tick=tick)
@@ -598,7 +600,7 @@ class WatcherScreenTest(unittest.TestCase):
                          rows_fn=lambda c, r: list(self.rows), watcher=w,
                          usage_fn=lambda cfg, p: calls.append(p.name))
         s.pick(list(self.rows), None)
-        self.assertEqual(shown, ["working", "waiting"])
+        self.assertEqual(shown, ["執行中", "等人"])
         self.assertEqual(calls.count("codex"), 2)  # entry, then the new snapshot (clock never moved)
 
     def test_reload_reapplies_latest(self):
@@ -654,8 +656,8 @@ class CodexOthersScreenTest(unittest.TestCase):
         for w in (120, 80):
             self.pick(["q"], w=w)
             lines = self.scr.screens[0]
-            at = {k: next(i for i, x in enumerate(lines) if k in x) for k in ("  b ", SECTION_TITLE, "desk-ask")}
-            self.assertLess(at["  b "], at[SECTION_TITLE], (w, lines))
+            at = {k: next(i for i, x in enumerate(lines) if k in x) for k in ("● b ", SECTION_TITLE, "desk-ask")}
+            self.assertLess(at["● b "], at[SECTION_TITLE], (w, lines))
             self.assertLess(at[SECTION_TITLE], at["desk-ask"], w)
             self.assertIn("等你核准", lines[at["desk-ask"]])
             self.assertIn("Desktop", lines[at["desk-ask"]])
@@ -692,7 +694,8 @@ class CodexOthersScreenTest(unittest.TestCase):
             self.assertNotIn("將停掉", "\n".join("\n".join(x) for x in self.scr.screens), keys)
         self.assertEqual(self.pick(down + ["R"]), ("restore", []))  # global keys are not row actions
         self.assertEqual(self.pick(down + [" ", "KEY_UP", "KEY_UP", "\n"]), ("attach", ["a"]))
-        self.assertNotIn("●", "".join(c[0] for c in self.s.view["left"][:2] if isinstance(c, tuple)))
+        marks = [_cell_text(c[0]) for c in self.s.view["left"][:2] if isinstance(c, tuple)]
+        self.assertFalse([m for m in marks if re.match(r" *\d+ ●", m)], marks)  # no row marked (● after it is the light)
 
     def test_bulk_action_with_cursor_on_external_row_is_refused(self):
         from sampan.ui.codex_others import GO_DESKTOP
@@ -849,7 +852,7 @@ class ColorTest(unittest.TestCase):
     def test_profile_column_after_agent(self):
         from sampan.ui import _list_cells, list_cols
         rows = [row("a", profile="carol"), row("b", profile="work-team-1"), row("cx", agent="codex", profile="-")]
-        self.assertEqual(_list_cells(rows[0], set(), None)[:3], ("  a", "claude", "carol"))
+        self.assertEqual(_list_cells(rows[0], set(), None)[:3], ("    a", "claude", "carol"))
         self.assertEqual(_list_cells(rows[2], set(), None)[2], "-")
         self.assertEqual(list_cols(rows), (6, 11, 10, 7))
         self.assertEqual(list_cols([row("a", profile="x" * 30)])[1], 14)
@@ -871,7 +874,7 @@ class ColorTest(unittest.TestCase):
                 lines = frame_text(render(title="sampan", left=left, cursor=0, card=[], cols=list_cols(rows),
                                           width=width, height=8))[1:4]
                 cols = {text_width(line[:line.index("claude")]) for line in lines}
-                self.assertEqual(cols, {text_width("   zeta-sampan") + 2 + 1}, lines)  # name column header (indented) + 2 cells + column gap
+                self.assertEqual(cols, {text_width("     zeta-sampan") + 2 + 1}, lines)  # name column header (indented) + 2 cells + column gap
                 self.assertTrue(all(text_width(line) == width for line in lines))
 
     def test_capped_list_still_degrades_at_tiny_widths(self):
@@ -951,10 +954,9 @@ class FolderScreenTest(unittest.TestCase):
         s = self.screen(["q"])
         s.pick(self.rows, None)
         lines = self.shown()
-        self.assertIn("▾ 客戶 (3)", lines[1])
-        self.assertNotIn("忙", lines[1])  # open folders do not count busy ones
-        self.assertIn("  ▸ 甲 (3)　1 忙", lines[2])
-        self.assertRegex(lines[3], r"^ +1 +d +claude")  # hidden sessions are not numbered; d is the first shown
+        self.assertIn("▾ 客戶 (3)　1 執行中", lines[1])  # open or collapsed, a folder counts what runs under it
+        self.assertIn("  ▸ 甲 (3)　1 執行中", lines[2])
+        self.assertRegex(lines[3], r"^ +1 +● d +claude")  # hidden sessions are not numbered; d is the first shown
         self.assertNotIn(" a ", "\n".join(lines[1:5]))
 
     def test_session_rows_indented_under_folder(self):
@@ -964,9 +966,9 @@ class FolderScreenTest(unittest.TestCase):
         lines = self.shown()
         self.assertIn("▾ 客戶 (2)", lines[1])
         self.assertIn("  ▾ 甲 (1)", lines[2])
-        self.assertIn(" 1       b", lines[3])  # number, mark, then two spaces per level
-        self.assertIn(" 2     a", lines[4])
-        self.assertIn(" 3   c", lines[5])
+        self.assertIn(" 1       ● b", lines[3])  # number, mark, then two spaces per level, then the light
+        self.assertIn(" 2     ● a", lines[4])
+        self.assertIn(" 3     c", lines[5])  # stopped: no light, a blank cell
 
     def test_search_shows_folder_path_before_name(self):
         self.tree(lambda t: self.F.place_session(t, "b", "客戶/甲"))
@@ -997,7 +999,7 @@ class FolderScreenTest(unittest.TestCase):
         self.assertIn("資料夾設定讀不到", first)
         self.assertIn("先照原樣列出", first)
         for n in ("a", "b", "c", "d"):
-            self.assertRegex(first, rf"\d +{n} +claude")
+            self.assertRegex(first, rf"\d +(● )?{n} +claude")
         seen = len(self.scr.screens)
         s.pick(self.rows, None)
         self.assertNotIn("資料夾設定讀不到", "\n".join("\n".join(x) for x in self.scr.screens[seen:]))
@@ -1028,9 +1030,9 @@ class FolderScreenTest(unittest.TestCase):
     def test_marks_are_gone_after_a_folder_action(self):
         s = self.screen([" ", "g", "q"])
         self.assertEqual(s.pick(self.rows, None), ("group", ["session:a"]))
-        self.assertIn("●", "\n".join(self.shown(1)))
+        self.assertRegex("\n".join(self.shown(1)), r"\d ● ")  # the mark (the light follows it)
         s.pick(self.rows, None)
-        self.assertNotIn("●", "\n".join(self.shown(-1)))
+        self.assertNotRegex("\n".join(self.shown(-1)), r"\d ● ")
 
     def test_restart_returns_the_confirmed_plan(self):
         from sampan.restart import RestartPlan

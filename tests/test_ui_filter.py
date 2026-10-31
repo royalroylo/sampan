@@ -15,6 +15,11 @@ def row(name, state=State.RUNNING, agent_status="idle"):
     return status_row(name, state, agent_status=agent_status)
 
 
+def tab(p, n):
+    for _ in range(n):
+        p.key("\t")
+
+
 def names(p):
     return [it.path if isinstance(it, FolderItem) else it.name for it in p.visible]
 
@@ -33,12 +38,14 @@ class MatchesTest(unittest.TestCase):
         return [f for f in FILTERS if matches(r, f)]
 
     def test_filters_in_tab_order(self):
-        self.assertEqual(FILTERS, ("全部", "閒置", "忙碌", "已停止", "異常"))
+        self.assertEqual(FILTERS, ("全部", "等人", "執行中", "閒置", "已停止", "異常"))
 
-    def test_each_row_is_in_all_and_exactly_one_other_except_retired(self):
+    def test_each_row_is_in_all_and_at_most_one_other(self):
         self.assertEqual(self.kinds("idle1"), ["全部", "閒置"])
-        for n in ("busy1", "wait1", "unk1", "dash1"):
-            self.assertEqual(self.kinds(n), ["全部", "忙碌"], n)
+        self.assertEqual(self.kinds("busy1"), ["全部", "執行中"])
+        self.assertEqual(self.kinds("wait1"), ["全部", "等人"])
+        for n in ("unk1", "dash1"):  # no light: only under 全部
+            self.assertEqual(self.kinds(n), ["全部"], n)
         self.assertEqual(self.kinds("stop1"), ["全部", "已停止"])
         self.assertEqual(self.kinds("old1"), ["全部"])
         for n in ("trust1", "prof1", "multi1", "unreg1", "noag1", "agmis1", "unknown1"):
@@ -71,34 +78,33 @@ class PickerFilterTest(unittest.TestCase):
         p = self.picker()
         self.assertEqual(p.filter_name, "全部")
         seen = []
-        for _ in range(5):
+        for _ in range(6):
             self.assertIsNone(p.key("\t"))
             seen.append(p.filter_name)
-        self.assertEqual(seen, ["閒置", "忙碌", "已停止", "異常", "全部"])
+        self.assertEqual(seen, ["等人", "執行中", "閒置", "已停止", "異常", "全部"])
         p.key("KEY_BTAB")
         self.assertEqual(p.filter_name, "異常")
 
     def test_filter_lists_only_matching_and_keeps_the_cursor_session(self):
         p = self.picker(current="a1")
-        p.key("\t")  # 閒置
+        tab(p, 3)  # 閒置
         self.assertEqual(names(p), ["a1", "top"])
         self.assertEqual(p.visible[p.cursor].name, "a1")
         self.assertEqual(p.filter_count, 2)
-        p.key("\t")  # 忙碌: a1 gone, cursor lands on what is there
+        p.key("KEY_BTAB")  # 執行中: a1 gone, cursor lands on what is there
         self.assertEqual(names(p), ["b1"])
         self.assertEqual(p.cursor, 0)
 
     def test_folders_show_only_matches_and_hide_empty_ones(self):
         p = self.picker(t=tree())
         self.assertIn("空", names(p))
-        for _ in range(3):
-            p.key("\t")  # 已停止
+        tab(p, 4)  # 已停止
         self.assertEqual(names(p), ["客戶", "客戶/甲", "s1"])
         self.assertEqual([it.total for it in p.visible if isinstance(it, FolderItem)], [1, 1])
 
     def test_search_stacks_on_filter_and_tab_is_not_text(self):
         p = self.picker(rows=frows() + [row("a2")])
-        p.key("\t")  # 閒置: a1 top a2
+        tab(p, 3)  # 閒置: a1 top a2
         p.key("/")
         p.key("a")
         self.assertEqual(names(p), ["a1", "a2"])
@@ -111,35 +117,61 @@ class PickerFilterTest(unittest.TestCase):
         other = NS(name="\x00other:t", thread=NS(name="t"))
         p = self.picker(others=[other])
         self.assertEqual(len(p.visible), 5)
-        p.key("\t")
+        tab(p, 3)
         self.assertEqual(names(p), ["a1", "top"])
         self.assertEqual(p.n_rows, len(p.visible))
 
     def test_digits_count_the_filtered_rows(self):
         p = self.picker()
-        p.key("\t")  # 閒置: a1 top
+        tab(p, 3)  # 閒置: a1 top
         p.key("2")
         self.assertEqual(p.visible[p.cursor].name, "top")
 
     def test_marks_follow_the_filter(self):
         p = self.picker(current="s1")
         p.key(" ")  # mark s1 (stopped)
-        p.key("\t")  # 閒置: s1 is not shown, so it is no longer a target
+        tab(p, 3)  # 閒置: s1 is not shown, so it is no longer a target
         self.assertEqual(p.marked, set())
 
     def test_folder_targets_only_the_matching_sessions(self):
         p = self.picker(t=tree())
-        p.key("\t")
-        p.key("\t")  # 忙碌: 客戶, 客戶/甲, b1
+        tab(p, 2)  # 執行中: 客戶, 客戶/甲, b1
         self.assertEqual(p.key("s"), None)
         self.assertEqual(p.key("y"), ("stop!", ["b1"]))
+
+
+class BangTest(unittest.TestCase):
+    def test_bang_jumps_to_waiting_and_back(self):
+        from sampan.lights import IDLE, UNSEEN
+        p = Picker(frows() + [row("w1", agent_status="waiting")], None, filter=3,
+                   lights={"a1": UNSEEN, "top": IDLE})
+        self.assertIsNone(p.key("!"))
+        self.assertEqual(p.filter_name, "等人")
+        self.assertEqual(names(p), ["a1", "w1"])
+        p.key("!")
+        self.assertEqual(p.filter_name, "全部")
+        p.key("!")
+        self.assertEqual(p.filter_name, "等人")
+
+    def test_bang_is_text_while_searching(self):
+        p = Picker(frows(), None)
+        p.key("/")
+        p.key("!")
+        self.assertEqual((p.query, p.filter_name), ("!", "全部"))
+
+    def test_set_lights_refilters(self):
+        from sampan.lights import UNSEEN
+        p = Picker(frows(), None, filter=1)
+        self.assertEqual(names(p), [])
+        p.set_lights({"top": UNSEEN})
+        self.assertEqual(names(p), ["top"])
 
 
 class FilterRefreshTest(unittest.TestCase):
     def test_marks_lost_on_refresh_refuse_instead_of_using_the_cursor(self):
         rows = [row("a"), row("b"), row("c")]
         p = Picker(rows, "a")
-        p.key("\t")  # 閒置
+        tab(p, 3)  # 閒置
         p.key(" ")  # mark a; cursor on b
         p.reload([row("a", agent_status="busy"), row("b"), row("c")])
         self.assertEqual(p.marked, set())
@@ -152,23 +184,20 @@ class FilterRefreshTest(unittest.TestCase):
     def test_marking_again_clears_the_refusal(self):
         p = Picker([row("a"), row("b")], "a")
         p.key(" ")
-        p.key("\t")
-        p.key("\t")  # 忙碌: a is hidden, mark dropped
-        p.key("\t")
-        p.key("\t")
-        p.key("\t")  # back to 全部
+        tab(p, 2)  # 執行中: a is hidden, mark dropped
+        tab(p, 4)  # back to 全部
         p.key("*")
         p.key("s")
         self.assertEqual(p.key("y"), ("stop!", ["a", "b"]))
 
     def test_filter_survives_a_new_picker_and_reload_keeps_it(self):
-        p = Picker(frows(), None, filter=1)
+        p = Picker(frows(), None, filter=3)
         self.assertEqual(names(p), ["a1", "top"])
         p.reload(frows() + [row("new")])
         self.assertEqual(names(p), ["a1", "top", "new"])
 
     def test_collapse_and_set_tree_under_a_filter(self):
-        p = Picker(frows(), None, tree=tree(), filter=3)  # 已停止: 客戶, 客戶/甲, s1
+        p = Picker(frows(), None, tree=tree(), filter=4)  # 已停止: 客戶, 客戶/甲, s1
         self.assertEqual(p.key("\n"), ("collapse", ["客戶", "1"]))
         self.assertEqual(names(p), ["客戶"])
         t = tree()
@@ -180,7 +209,7 @@ class FilterRefreshTest(unittest.TestCase):
 class SelectAllTest(unittest.TestCase):
     def test_star_marks_visible_sessions_then_clears(self):
         p = Picker(frows(), None, tree=tree())
-        p.key("\t")  # 閒置: 客戶, a1, top
+        tab(p, 3)  # 閒置: 客戶, a1, top
         self.assertIsNone(p.key("*"))
         self.assertEqual(p.marked, {"a1", "top"})
         self.assertEqual(p.marked_folders, set())
@@ -204,15 +233,14 @@ class SelectAllTest(unittest.TestCase):
 
     def test_star_then_S_restarts_the_idle_ones(self):
         p = Picker(frows(), None)
-        p.key("\t")
+        tab(p, 3)
         p.key("*")
         p.key("S")
         self.assertEqual(p.key("y"), ("restart!", ["a1", "top"]))
 
     def test_star_then_S_under_stopped_resumes_them(self):
         p = Picker(frows(), None)
-        for _ in range(3):
-            p.key("\t")
+        tab(p, 4)
         p.key("*")
         p.key("S")
         self.assertEqual(p.key("y"), ("restart!", ["s1"]))
@@ -235,15 +263,17 @@ class ScreenTest(unittest.TestCase):
         from tests.test_ui_screen import NOW, FakeScr
         cfg = make_env(Path(tempfile.mkdtemp()))
         r = FakeRunner(strict=True).on(["tmux", "-u", "list-panes"], cp()).on(["tmux", "-u", "list-windows"], cp())
-        scr = FakeScr(["\t", "\t", "\t", "\t", "q"])
+        scr = FakeScr(["\t", "\t", "\t", "\t", "\t", "q"])
         s = CursesScreen(scr, cfg, r, now_fn=lambda: NOW, rows_fn=lambda cfg, run: [])
         s.pick([row("a1"), row("b1", agent_status="busy")], None)
         self.assertNotIn("›", scr.screens[0][0])
-        self.assertIn("› 閒置（1）", scr.screens[1][0])
-        self.assertIn("› 異常（0）", scr.screens[4][0])
-        self.assertIn("沒有異常的 session", "\n".join(scr.screens[4]))
-        self.assertIn("Tab 篩選　* 全選", KEYS_HELP)
-        self.assertTrue(scr.screens[2][1].lstrip().startswith("1   b1"), scr.screens[2][1])  # numbered within the filter
+        self.assertIn("› 等人（0）", scr.screens[1][0])
+        self.assertIn("› 閒置（1）", scr.screens[3][0])
+        self.assertIn("› 異常（0）", scr.screens[5][0])
+        self.assertIn("沒有異常的 session", "\n".join(scr.screens[5]))
+        self.assertIn("Tab 篩選　! 等人", KEYS_HELP)
+        self.assertIn("v 預覽", KEYS_HELP)
+        self.assertTrue(scr.screens[2][1].lstrip().startswith("1   ● b1"), scr.screens[2][1])  # numbered within the filter
 
     def test_filter_stays_after_an_action(self):
         from sampan.ui.screen import CursesScreen

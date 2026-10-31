@@ -246,8 +246,8 @@ class PickPreviewTest(unittest.TestCase):
         self.assertEqual(action, ("attach", ["a"]))  # cursor is still on a
         self.assertEqual([r.name for r in rows], ["0new", "a", "b", "m"])  # cmd_ui got the new list
         shown = "\n".join(self.scr.screens[-1])
-        self.assertIn("● a", shown)  # tick preserved
-        self.assertIn("busy", shown)
+        self.assertIn("2 ● ● a", shown)  # tick preserved (then a's light)
+        self.assertRegex(shown, r"● b +claude +carol +執行中 +執行中")  # b's light: running
 
     def test_refresh_error_keeps_old_rows(self):
         rows = self.rows()
@@ -282,6 +282,108 @@ class PickPreviewTest(unittest.TestCase):
         self.rows_now = self.rows()
         s = self.screen([TICK, "q"], h=3, w=6)
         self.assertEqual(s.pick(self.rows_now, None), ("quit", []))
+
+
+class LightsPreviewTest(unittest.TestCase):
+    """Lights on the list: a preview held SEEN_DWELL_S marks the row seen, v hides the preview (kept in ui.json)."""
+    capture, rows_fn, screen, captures, rows = (PickPreviewTest.capture, PickPreviewTest.rows_fn,
+                                                PickPreviewTest.screen, PickPreviewTest.captures, PickPreviewTest.rows)
+
+    def setUp(self):
+        PickPreviewTest.setUp(self)
+        self.steps = []
+        self.cfg.state_dir.mkdir(parents=True, exist_ok=True)
+        (self.cfg.state_dir / "seen.json").write_text("{}")  # not the first 0.14 run: no bootstrap
+
+    def tick(self):
+        self.t[0] += self.steps.pop(0) if self.steps else 1.0
+
+    def lit_rows(self):
+        from datetime import timedelta
+        rows = self.rows()
+        rows[0].last = NOW - timedelta(minutes=5)  # a finished, nobody has looked: 待看
+        return rows
+
+    def test_dwell_three_seconds_marks_seen(self):
+        from unittest import mock
+
+        from sampan import lights
+        self.rows_now = self.lit_rows()
+        self.steps = [2.9, 0.1, 1.0, 2.0, 1.0]
+        calls = []
+
+        def spy(state_dir, name, now):
+            calls.append((name, now))
+            lights.mark_seen(state_dir, name, now)
+        with mock.patch("sampan.ui.screen.mark_seen", spy):
+            s = self.screen([TICK, TICK, TICK, "KEY_DOWN", "KEY_UP", TICK, TICK, "q"])
+            s.pick(self.rows_now, None)
+        # t=2.9 nothing; t=3.0 once; t=4.0 same row, not again; away and back at t=4 restarts: t=6 no, t=7 yes
+        self.assertEqual(calls, [("a", NOW), ("a", NOW)])
+        self.assertIn("a", lights.load_seen(self.cfg.state_dir))
+        first, after = "\n".join(self.scr.screens[0]), "\n".join(self.scr.screens[2])
+        self.assertIn("待看", first)
+        self.assertNotIn("待看", after)  # seen: the light goes back to 閒置 at once
+
+    def test_no_screen_is_not_looking(self):
+        from unittest import mock
+        rows = self.lit_rows()
+        rows[0].pane = "%9"  # capture fails: （看不到畫面）
+        self.rows_now = rows
+        with mock.patch("sampan.ui.screen.mark_seen") as spy:
+            self.screen([TICK] * 4 + ["q"]).pick(self.rows_now, None)
+        spy.assert_not_called()
+        self.assertIn("待看", "\n".join(self.scr.screens[-1]))
+
+    def test_preview_never_sends_keys(self):
+        self.rows_now = self.lit_rows()
+        s = self.screen([TICK, TICK, TICK, TICK, "KEY_DOWN", TICK, "v", "v", TICK, "q"])
+        s.pick(self.rows_now, None)
+        self.assertEqual(self.r.sent_keys(), [])
+        tmux = {c["args"][2] for c in self.r.calls if c["args"][:2] == ["tmux", "-u"]}
+        self.assertLessEqual(tmux, {"capture-pane", "list-panes", "list-windows", "list-sessions"}, tmux)
+        self.assertIn("capture-pane", tmux)
+
+    def test_v_hides_and_persists(self):
+        import json
+        self.rows_now = self.rows()
+        s = self.screen(["v", "q"])
+        self.assertEqual(s.pick(self.rows_now, None), ("quit", []))
+        self.assertIn("a screen 0", "\n".join(self.scr.screens[0]))
+        hidden = "\n".join(self.scr.screens[-1])
+        self.assertNotIn("a screen", hidden)
+        self.assertNotIn("（預覽）", hidden)  # the full card instead of the preview header
+        self.assertEqual(json.loads((self.cfg.state_dir / "ui.json").read_text()), {"preview": False})
+        n = len(self.captures())
+        s = self.screen([TICK, "v", "q"])  # a new screen reads it back: no capture until v
+        s.pick(self.rows_now, None)
+        self.assertEqual(len(self.captures()), n + 1)
+        self.assertEqual(json.loads((self.cfg.state_dir / "ui.json").read_text()), {"preview": True})
+
+    def test_unreadable_ui_json_means_preview_on(self):
+        (self.cfg.state_dir / "ui.json").write_text("{nope")
+        self.rows_now = self.rows()
+        self.screen(["q"]).pick(self.rows_now, None)
+        self.assertEqual(self.captures(), ["%1"])
+
+    def test_first_run_marks_every_running_session_seen(self):
+        from sampan import lights
+        (self.cfg.state_dir / "seen.json").unlink()
+        self.rows_now = self.lit_rows()
+        self.screen(["q"]).pick(self.rows_now, None)
+        self.assertEqual(lights.load_seen(self.cfg.state_dir), {"a": NOW, "b": NOW})
+        self.assertNotIn("待看", "\n".join(self.scr.screens[0]))
+
+    def test_folder_row_counts_and_bang(self):
+        from sampan import folders as F
+        F.edit(self.cfg.state_dir, lambda t: (F.place_session(t, "a", "客戶"), F.place_session(t, "b", "客戶")))
+        rows = self.lit_rows()
+        rows[1].agent_status = "busy"
+        self.rows_now = rows
+        s = self.screen(["!", "q"])
+        s.pick(self.rows_now, None)
+        self.assertIn("▾ 客戶 (2)　1 等人 1 執行中", "\n".join(self.scr.screens[0]))
+        self.assertIn("› 等人（1）", self.scr.screens[-1][0])
 
 
 if __name__ == "__main__":
