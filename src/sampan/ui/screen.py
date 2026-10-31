@@ -486,12 +486,14 @@ class CursesScreen:
         Read again only when the file's stat changed (the list is redrawn every second)."""
         if self.cfg is None:
             return None, None
-        path = self.cfg.state_dir / F.FOLDERS_FILE
-        try:
-            st = path.stat()
-            stamp = (st.st_mtime_ns, st.st_size, st.st_ino)
-        except OSError:
-            stamp = None
+        stamp = []
+        for name in (F.FOLDERS_FILE, "registry.json"):  # session names come from the registry: a rename moves the list
+            try:
+                st = (self.cfg.state_dir / name).stat()
+                stamp.append((st.st_mtime_ns, st.st_size, st.st_ino))
+            except OSError:
+                stamp.append(None)
+        stamp = tuple(stamp)
         if self._folders is None or self._folders[0] != stamp:
             try:
                 self._folders = (stamp, F.load(self.cfg.state_dir), None)

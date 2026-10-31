@@ -1052,6 +1052,16 @@ class FolderScreenTest(unittest.TestCase):
         self.assertNotIn("維運", "\n".join(self.shown(0)))
         self.assertIn("▾ 維運 (1)", "\n".join(self.shown(-1)))
 
+    def test_rename_only_in_registry_keeps_session_in_folder_on_next_load(self):
+        from sampan import registry
+        self.tree(lambda t: self.F.place_session(t, "a", "客戶"))
+        s = self.screen(["q"])
+        self.assertEqual(s._load_folders()[0].sessions, {"a": "客戶"})
+        rows = registry.load_rows(self.cfg.registry_path)
+        next(r for r in rows if r.tmux == "a").tmux = "a2"
+        registry.write_rows(self.cfg.registry_path, rows, "t", self.cfg.history_dir)
+        self.assertEqual(s._load_folders()[0].sessions, {"a2": "客戶"})  # folders.json itself did not change
+
     def test_enter_on_folder_collapses_in_place_and_saves(self):
         self.tree(lambda t: self.F.place_session(t, "a", "客戶"))
         s = self.screen([" ", "KEY_UP", "\n", "q"])  # mark a, back to the folder row, collapse

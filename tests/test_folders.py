@@ -145,6 +145,51 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(data["sessions"], {"id-n1": tree.ids["客戶"]})
         self.assertEqual(data["pending"], {})
 
+    def test_v2_malformed_shapes_refused_not_crash(self):
+        for text in ('{"version": 2, "folders": {"f1": {"name": "a", "parent": []}}, "sessions": {}}',
+                     '{"version": 2, "folders": {"f1": {"name": "a", "parent": {}}}, "sessions": {}}',
+                     '{"version": 2, "folders": {"f1": 3}, "sessions": {}}',
+                     '{"version": 2, "folders": {"f1": {"name": 5, "parent": null}}, "sessions": {}}',
+                     '{"version": 2, "folders": {"f1": {"name": "a", "parent": null}}, "sessions": {"s": []}}',
+                     '{"version": 2, "folders": {"f1": {"name": "a", "parent": null}}, "sessions": {}, "pending": []}',
+                     '{"version": 2, "folders": {"f1": {"name": "a", "parent": null}}, "sessions": {}, "pending": {"n": []}}'):
+            self.assert_unreadable(text)
+
+    def test_edit_without_registry_keeps_members_as_pending(self):
+        self.put('{"version": 1, "folders": {"客戶": {"collapsed": false}}, "sessions": {"a1": "客戶"}}')
+        folders.edit(self.dir, lambda t: folders.add(t, "開發"))
+        data = json.loads((self.dir / folders.FOLDERS_FILE).read_text())
+        self.assertEqual(data["sessions"], {})
+        self.assertEqual(list(data["pending"]), ["a1"])
+        self.assertEqual(folders.load(self.dir).sessions, {"a1": "客戶"})
+
+    def test_edit_refuses_when_registry_missing_but_file_has_id_members(self):
+        rows = self.rows("a1")
+        folders.save(self.dir, Tree({"客戶": False}, {"a1": "客戶"}), rows)
+        before = (self.dir / folders.FOLDERS_FILE).read_text()
+        with self.assertRaises(FoldersError):
+            folders.edit(self.dir, lambda t: folders.add(t, "x"))
+        self.assertEqual((self.dir / folders.FOLDERS_FILE).read_text(), before)
+
+    def test_v1_member_without_registry_row_ends_in_pending(self):
+        rows = self.rows("a1")
+        self.put('{"version": 1, "folders": {"客戶": {"collapsed": false}}, "sessions": {"a1": "客戶", "ghost": "客戶"}}')
+        folders.save(self.dir, folders.load(self.dir), rows)
+        data = json.loads((self.dir / folders.FOLDERS_FILE).read_text())
+        self.assertEqual(list(data["sessions"]), ["id-a1"])
+        self.assertEqual(list(data["pending"]), ["ghost"])
+
+    def test_group_keeps_folder_ids(self):
+        t = mk(["客戶", "客戶/甲"], {"a1": "客戶/甲"})
+        folders.add(t, "客戶/乙")
+        folders._fill(t)
+        before = dict(t.ids)
+        path = folders.group(t, [("folder", "客戶/甲"), ("folder", "客戶/乙")], "合")
+        self.assertEqual(path, "客戶/合")
+        self.assertEqual(t.ids["客戶/合/甲"], before["客戶/甲"])
+        self.assertEqual(t.ids["客戶/合/乙"], before["客戶/乙"])
+        self.assertEqual(t.ids["客戶"], before["客戶"])
+
     def test_unknown_session_id_dropped(self):
         rows = self.rows("a1")
         folders.save(self.dir, Tree({"客戶": False}, {"a1": "客戶"}), rows)

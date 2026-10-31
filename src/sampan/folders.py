@@ -129,7 +129,8 @@ def _load_v2(path, raw_folders, raw_sessions, rows, raw_pending):
     for fid, meta in raw_folders.items():
         if (not isinstance(meta, dict) or not isinstance(meta.get("name"), str)
                 or not isinstance(meta.get("collapsed", False), bool)
-                or not (meta.get("parent") is None or meta["parent"] in raw_folders)):
+                or not (meta.get("parent") is None
+                        or (isinstance(meta["parent"], str) and meta["parent"] in raw_folders))):
             raise _unreadable(f"{path} 的資料夾 {fid} 格式不對")
         problem = name_problem(meta["name"])
         if problem:
@@ -203,6 +204,14 @@ def load(state_dir, rows=None):
     return tree
 
 
+def _has_id_members(state_dir):
+    try:
+        data = json.loads((Path(state_dir) / FOLDERS_FILE).read_text())
+        return data.get("version") == 2 and bool(data.get("sessions"))
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
 def save(state_dir, tree, rows=None):
     """Write version 2, sessions keyed by Row.id (a session with no row waits under "pending" by name). While a member session has no
     id yet (a registry from before 0.15) the version 1 format is written unchanged, so no membership is lost."""
@@ -241,6 +250,8 @@ def edit(state_dir, fn):
     """load, fn(tree) (edits in place), save, under the registry lock. Nothing is written if load or fn raises."""
     with registry.lock(state_dir):
         rows = _registry_rows(state_dir)  # read directly: the lock is already held
+        if not rows and not (Path(state_dir) / "registry.json").exists() and _has_id_members(state_dir):
+            raise _unreadable("登記表不見了，沒辦法把 session 對回資料夾。不會覆蓋資料夾設定")
         tree = load(state_dir, rows)
         result = fn(tree)
         save(state_dir, tree, rows)
