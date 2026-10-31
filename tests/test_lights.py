@@ -26,6 +26,9 @@ class LightTest(unittest.TestCase):
     def test_codex_working_is_running(self):
         self.assertEqual(light(status_row("a", agent="codex", agent_status="working")), lights.RUNNING)
 
+    def test_claude_shell_is_running(self):  # the turn is over but a background shell task runs
+        self.assertEqual(light(status_row("a", agent_status="shell", last=T[3])), lights.RUNNING)
+
     def test_claude_waiting_is_waiting(self):
         self.assertEqual(light(status_row("a", agent_status="waiting")), lights.WAITING)
 

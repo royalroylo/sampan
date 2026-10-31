@@ -683,6 +683,43 @@ class NotifyTest(Base):
         self.assertNotIn(d.id, send.pending(self.cfg))
 
 
+class ShellStatusTest(Base):
+    """Claude reports "shell" while a background shell task runs after the turn ended: the prompt takes input."""
+
+    def test_delivery_to_a_shell_target_pastes(self):
+        d = self.submit()
+        self.set_row("b", agent_status="shell")
+        run = tmux_runner()
+        self.assertEqual(self.advance(run, d.id).state, "sent")
+        self.assertEqual([w[2] for w in tmux_writes(run, "%2")], ["paste-buffer", "send-keys"])
+
+    def test_completion_is_judged_with_shell_looks(self):
+        d = self.submit()
+        self.advance(tmux_runner(), d.id)
+        self.set_row("b", agent_status="shell")
+        self.transcript(SID_B, [user(d.text), assistant("the reply")])
+        d = self.advance(FakeRunner(strict=True), d.id, later(5))
+        self.assertEqual((d.state, d.reply), ("done", "the reply"))
+
+    def test_a_turn_without_text_fails_after_two_shell_looks(self):
+        d = self.submit()
+        self.advance(tmux_runner(), d.id)
+        self.set_row("b", agent_status="shell")
+        self.transcript(SID_B, [user(d.text)])
+        self.assertEqual(self.advance(FakeRunner(strict=True), d.id, later(20)).state, "sent")
+        self.assertEqual(self.advance(FakeRunner(strict=True), d.id, later(22)).state, "failed")
+
+    def test_notice_is_delivered_to_a_shell_caller(self):
+        d = self.submit(notify=True)
+        self.advance(tmux_runner(), d.id)
+        self.transcript(SID_B, [user(d.text), assistant("answer")])
+        self.set_row("a", agent_status="shell")
+        run = tmux_runner()
+        d = self.advance(run, d.id, later(5))
+        self.assertTrue(d.notified)
+        self.assertEqual([w[2] for w in tmux_writes(run, "%1")], ["paste-buffer", "send-keys"])
+
+
 class PendingCancelTest(Base):
     def test_pending_lists_queued_and_sent(self):
         q = self.submit()
@@ -1313,6 +1350,12 @@ class BatchTest(BatchBase):
         self.assertEqual([(d.to_name, d.batch) for d in stored], [("a", b.id), ("c", b.id)])
         self.assertEqual([d.batch_skipped for d in stored], [1, 0])  # only on the first item
         self.assertEqual(send.batch_items(self.cfg, b.id), stored)
+
+    def test_batch_sends_to_a_shell_session(self):  # a background shell task runs, the prompt takes input
+        self.set_row("c", agent_status="shell")
+        b = self.batch(["a", "c"])
+        self.assertEqual([d.to_name for d in b.items], ["a", "c"])
+        self.assertEqual(b.skipped, [])
 
     def test_batch_skips_stopped_and_unknown_with_reasons(self):
         self.rows["s"] = status_row("s", State.STOPPED, sid="s")

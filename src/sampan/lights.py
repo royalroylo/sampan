@@ -22,7 +22,7 @@ def light(row, *, attached, last_attached, seen, replied):
     if row.state != State.RUNNING:
         return None
     status = row.agent_status
-    if status in ("busy", "working"):
+    if status in ("busy", "working", "shell"):  # shell: Claude's turn is over but a background shell task runs
         return RUNNING
     if status == "waiting":
         return WAITING

@@ -45,8 +45,8 @@ def state_style(state):
 
 
 def agent_style(status):
-    """claude/codex status: idle green, busy/working yellow, waiting magenta (waiting for you), error red, others grey."""
-    return {"idle": "ok", "busy": "warn", "working": "warn", "waiting": "attn", "error": "err"}.get(status, "muted")
+    """claude/codex status: idle green, busy/working/shell yellow, waiting magenta (waiting for you), error red, others grey."""
+    return {"idle": "ok", "busy": "warn", "working": "warn", "shell": "warn", "waiting": "attn", "error": "err"}.get(status, "muted")
 
 
 def message_style(line):

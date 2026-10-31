@@ -15,7 +15,7 @@ def own_light(row):
     """The light the agent's own status gives (no 待看): what a row shows when no light was worked out for it."""
     if row.state is not State.RUNNING:
         return None
-    return {"busy": RUNNING, "working": RUNNING, "waiting": WAITING}.get(row.agent_status)
+    return {"busy": RUNNING, "working": RUNNING, "shell": RUNNING, "waiting": WAITING}.get(row.agent_status)
 
 
 def matches(row, kind, light=None):

@@ -39,10 +39,11 @@ class PlanTest(unittest.TestCase):
 
     def test_plan_only_restarts_idle(self):
         rows = [status_row("u", agent_status="unknown"), status_row("d", agent_status="-"),
-                status_row("i", agent_status="idle")]
-        plan = plan_restart(rows, ["u", "d", "i"], resume_stopped=True)
+                status_row("i", agent_status="idle"), status_row("s", agent_status="shell")]
+        plan = plan_restart(rows, ["u", "d", "i", "s"], resume_stopped=True)
         self.assertEqual(plan.restart, ["i"])
-        self.assertEqual(plan.skip, [("u", "沒有閒著（unknown）"), ("d", "沒有閒著（-）")])
+        # shell: a background task runs; stopping the session would kill it
+        self.assertEqual(plan.skip, [("u", "沒有閒著（unknown）"), ("d", "沒有閒著（-）"), ("s", "沒有閒著（shell）")])
 
     def test_plan_keeps_order_and_dedups(self):
         rows = [status_row("a"), status_row("b"), status_row("c", State.STOPPED)]

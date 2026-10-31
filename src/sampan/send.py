@@ -50,6 +50,8 @@ REASON_RAN = "指令已執行（沒有文字回覆）"  # a direct send done wit
 REASON_NEW_THREAD = "對方換成新對話（{sid8}）"  # a direct send (/clear…) after which the target's conversation id changed
 REASON_MENU = "指令打開了選單，請自己到那個 session 處理"
 REASON_MENU_SEEN = deliver.REASON_BLOCKED  # one look at a menu after a direct send (two in a row fail it)
+READY = ("idle", "shell")  # Claude statuses where the prompt takes input ("shell": the turn is over, a background
+# shell task still runs; Claude 2.1.287 reports it until the task ends, so waiting for "idle" would hold messages)
 BUSY = {"busy": "對方正在忙", "working": "對方正在忙", "waiting": "對方在等使用者回應"}
 WAITING = {*BUSY.values(), REASON_NOT_RUNNING, REASON_NO_THREAD}  # queued reasons that clear by themselves: no limit
 RUNNING_VERSION = current_version()  # read once at import: the code this process runs, even after an upgrade on disk
@@ -316,7 +318,7 @@ def _skip_reason(caller, name, row, raw):
         return problem
     if raw and row.agent == "codex":
         return REASON_RAW_CODEX
-    if row.agent_status != "idle":
+    if row.agent_status not in READY:
         return BUSY.get(row.agent_status, "看不出對方是否閒著")
     return None
 
@@ -504,7 +506,7 @@ def _deliver(cfg, run, d, row, sleep, now, save):
         _sending(d, now, save)
         why = deliver.to_codex(cfg, run, row.sid, d.text)  # `codex queue` waits for the turn by itself
     else:
-        if row.agent_status != "idle":
+        if row.agent_status not in READY:
             d.reason = BUSY.get(row.agent_status, "看不出對方是否閒著")
             return
         if row.pane is None:
@@ -608,7 +610,7 @@ def _check(cfg, d, row, now, run=None):
         else:  # no task_complete and no turn_aborted yet: still working
             d.reason = ""
         return
-    idle = row.agent_status == "idle"  # Claude's reply.done only means "some assistant text exists"
+    idle = row.agent_status in READY  # Claude's reply.done only means "some assistant text exists"
     if not idle:  # a mark is about two idle looks in a row: a busy look in between starts over
         if reply.found or d.reason in (REASON_NOT_SEEN, REASON_NO_TEXT_YET, REASON_SENDING, REASON_NO_THREAD):
             d.reason = ""
@@ -650,7 +652,7 @@ def _check_raw(cfg, d, row, now, run):
     sent = parse_iso(d.sent_at)
     path = find_transcript(cfg.profiles.values(), row.sid, prefer=row.profile)
     reply = command_reply(path, d.text, sent) if path and sent else Reply(False, False, "")
-    idle = row.agent_status == "idle"
+    idle = row.agent_status in READY
     early = sent is not None and (now - sent).total_seconds() < NOT_SEEN_GRACE_S
     if reply.found:
         if reply.text and (reply.done or reply.closed) and idle:
@@ -721,7 +723,7 @@ def _notify(cfg, run, d, text, what, sleep, rows, snapshot_fn, status_fn, save):
         return False
     if row.state != State.RUNNING or (row.agent == "codex" and not row.sid):
         return False
-    if row.agent != "codex" and (row.agent_status != "idle" or row.pane is None):
+    if row.agent != "codex" and (row.agent_status not in READY or row.pane is None):
         return False
     d.notified = True
     if save is not None:

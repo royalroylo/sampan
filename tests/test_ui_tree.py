@@ -95,6 +95,7 @@ class LightFilterTest(unittest.TestCase):
         self.assertTrue(matches(row("i"), "閒置", IDLE))
         self.assertTrue(matches(row("u"), "閒置", UNSEEN))  # unseen is still idle: S may restart it
         self.assertFalse(matches(row("a", "busy"), "閒置", RUNNING))
+        self.assertFalse(matches(row("sh", "shell"), "閒置", RUNNING))  # a background task runs: S must not stop it
         self.assertFalse(matches(row("s", "idle", State.STOPPED), "閒置", None))
 
     def test_folder_counts_from_lights(self):
