@@ -493,11 +493,13 @@ class CodexMoveTest(unittest.TestCase):
         self.idle = (FIXTURES / "codex_idle.txt").read_text()
         self.screen = self.idle
         self.startup = None  # screen after launching in the new directory; None = starts straight up
+        self.never_ready = False  # True: after the relaunch lsof never shows the rollout (Codex 0.166 resumed via its daemon)
 
     def ps(self, _a):
         lines = [ps_line(100, 1, "-zsh", "-zsh")]
         if self.codex:
-            lines.append(ps_line(self.codex, 100, "codex", "codex"))
+            args = f"/opt/codex/bin/codex resume {TID}" if self.codex == 300 else "codex"
+            lines.append(ps_line(self.codex, 100, "codex", args))
         return cp(out="\n".join(lines) + "\n")
 
     def panes(self, _a):
@@ -512,7 +514,7 @@ class CodexMoveTest(unittest.TestCase):
             self.codex, self.screen = None, "% "
         elif keys == ["Enter"] and prev[-1:] == [("sleep", 1)] and "codex resume" in str(prev[0]):
             self.codex, self.cwd = 300, str(self.dest)
-            self.ready = self.startup is None
+            self.ready = self.startup is None and not self.never_ready
             self.screen = self.idle if self.startup is None else self.startup
         elif keys == ["1"] and self.codex and not self.ready and "Do you trust" in self.screen:
             self.ready, self.screen = True, self.idle
@@ -551,6 +553,12 @@ class CodexMoveTest(unittest.TestCase):
                                      [f"cd {self.dest} && codex resume {TID} -C {self.dest}"], ["Enter"], ["1"]])
         self.assertNotIn(["Down"], self.keys)
         self.assertEqual((self.row().cwd, self.row().session_id), (str(self.dest), TID))
+
+    def test_move_codex_resumed_without_a_readable_thread_counts_by_its_resume_argument(self):
+        # Codex 0.166 resumed from its daemon: lsof never shows the rollout until a turn runs
+        self.never_ready = True
+        self.assertEqual(self.move(timeout=5), 0)
+        self.assertIn("✔ zz-cx 已搬到", "\n".join(self.msgs))
 
     def test_move_codex_refuses_other_path(self):
         self.startup = self.trust("/Users/u")

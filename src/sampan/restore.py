@@ -14,7 +14,7 @@ from . import actionlog, codex_daemon, steps
 from .claude_state import transcript_problem
 from .codex_state import _is_codex, find_rollout
 from .observe import agent_sessions, live_by_pane
-from .procs import list_procs
+from .procs import codex_resume_id, list_procs
 from .prompts import ATTACH, SKIP, Relay
 from .registry import RegistryError, Row, id_problem, load_rows
 from .screens import at_trust_prompt
@@ -181,6 +181,18 @@ def _launch(cfg, tmux, row, live, out, sleep, dry_run):
     return target
 
 
+def _back(la, row, procs):
+    """Whether a launched row is back: its agent is in this conversation and not at a prompt. A Codex resumed without a
+    turn yet has no readable thread (no rollout in lsof, nothing new in the threads table, and the daemon lists it only
+    after a while), so it also counts by its `codex resume <id>` command line once its screen is idle."""
+    if la is None or la.status == "unknown":
+        return False
+    if la.session_id == row.session_id:
+        return True
+    p = procs.get(la.pid) if row.agent == "codex" and la.session_id is None else None
+    return p is not None and codex_resume_id(p.args) == row.session_id
+
+
 def _watch(cfg, run, launched, timeout, sleep, out=lambda _l: None, relay=None):
     """Watch launched panes for up to `timeout` seconds. Without a relay nothing is pressed; with one, a startup
     menu at the bottom of a pane is handed to relay.check (the user picks; answering does not use up the timeout).
@@ -198,7 +210,8 @@ def _watch(cfg, run, launched, timeout, sleep, out=lambda _l: None, relay=None):
         return memo["snap"]
     for i in range(timeout + 1):
         panes = tmux.panes()  # unreadable only affects the "reattached" judgement (counted as unconfirmed) and causes nothing extra to be done
-        found, _w = live_by_pane(cfg, run, panes if panes is not None else [], list_procs(run), snapshot_fn=snapshot)
+        procs = list_procs(run)
+        found, _w = live_by_pane(cfg, run, panes if panes is not None else [], procs, snapshot_fn=snapshot)
         for pane_id, row in list(pending.items()):
             screen = tmux.capture(pane_id)
             if relay is not None:
@@ -217,8 +230,7 @@ def _watch(cfg, run, launched, timeout, sleep, out=lambda _l: None, relay=None):
                 del pending[pane_id]
                 out(f"  · {row.tmux} 停在信任提示")
                 continue
-            la = found.get(pane_id)
-            if la is not None and la.session_id == row.session_id and la.status != "unknown":
+            if _back(found.get(pane_id), row, procs):
                 resumed.append(row.tmux)
                 del pending[pane_id]
                 out(f"  · {row.tmux} 已接回")

@@ -6,6 +6,7 @@ from pathlib import Path
 
 UUID_RE = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 RESUME_RE = re.compile(rf"--(?:resume|session-id)[ =]({UUID_RE})")
+CODEX_RESUME_RE = re.compile(rf"(?:^|/)codex\s+resume\s+({UUID_RE})")  # the resume command sampan types for Codex
 ENV_RE = re.compile(r"(?:^|\s)([A-Za-z_][A-Za-z0-9_]*)=(\S*)")
 
 
@@ -98,4 +99,10 @@ def proc_env(run, pid, proc_root=Path("/proc")):
 
 def resume_id(args):
     m = RESUME_RE.search(args)
+    return m.group(1) if m else None
+
+
+def codex_resume_id(args):
+    """The thread id in a `codex resume <id>` command line, or None."""
+    m = CODEX_RESUME_RE.search(args)
     return m.group(1) if m else None

@@ -738,3 +738,45 @@ class CliTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BackTest(unittest.TestCase):
+    """Whether a launched row counts as reattached (restore._back)."""
+
+    TID = "01a18aa0-2b91-75d1-a9a3-3fbba66641a9"
+
+    def la(self, sid=None, status="idle", pid=7, agent="codex"):
+        from sampan.observe import LiveAgent
+        return LiveAgent(agent, pid, "codex", sid, "/w", status, "%1")
+
+    def procs(self, args):
+        from sampan.procs import Proc
+        return {7: Proc(7, 1, "S", "codex", args)}
+
+    def row(self, agent="codex"):
+        return Row("r", agent, "codex" if agent == "codex" else "alice", self.TID, "/w")
+
+    def test_known_thread_matches(self):
+        from sampan.restore import _back
+        self.assertTrue(_back(self.la(self.TID), self.row(), {}))
+
+    def test_codex_resumed_without_a_turn_counts_by_its_resume_argument(self):
+        # Codex 0.166 resumed from the daemon: no rollout in lsof, nothing new in the threads table yet
+        from sampan.restore import _back
+        args = f"/opt/codex/bin/codex resume {self.TID}"
+        self.assertTrue(_back(self.la(), self.row(), self.procs(args)))
+
+    def test_codex_at_a_prompt_does_not_count(self):
+        from sampan.restore import _back
+        args = f"/opt/codex/bin/codex resume {self.TID}"
+        self.assertFalse(_back(self.la(status="unknown"), self.row(), self.procs(args)))  # e.g. its update menu
+
+    def test_codex_resuming_another_thread_does_not_count(self):
+        from sampan.restore import _back
+        args = "/opt/codex/bin/codex resume 11111111-2222-3333-4444-555555555555"
+        self.assertFalse(_back(self.la(), self.row(), self.procs(args)))
+
+    def test_claude_needs_its_session_id(self):
+        from sampan.restore import _back
+        args = f"claude --resume {self.TID}"
+        self.assertFalse(_back(self.la(agent="claude"), self.row("claude"), self.procs(args)))

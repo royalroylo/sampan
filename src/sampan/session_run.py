@@ -16,7 +16,7 @@ from .dispatch import outbox_path
 from .launch import disabled_problem, launch_line, send_line
 from .machine import registry_machine
 from .observe import PROC_ROOT, SPLIT_HINT, live_by_pane, multi_agent_sessions
-from .procs import descendant_claude, is_descendant, list_procs
+from .procs import codex_resume_id, descendant_claude, is_descendant, list_procs
 from .prompts import ANSWERED, ATTACH, SKIP, Relay
 from .registry import STATES, RegistryError, Row, display_name, id_problem, load_rows, lock, set_state, write_rows
 from .screens import CLAUDE_TRUST_OPTION, CODEX_TRUST_YES, bottom_trust_path, codex_activity
@@ -806,7 +806,12 @@ def cmd_move(cfg, run, out, name, dest, *, dry_run=False, sleep=time.sleep, time
         panes_now = tmux.panes()
         if panes_now is None:  # unreadable this round: make no judgement, look again next round
             continue
-        hit = _agents(cfg, run, panes_now, list_procs(run), proc_root)[0].get(pane.pane_id)
+        procs_now = list_procs(run)
+        hit = _agents(cfg, run, panes_now, procs_now, proc_root)[0].get(pane.pane_id)
+        if hit is not None and hit.agent == agent and agent == "codex" and hit.session_id is None and \
+                hit.status == "idle" and procs_now.get(hit.pid) is not None and \
+                codex_resume_id(procs_now[hit.pid].args) == session_id:
+            hit = dataclasses.replace(hit, session_id=session_id)  # resumed without a turn: the thread is not readable yet
         if hit is not None and hit.agent == agent and ((agent == "claude" and not switching) or
                                                        hit.session_id == session_id and
                                                        (agent == "claude" or hit.status == "idle")):

@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.15.2] - 2026-11-01
+
+### Fixed
+- A Codex session reattached with restore / `R` / restart / `S` (or moved) is no longer reported as 「停在提示或尚未接回」 while it is in fact back at its prompt. Codex 0.166 resumes a thread through its daemon: until the next turn no rollout is open and the threads table shows nothing new, and the daemon lists the thread only after a while, so sampan missed it within its 10 s wait. A Codex at an idle prompt whose command line is the `codex resume <id>` sampan typed now counts as reattached; one at a menu (an update prompt) still does not.
+
 ## [0.15.1] - 2026-11-01
 
 ### Fixed
