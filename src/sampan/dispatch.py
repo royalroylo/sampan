@@ -20,7 +20,9 @@ STATES = ("queued", "sent", "done", "failed", "cancelled")
 KINDS = ("terminal", "unregistered", "session")  # who sent it; only "session" may be matched by from_name
 TERMINAL_NAME = "終端機"
 FINISHED = ("done", "failed", "cancelled")
-VERSION = 1
+VERSION = 2  # what every write says. 0.14 added raw/batch/batch_skipped; a 0.13 reader knows only 1, so it refuses
+# the file instead of loading it and writing it back without those fields.
+READABLE_VERSIONS = (1, 2)  # a version-1 file is read as is: the fields it lacks take their defaults
 KEEP_DAYS = 7
 KEEP_MAX = 200
 
@@ -77,8 +79,8 @@ def load(state_dir):
         return []
     try:
         data = json.loads(path.read_text())
-        if data["version"] != VERSION:
-            raise DispatchError(f"{path} 是未知的版本 {data['version']!r}（只認得 {VERSION}）。不會覆蓋它。")
+        if data["version"] not in READABLE_VERSIONS:
+            raise DispatchError(f"{path} 是未知的版本 {data['version']!r}（只認得 {'、'.join(map(str, READABLE_VERSIONS))}）。不會覆蓋它。")
         known = {f.name for f in fields(Dispatch)}  # a field written by a newer sampan is ignored, not an error
         items = [Dispatch(**{k: v for k, v in d.items() if k in known}) for d in data["dispatches"]]
     except DispatchError:

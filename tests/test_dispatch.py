@@ -35,7 +35,7 @@ class StoreTest(unittest.TestCase):
         with dispatch.transaction(self.dir) as cur:
             cur.extend(items)
         self.assertEqual(dispatch.load(self.dir), items)
-        self.assertEqual(json.loads((self.dir / "dispatches.json").read_text())["version"], 1)
+        self.assertEqual(json.loads((self.dir / "dispatches.json").read_text())["version"], 2)
         self.assertEqual(stat.S_IMODE((self.dir / "dispatches.json").stat().st_mode), 0o600)
         self.assertEqual(stat.S_IMODE(self.dir.stat().st_mode), 0o700)
         self.assertEqual(stat.S_IMODE((self.dir / "dispatches.lock").stat().st_mode), 0o600)
@@ -71,7 +71,7 @@ class StoreTest(unittest.TestCase):
     def test_bad_shape_and_state_raise(self):
         self.dir.mkdir(parents=True)
         path = self.dir / "dispatches.json"
-        for text in ('{"version": 2, "dispatches": []}', '{"version": 1}', '{"version": 1, "dispatches": [{"id": "x"}]}'):
+        for text in ('{"version": 3, "dispatches": []}', '{"version": 1}', '{"version": 1, "dispatches": [{"id": "x"}]}'):
             path.write_text(text)
             with self.assertRaises(DispatchError):
                 dispatch.load(self.dir)
@@ -91,6 +91,35 @@ class StoreTest(unittest.TestCase):
         (self.dir / "dispatches.json").write_text(json.dumps({"version": 1, "dispatches": ["nope"]}))
         with self.assertRaises(DispatchError):
             dispatch.load(self.dir)
+
+    def test_v1_file_loads_and_next_write_is_v2_keeping_new_fields(self):
+        self.dir.mkdir(parents=True)
+        rec = {k: v for k, v in dataclasses.asdict(mk()).items() if k not in ("raw", "batch", "batch_skipped")}
+        path = self.dir / "dispatches.json"
+        path.write_text(json.dumps({"version": 1, "dispatches": [rec]}))
+        with dispatch.transaction(self.dir) as cur:
+            self.assertEqual(len(cur), 1)
+            cur.append(mk("zzzz", raw=True, batch="b1", batch_skipped=2))
+        data = json.loads(path.read_text())
+        self.assertEqual(data["version"], 2)
+        by_id = {d["id"]: d for d in data["dispatches"]}
+        self.assertEqual((by_id["zzzz"]["raw"], by_id["zzzz"]["batch"], by_id["zzzz"]["batch_skipped"]), (True, "b1", 2))
+
+    def test_v2_round_trips_raw_batch_and_skipped(self):
+        items = [mk("aaaa", raw=True, batch="b1", batch_skipped=3)]
+        with dispatch.transaction(self.dir) as cur:
+            cur.extend(items)
+        self.assertEqual(dispatch.load(self.dir), items)
+
+    def test_version_3_is_refused_and_file_untouched(self):
+        self.dir.mkdir(parents=True)
+        path = self.dir / "dispatches.json"
+        path.write_text('{"version": 3, "dispatches": []}')
+        before = path.read_bytes()
+        with self.assertRaises(DispatchError):
+            with dispatch.transaction(self.dir) as cur:
+                cur.append(mk())
+        self.assertEqual(path.read_bytes(), before)
 
     def test_old_record_without_raw_or_batch_loads(self):
         self.dir.mkdir(parents=True)
