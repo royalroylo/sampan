@@ -23,7 +23,7 @@ from sampan.ui import (
     text_width,
 )
 from sampan.ui.render import _cell_text
-from sampan.ui.screen import ESC_WAIT_MS
+from sampan.ui.screen import ESC_SEQ_WAIT_MS, ESC_WAIT_MS
 from tests.fakes import FakeRunner, cp, pane_line, ps_line
 from tests.helpers import TOML, make_env, status_row
 
@@ -235,6 +235,14 @@ class CardTest(unittest.TestCase):
 TICK = object()  # placing this in FakeScr's key sequence = get_wch gets no key (curses timeout)
 
 
+class Gap:
+    """In FakeScr's key sequence: nothing arrives for ms. A read whose timeout is shorter times out (the gap stays,
+    shortened by that timeout); a read that waits long enough (or forever) skips the gap and gets the next key."""
+
+    def __init__(self, ms):
+        self.ms = ms
+
+
 class FakeScr:
     """Stand-in for a curses window: records the screen on each refresh, get_wch yields keys in order; TICK raises curses.error (timeout)."""
 
@@ -262,10 +270,17 @@ class FakeScr:
         pass
 
     def get_wch(self):
-        if not self.keys and self.timeouts and self.timeouts[-1] == ESC_WAIT_MS:
-            k = TICK  # nothing more after an Esc: the short wait for an escape sequence runs out
+        if not self.keys and self.timeouts and self.timeouts[-1] in (ESC_WAIT_MS, ESC_SEQ_WAIT_MS):
+            k = TICK  # nothing more after an Esc: the wait for an escape sequence runs out
         else:
             k = self.keys.pop(0)
+        if isinstance(k, Gap):
+            wait = self.timeouts[-1] if self.timeouts else -1
+            if 0 <= wait < k.ms:
+                self.keys.insert(0, Gap(k.ms - wait))
+                k = TICK
+            else:
+                return self.get_wch()
         if k is TICK:
             if self.on_tick:
                 self.on_tick()
@@ -1105,7 +1120,23 @@ class EscapeKeyTest(unittest.TestCase):
 
     def test_unknown_or_cut_short_sequences_are_dropped_whole(self):
         self.assertEqual(self.pick(["\x1b", "[", "2", "0", "0", "~", "KEY_DOWN", "\n"]), ("attach", ["b"]))
-        self.assertEqual(self.pick(["\x1b", "[", TICK, "A", "\n"]), ("adopt", []))  # A after the wait is A again
+        # a sequence whose final byte never comes is dropped: nothing runs
+        self.assertEqual(self.pick(["KEY_DOWN", "\x1b", "[", TICK, "\n"]), ("attach", ["b"]))
+
+    def test_slow_link_gap_inside_a_sequence_still_reads_it_whole(self):
+        # ESC, "[", 300 ms of nothing, then "A": cursor up, never adopt
+        self.assertEqual(self.pick(["KEY_DOWN", "\x1b", "[", Gap(300), "A", "\n"]), ("attach", ["a"]))
+        self.assertIn(ESC_SEQ_WAIT_MS, self.scr.timeouts)
+        self.assertEqual(self.pick(["KEY_DOWN", "\x1b", "O", Gap(300), "A", "\n"]), ("attach", ["a"]))
+
+    def test_esc_bracket_then_nothing_does_nothing(self):
+        self.scr = FakeScr(["\x1b", "["])
+        s = CursesScreen(self.scr, self.cfg, FakeRunner(), now_fn=lambda: NOW)
+        self.assertIsNone(s.key())
+        self.assertEqual(self.scr.keys, [])
+
+    def test_gap_after_a_lone_esc_is_still_a_lone_esc(self):
+        self.assertEqual(self.pick(["KEY_DOWN", "\x1b", Gap(300), "A"]), ("adopt", []))  # Esc ignored, then A
 
     def test_q_quits(self):
         self.assertEqual(self.pick(["q"]), ("quit", []))

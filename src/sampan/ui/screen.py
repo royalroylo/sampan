@@ -69,7 +69,8 @@ from .tree import FolderItem, folder_key, folder_of
 
 # one line at 120 columns: digits (row numbers are on every row), the arrows, w (save now), Enter (on every row's
 # card), R and A still work, they are only left out here; g / f are short here, their folder card spells them out
-ESC_WAIT_MS = 80  # after Esc, how long to wait for the rest of an escape sequence (over SSH it may come late)
+ESC_WAIT_MS = 80  # after Esc, how long to wait for a next byte: none → a lone Esc
+ESC_SEQ_WAIT_MS = 1000  # inside an escape sequence (after ESC [ or ESC O), how long to wait for each further byte
 ESCAPES = {"[A": "KEY_UP", "[B": "KEY_DOWN", "[C": "KEY_RIGHT", "[D": "KEY_LEFT", "OA": "KEY_UP", "OB": "KEY_DOWN",
            "OC": "KEY_RIGHT", "OD": "KEY_LEFT", "[H": "KEY_HOME", "[F": "KEY_END", "OH": "KEY_HOME", "OF": "KEY_END",
            "[1~": "KEY_HOME", "[4~": "KEY_END", "[7~": "KEY_HOME", "[8~": "KEY_END"}
@@ -245,9 +246,11 @@ class CursesScreen:
 
     def key(self):
         """The next key; returns None when a timeout was set and expired without a key, or for an escape sequence
-        that is not known (dropped whole). An Esc followed within ESC_WAIT_MS by "[" or "O" is read as one escape
-        sequence (curses only waits ESCDELAY for one, so over a slow link ESC and "[A" may come in two reads): the
-        known ones are the KEY_ names (↑↓←→, Home/End), so "[" and "A" never act as keys of their own."""
+        that is not known or never ends (dropped whole, nothing runs). An Esc followed within ESC_WAIT_MS by "[" or
+        "O" starts an escape sequence (curses only waits ESCDELAY for one, so over a slow link ESC and "[A" may come
+        in several reads); it is read to its final byte (0x40-0x7E after "[", any one byte after "O"), waiting up to
+        ESC_SEQ_WAIT_MS for each further byte. The known ones are the KEY_ names (↑↓←→, Home/End), so "[" and "A"
+        never act as keys of their own."""
         if self._pushed:
             return self._pushed.pop(0)
         ch = self._read()
@@ -280,6 +283,8 @@ class CursesScreen:
                 self._pushed.append(first)
                 return "\x1b"
             seq = first
+            if set_timeout is not None:
+                set_timeout(ESC_SEQ_WAIT_MS)  # a sequence has begun: a slow link may still be bringing the rest
             while len(seq) < 16:
                 ch = self._read()
                 if ch is None or len(ch) != 1:  # cut short: drop what came (an unknown key name is dropped too)
