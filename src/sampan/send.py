@@ -17,6 +17,7 @@ from .claude_state import reply_to as claude_reply_to
 from .clock import fmt_local, parse_iso
 from .codex_state import _is_codex, find_rollout
 from .codex_state import reply_to as codex_reply_to
+from .machine import registry_machine
 from .procs import is_descendant, list_procs
 from .registry import RegistryError, load_rows
 from .screens import claude_input_state
@@ -79,6 +80,7 @@ class Caller:
     agent: str
     pane: str | None
     kind: str | None = None
+    id: str = ""  # the registry row's id, "" when not a session
 
 
 TERMINAL = Caller(None, "", "", None)
@@ -145,7 +147,7 @@ def lookup_caller(cfg, run, pid):
     row = next((r for r in rows if r.tmux == pane.session), None)
     if row is None or row.agent != agent:
         return unknown
-    return Caller(row.tmux, row.profile, agent, pane.pane_id)
+    return Caller(row.tmux, row.profile, agent, pane.pane_id, id=row.id)
 
 
 def unsure_caller(e):
@@ -163,9 +165,14 @@ def command_caller(cfg, run, pid):
         return unsure_caller(e)
 
 
-def from_session(d, name):
-    """Whether dispatch d was sent by the sampan session called name (name None → never)."""
-    return name is not None and d.from_kind == "session" and d.from_name == name
+def from_session(d, name, id=""):
+    """Whether dispatch d was sent by the sampan session called name (name None → never). With an id (and a dispatch
+    that recorded its sender's id) the id decides, so a renamed caller still owns its dispatches."""
+    if name is None or d.from_kind != "session":
+        return False
+    if id and d.from_id:
+        return d.from_id == id
+    return d.from_name == name
 
 
 def notice_text(d):
@@ -185,6 +192,14 @@ def _iso(now):
 
 def _rows(cfg, run, snapshot_fn, status_fn):
     return {r.name: r for r in (status_fn or status_rows)(cfg, run, snapshot_fn=snapshot_fn)}
+
+
+def _row_of(rows, id, name):
+    """The row of rows (by name) for a dispatch end: found by id; by name only for an old dispatch with no id. An id
+    nobody has any more is gone, never a name that may now belong to another session."""
+    if id:
+        return next((r for r in rows.values() if r.id == id), None)
+    return rows.get(name)
 
 
 def _preview(message):
@@ -242,7 +257,7 @@ def submit(cfg, run, caller, to, message, *, notify, now, snapshot_fn=None, stat
     if raw and row.agent == "codex":
         return REASON_RAW_CODEX
     r = _create(cfg, caller, to, row.agent, row.profile, message, "queued", now, notify=notify,
-                thread_id=(row.sid or None) if row.agent == "codex" else None, raw=raw, batch=batch)
+                thread_id=(row.sid or None) if row.agent == "codex" else None, raw=raw, batch=batch, to_id=row.id)
     if isinstance(r, str):
         return r
     kind = f"{row.agent}，直接送" if raw else row.agent
@@ -255,13 +270,14 @@ def _who(d):
 
 
 def _create(cfg, caller, to, to_agent, to_profile, message, state, now, *, notify, thread_id=None, strip=False,
-            startup=False, raw=False, batch=None):
+            startup=False, raw=False, batch=None, to_id=""):
     """Write the outbox and record a dispatch under the lock. A copy of it, or why not (str).
     strip: drop trailing newlines from the text (a startup prompt goes through `$(cat …)`, which drops them)."""
     try:
         with dispatch.transaction(cfg.state_dir) as items:
             d = _record(cfg, caller, to, to_agent, to_profile, message, state, now, {d.id for d in items},
-                        notify=notify, thread_id=thread_id, strip=strip, startup=startup, raw=raw, batch=batch)
+                        notify=notify, thread_id=thread_id, strip=strip, startup=startup, raw=raw, batch=batch,
+                        to_id=to_id)
             _keep(cfg, items, now, [d])
     except (dispatch.DispatchError, OSError) as e:
         return str(e)
@@ -269,7 +285,7 @@ def _create(cfg, caller, to, to_agent, to_profile, message, state, now, *, notif
 
 
 def _record(cfg, caller, to, to_agent, to_profile, message, state, now, taken, *, notify, thread_id=None, strip=False,
-            startup=False, raw=False, batch=None):
+            startup=False, raw=False, batch=None, to_id=""):
     """A new Dispatch with an id not in taken, its outbox written (call inside dispatch.transaction)."""
     did = dispatch.new_id(taken)
     text = message if raw else deliver.compose(caller_label(caller), caller.profile, did, message)
@@ -281,7 +297,8 @@ def _record(cfg, caller, to, to_agent, to_profile, message, state, now, taken, *
         to, to_agent, to_profile, text, state, _iso(now),
         sent_at=_iso(now) if state == "sent" else None,
         notify=bool(notify and caller.name is not None), thread_id=thread_id, from_kind=caller_kind(caller),
-        startup=startup, raw=raw, batch=batch)
+        startup=startup, raw=raw, batch=batch, to_id=to_id, from_id=caller.id if caller.name is not None else "",
+        machine=registry_machine(cfg))
 
 
 def _keep(cfg, items, now, new):
@@ -353,7 +370,7 @@ def submit_batch(cfg, run, caller, names, message, *, raw, notify, now, snapshot
             for row in targets:
                 d = _record(cfg, caller, row.name, row.agent, row.profile, message, "queued", now, taken,
                             notify=notify, thread_id=(row.sid or None) if row.agent == "codex" else None, raw=raw,
-                            batch=bid)
+                            batch=bid, to_id=row.id)
                 taken.add(d.id)
                 made.append(d)
             made[0].batch_skipped = len(skipped)
@@ -455,10 +472,10 @@ def advance(cfg, run, did, *, sleep, snapshot_fn=None, status_fn=None, now=None,
         def save():
             dispatch.checkpoint(cfg.state_dir, items)
         if d.state == "queued":
-            _deliver(cfg, run, d, rows().get(d.to_name), sleep, now, save)
+            _deliver(cfg, run, d, _row_of(rows(), d.to_id, d.to_name), sleep, now, save)
             _expire(cfg, d, now)
         elif d.state == "sent":
-            _check(cfg, d, rows().get(d.to_name), now, run)
+            _check(cfg, d, _row_of(rows(), d.to_id, d.to_name), now, run)
         if d.batch is None:
             if report and d.state in dispatch.FINISHED:
                 d.notify = False  # the tool result tells the caller
@@ -697,7 +714,7 @@ def notify_caller(cfg, run, d, sleep, *, rows=None, snapshot_fn=None, status_fn=
         return False
     owers = [d]
     if d.from_kind == "session":
-        owers += [x for x in items if x is not d and x.from_kind == "session" and x.from_name == d.from_name
+        owers += [x for x in items if x is not d and x.from_kind == "session" and _same_caller(x, d)
                   and _owes_notice(x, items)]
     members = [m for x in owers for m in (_group(items, x.batch) if x.batch is not None else [x])]
     if len(owers) == 1:
@@ -706,6 +723,10 @@ def notify_caller(cfg, run, d, sleep, *, rows=None, snapshot_fn=None, status_fn=
         text = merged_notice_text(sorted(owers, key=_position(items)), items)
     what = "、".join(f"批次 {x.batch}" if x.batch is not None else f"派工 {x.id}" for x in owers)
     return _notify(cfg, run, d, owers, members, text, what, sleep, rows, snapshot_fn, status_fn, save)
+
+
+def _same_caller(x, d):
+    return x.from_id == d.from_id if x.from_id and d.from_id else x.from_name == d.from_name
 
 
 def _position(items):
@@ -746,7 +767,7 @@ def _notify(cfg, run, d, owers, members, text, what, sleep, rows, snapshot_fn, s
         mark(notify=False)  # the terminal or an unregistered agent: there is no session to tell
         return False
     rows = rows if rows is not None else _rows(cfg, run, snapshot_fn, status_fn)
-    row = rows.get(d.from_name)
+    row = _row_of(rows, d.from_id, d.from_name)
     if row is None or row.state in (State.RETIRED, State.UNREGISTERED, State.NO_AGENT):
         mark(notify=False)  # nobody left to tell: the reply stays in the record
         return False

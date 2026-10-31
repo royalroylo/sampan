@@ -680,7 +680,7 @@ class SwitchTest(MoveFixture):
         self.assertIn("已把逐字稿搬到 work", text)
         self.assertIn("✔ 994-monitor 已換到 work", text)
         log = actionlog.log_path(self.cfg).read_text()
-        self.assertIn("[switch 994-monitor → work] ✔ 994-monitor 已換到 work", log)
+        self.assertRegex(log, r"\[switch 994-monitor#[0-9a-f]{8} → work\] ✔ 994-monitor 已換到 work")
 
     def test_dry_run_logs_nothing(self):
         self.switch(dry_run=True)

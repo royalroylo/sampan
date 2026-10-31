@@ -55,6 +55,9 @@ class Dispatch:
     raw: bool = False  # a direct send: text is the bare message (no source line), a slash command for the target itself
     batch: str | None = None  # id of the batch send this dispatch belongs to
     batch_skipped: int = 0  # on the first item of a batch only: how many sessions the batch skipped
+    to_id: str = ""  # registry id of the target: how it is found again after a rename ("" = an old dispatch: by name)
+    from_id: str = ""  # registry id of the sending session ("" = not a session, or an old dispatch)
+    machine: str = ""  # id of the machine that created it
     # keys of the JSON object this sampan does not know (written by a newer sampan); written back as they were
     extra: dict = field(default_factory=dict, compare=False, repr=False)
 

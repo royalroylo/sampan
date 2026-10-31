@@ -61,6 +61,16 @@ def _load(cfg, out):
         return None
 
 
+def _who(cfg, name):
+    """name#<short id> for the log label of an action on the registered session name (the bare name when it is not
+    registered, has no id yet or the registry cannot be read: a log label never fails the action)."""
+    try:
+        row = next((r for r in load_rows(cfg.registry_path, codex_profile=cfg.codex.profile) if r.tmux == name), None)
+    except RegistryError:
+        row = None
+    return actionlog.who(name, row.id if row else "")
+
+
 def _register(cfg, out, row):
     with lock(cfg.state_dir):
         rows = _load(cfg, out)
@@ -303,7 +313,7 @@ def alias_problem(alias):
 
 def cmd_alias(cfg, out, name, alias, *, clear=False):
     """Set (or with clear, remove) the alias of a registry row. Touches neither tmux nor the id; it applies at the next launch."""
-    out = actionlog.tee(cfg, f"alias {name}", out)
+    out = actionlog.tee(cfg, f"alias {_who(cfg, name)}", out)
     alias = "" if clear else (alias or "").strip()
     if not clear:
         problem = alias_problem(alias)
@@ -334,6 +344,7 @@ def cmd_rename(cfg, run, out, old, new):
     if problem:
         out(f"❌ {problem}")
         return 2
+    out = actionlog.tee(cfg, f"rename {_who(cfg, old)} → {new}", out)
     tmux = Tmux(run)
     with lock(cfg.state_dir):
         rows = _load(cfg, out)
@@ -363,7 +374,7 @@ def cmd_forget(cfg, run, out, name, *, dry_run=False):
     """Remove a row from the registry. Only for a session that is not in tmux; the transcript, the rollout and
     the tmux server are never touched, and the previous registry stays in history/."""
     if not dry_run:
-        out = actionlog.tee(cfg, f"forget {name}", out)
+        out = actionlog.tee(cfg, f"forget {_who(cfg, name)}", out)
     with lock(cfg.state_dir):
         rows = _load(cfg, out)
         if rows is None:
@@ -607,8 +618,9 @@ def cmd_move(cfg, run, out, name, dest, *, dry_run=False, sleep=time.sleep, time
     profile cannot see is moved to it (never copied) after the agent has exited."""
     from .save import cmd_save
     if not dry_run:  # switch has already wrapped both under its own label, which then stays
-        out = actionlog.tee(cfg, f"move {name}", out)
-        on_prompt = actionlog.logged_prompt(cfg, f"move {name}", on_prompt)
+        label = f"move {_who(cfg, name)}"
+        out = actionlog.tee(cfg, label, out)
+        on_prompt = actionlog.logged_prompt(cfg, label, on_prompt)
     rows = _load(cfg, out)
     if rows is None:
         return 2
@@ -864,8 +876,9 @@ def cmd_switch(cfg, run, out, name, profile, *, dry_run=False, own_pane=None, on
     under the new profile right away. A transcript the new profile cannot see is moved to it, never copied, so there is
     only ever one copy of the conversation."""
     if not dry_run:
-        out = actionlog.tee(cfg, f"switch {name} → {profile}", out)
-        on_prompt = actionlog.logged_prompt(cfg, f"switch {name} → {profile}", on_prompt)
+        label = f"switch {_who(cfg, name)} → {profile}"
+        out = actionlog.tee(cfg, label, out)
+        on_prompt = actionlog.logged_prompt(cfg, label, on_prompt)
     rows = _load(cfg, out)
     if rows is None:
         return 2

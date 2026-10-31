@@ -24,7 +24,8 @@ TID_C = "33333333-4444-5555-6666-777777777777"  # Codex target "c"
 TID_X = "44444444-5555-6666-7777-888888888888"  # Codex caller "x"
 SID_D = "55555555-6666-7777-8888-999999999999"  # Claude target "d"
 SID_Z = "88888888-9999-aaaa-bbbb-cccccccccccc"  # Claude caller "z"
-CALLER_A = Caller("a", "alice", "claude", "%1")
+ID_A, ID_B = "aaaaaaaa-0000-4000-8000-000000000001", "bbbbbbbb-0000-4000-8000-000000000002"
+CALLER_A = Caller("a", "alice", "claude", "%1", id=ID_A)
 EMPTY = (FIXTURES / "claude_empty_placeholder.ansi").read_text()
 DRAFT = (FIXTURES / "claude_draft.ansi").read_text()
 
@@ -80,8 +81,8 @@ class Base(unittest.TestCase):
         cfg = make_env(tmp)
         self.cfg = dataclasses.replace(cfg, codex=dataclasses.replace(cfg.codex, home=tmp / "codex-home"))
         self.rows = {
-            "a": status_row("a", sid=SID_A, pane="%1"),
-            "b": status_row("b", sid=SID_B, pane="%2"),
+            "a": status_row("a", sid=SID_A, pane="%1", id=ID_A),
+            "b": status_row("b", sid=SID_B, pane="%2", id=ID_B),
             "c": status_row("c", agent="codex", profile="codex", sid=TID_C, pane="%3"),
         }
         self.sleeps = []
@@ -117,6 +118,48 @@ class Base(unittest.TestCase):
 
 
 class SubmitTest(Base):
+    def test_dispatch_records_ids(self):
+        with mock.patch("sampan.send.registry_machine", return_value="mach-1"):
+            d = self.submit()
+        self.assertEqual((d.to_id, d.from_id, d.machine), (ID_B, ID_A, "mach-1"))
+        self.assertEqual(self.stored(d.id).to_id, ID_B)
+        raw = json.loads((self.cfg.state_dir / "dispatches.json").read_text())
+        self.assertEqual(raw["version"], 2)
+        self.assertEqual(raw["dispatches"][0]["from_id"], ID_A)
+
+    def test_terminal_caller_has_no_from_id(self):
+        d = self.submit(caller=send.TERMINAL)
+        self.assertEqual((d.from_id, d.to_id), ("", ID_B))
+
+    def test_batch_records_ids(self):
+        b = send.submit_batch(self.cfg, FakeRunner(strict=True), CALLER_A, ["b"], "hi", raw=False, notify=False, now=NOW,
+                              status_fn=self.status_fn)
+        self.assertEqual((b.items[0].to_id, b.items[0].from_id), (ID_B, ID_A))
+
+    def test_from_session_prefers_id(self):
+        d = self.submit()
+        self.assertTrue(send.from_session(d, "renamed", ID_A))
+        self.assertFalse(send.from_session(d, "a", "other-id"))
+        self.assertTrue(send.from_session(d, "a"))
+
+    def test_old_dispatch_without_ids_falls_back_to_names(self):
+        d = self.submit(notify=True)
+        with dispatch.transaction(self.cfg.state_dir) as items:
+            items[0].to_id = items[0].from_id = ""
+        self.advance(tmux_runner(), d.id)
+        self.transcript(SID_B, [user(d.text), assistant("answer")])
+        run = tmux_runner()
+        d = self.advance(run, d.id, later(5))
+        self.assertEqual((d.state, d.reply, d.notified), ("done", "answer", True))
+
+    def test_dispatch_with_id_does_not_fall_back_to_a_name_another_session_took(self):
+        d = self.submit()
+        self.rows["b"] = dataclasses.replace(self.rows["b"], name="z", id="other")  # the target is gone
+        self.rows["b"] = status_row("b", sid=SID_B, pane="%2", id="cccccccc-newcomer")
+        d = self.advance(FakeRunner(strict=True), d.id)
+        self.assertEqual(d.state, "queued")
+        self.assertEqual(d.reason, send.REASON_NOT_RUNNING)
+
     def test_raw_problem(self):
         self.assertIsNone(send.raw_problem("/compact"))
         self.assertIsNone(send.raw_problem(" /compact"))  # stripped first
@@ -692,6 +735,27 @@ class AdvanceCodexTest(Base):
         d = self.submit(to="c")
         d = self.advance(self.codex_runner(1, "boom"), d.id)
         self.assertEqual((d.state, d.reason), ("queued", "boom"))
+
+
+class RenameMidFlightTest(Base):
+    def test_target_renamed_mid_flight_still_delivers_and_reads_reply(self):
+        d = self.submit(notify=False)
+        self.rows["b"] = dataclasses.replace(self.rows["b"], name="b-new")
+        d = self.advance(tmux_runner(), d.id)
+        self.assertEqual(d.state, "sent")
+        self.transcript(SID_B, [user(d.text), assistant("the reply")])
+        d = self.advance(FakeRunner(strict=True), d.id, later(5))
+        self.assertEqual((d.state, d.reply), ("done", "the reply"))
+
+    def test_caller_renamed_still_gets_notice(self):
+        d = self.submit(notify=True)
+        self.advance(tmux_runner(), d.id)
+        self.transcript(SID_B, [user(d.text), assistant("answer")])
+        self.rows["a"] = dataclasses.replace(self.rows["a"], name="a-new")
+        run = tmux_runner()
+        d = self.advance(run, d.id, later(5))
+        self.assertTrue(d.notified)
+        self.assertEqual(tmux_writes(run, "%1")[0][2], "paste-buffer")
 
 
 class NotifyTest(Base):
@@ -1447,7 +1511,8 @@ class CommandCallerTest(Base):
         from sampan.registry import Row, write_rows
         write_rows(self.cfg.registry_path, [Row("a", "claude", "alice", SID_A, "/w")], "t", self.cfg.history_dir)
         c = send.command_caller(self.cfg, self.runner(self.PROCS), 300)
-        self.assertEqual(c, Caller("a", "alice", "claude", "%1"))
+        self.assertEqual(c, Caller("a", "alice", "claude", "%1", id=c.id))
+        self.assertTrue(c.id)
 
     def test_no_row_is_unregistered_and_no_agent_is_the_terminal(self):
         self.assertEqual(send.caller_kind(send.command_caller(self.cfg, self.runner(self.PROCS), 300)), "unregistered")
@@ -1510,7 +1575,7 @@ class BatchBase(Base):
         super().setUp()
         self.rows = {
             "me": status_row("me", sid=SID_ME, pane="%9"),
-            "a": status_row("a", sid=SID_A, pane="%1"),
+            "a": status_row("a", sid=SID_A, pane="%1", id=ID_A),
             "b": status_row("b", sid=SID_B, pane="%2", agent_status="busy"),
             "c": status_row("c", sid=SID_C2, pane="%3"),
             "x": status_row("x", agent="codex", profile="codex", sid=TID_C, pane="%4"),

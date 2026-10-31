@@ -990,6 +990,16 @@ class WatchTest(Base):
         self.assertEqual(d.state, "queued")
 
 
+class _AnyId(str):
+    def __eq__(self, other):
+        return bool(other)
+
+    __hash__ = str.__hash__
+
+
+ANY_ID = _AnyId()
+
+
 class IdentifyCallerTest(Base):
     def runner(self, panes, procs):
         r = FakeRunner(strict=True)
@@ -1004,7 +1014,7 @@ class IdentifyCallerTest(Base):
         write_rows(self.cfg.registry_path, [Row("1005-x", "claude", "alice", "s1", "/w")], "t", self.cfg.history_dir)
         run = self.runner([pane_line("other", "%4", 50, "zsh", "/"), pane_line("1005-x", "%5", 100, "claude", "/w")],
                           self.PROCS)
-        self.assertEqual(mcp_server.identify_caller(self.cfg, run, 300), Caller("1005-x", "alice", "claude", "%5"))
+        self.assertEqual(mcp_server.identify_caller(self.cfg, run, 300), Caller("1005-x", "alice", "claude", "%5", id=ANY_ID))
 
     def test_no_registry_row_is_unregistered_but_keeps_the_agent(self):
         run = self.runner([pane_line("1005-x", "%5", 100, "claude", "/w")], self.PROCS)
@@ -1028,7 +1038,7 @@ class IdentifyCallerTest(Base):
                  ps_line(200, 100, "node", "node /opt/bin/codex"), ps_line(210, 200, "codex", "codex"),
                  ps_line(300, 210, "sampan", "sampan mcp serve")]
         run = self.runner([pane_line("cx", "%7", 100, "node", "/w")], procs)
-        self.assertEqual(mcp_server.identify_caller(self.cfg, run, 300), Caller("cx", "codex", "codex", "%7"))
+        self.assertEqual(mcp_server.identify_caller(self.cfg, run, 300), Caller("cx", "codex", "codex", "%7", id=ANY_ID))
 
     def test_registry_row_of_another_agent_does_not_count(self):
         write_rows(self.cfg.registry_path, [Row("1005-x", "codex", "codex", "t1", "/w")], "t", self.cfg.history_dir)

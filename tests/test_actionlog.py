@@ -13,6 +13,10 @@ STAMP = "2026-10-24T12:00:00+08:00"
 
 
 class ActionLogTest(unittest.TestCase):
+    def test_who_formats_name_and_short_id(self):
+        self.assertEqual(actionlog.who("web", "12345678-aaaa-4000-8000-000000000000"), "web#12345678")
+        self.assertEqual(actionlog.who("web", ""), "web")
+
     def setUp(self):
         self.old_umask = os.umask(0o022)
         self.addCleanup(os.umask, self.old_umask)

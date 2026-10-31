@@ -566,8 +566,8 @@ class ForgetTest(Base):
         self.assertIn("--name u", self.msgs[1])
         self.assertEqual(r.called(["tmux", "-u", "kill-session"]), [])
         log = actionlog.log_path(self.cfg).read_text()
-        self.assertIn("[forget u] ✔ 已從登記表移除 u", log)
-        self.assertIn("[forget u]   對話還在：", log)
+        self.assertRegex(log, r"\[forget u#[0-9a-f]{8}\] ✔ 已從登記表移除 u")
+        self.assertRegex(log, r"\[forget u#[0-9a-f]{8}\]   對話還在：")
 
     def test_forget_dry_run_logs_nothing(self):
         self.assertEqual(cmd_forget(self.cfg, self.runner(), self.msgs.append, "u", dry_run=True), 0)
@@ -620,6 +620,17 @@ class FolderSyncTest(Base):
     def test_rename_syncs_folder(self):
         self.assertEqual(cmd_rename(self.cfg, self.runner(), self.msgs.append, "a1", "a2"), 0)
         self.assertEqual(folders.load(self.cfg.state_dir).sessions, {"a2": "客戶", "u": "客戶"})
+
+    def test_rename_is_logged(self):
+        sid = next(r.id for r in load_rows(self.cfg.registry_path) if r.tmux == "a1")
+        self.assertEqual(cmd_rename(self.cfg, self.runner(), self.msgs.append, "a1", "a2"), 0)
+        log = (self.cfg.state_dir / "actions.log").read_text()
+        self.assertIn(f"[rename a1#{sid[:8]} → a2] a1 → a2", log)
+
+    def test_forget_is_logged_with_short_id(self):
+        sid = next(r.id for r in load_rows(self.cfg.registry_path) if r.tmux == "u")
+        cmd_forget(self.cfg, self.runner(), self.msgs.append, "u")
+        self.assertIn(f"[forget u#{sid[:8]}]", (self.cfg.state_dir / "actions.log").read_text())
 
     def test_forget_syncs_folder(self):
         self.assertEqual(cmd_forget(self.cfg, self.runner(), self.msgs.append, "u"), 0)
@@ -733,7 +744,7 @@ class RenameTest(Base):
                       self.msgs)
         self.assertEqual(cmd_alias(self.cfg, self.msgs.append, "u", "", clear=True), 0)
         self.assertEqual({x.tmux: x for x in load_rows(self.cfg.registry_path)}["u"].alias, "")
-        self.assertTrue(any("[alias u]" in x for x in action_lines(self.cfg)))
+        self.assertTrue(any("[alias u#" in x for x in action_lines(self.cfg)))
 
     def test_alias_problem_rejects_control_and_long(self):
         for bad in ("", "a\nb", "x\x1b[0m", "a" * 51):

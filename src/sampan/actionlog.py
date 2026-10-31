@@ -6,6 +6,7 @@ import os
 import re
 from datetime import datetime
 
+from . import ids
 from .config import redact
 from .fsutil import PRIVATE_FILE, private_dir, try_chmod
 
@@ -17,6 +18,11 @@ _SECRETS = (
     (re.compile(r"\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY)[A-Za-z0-9_]*=)\S+", re.I), r"\1***"),
     (re.compile(r"(Authorization:\s*(?:\w+\s+)?)\S+", re.I), r"\1***"),
 )
+
+
+def who(name, sid):
+    """How a session is named in the log: name#<first 8 of its id>, or the bare name when it has no id."""
+    return f"{name}#{ids.short(sid)}" if sid else name
 
 
 def log_path(cfg):

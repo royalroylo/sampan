@@ -368,7 +368,7 @@ class Server:
             d = next((x for x in dispatch.load(self.cfg.state_dir) if (x.batch if batch else x.id) == did), None)
         except dispatch.DispatchError as e:
             raise ToolError(str(e)) from e
-        if d is None or not (did in self.mine or send.from_session(d, caller.name)):
+        if d is None or not (did in self.mine or send.from_session(d, caller.name, caller.id)):
             raise ToolError(f"沒有派工 {did}（或不是這個 session 發出的）")
         return d
 
@@ -606,7 +606,7 @@ class Server:
             return
         name = self.caller.name
         for d in items:
-            if d.id in owed and (d.id in self.mine or send.from_session(d, name)):
+            if d.id in owed and (d.id in self.mine or send.from_session(d, name, self.caller.id)):
                 try:
                     send.advance(self.cfg, self.run, d.id, sleep=self.sleep, snapshot_fn=self.snapshot_fn,
                                  status_fn=self.status_fn, now=self.now_fn())
