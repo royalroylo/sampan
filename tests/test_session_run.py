@@ -663,6 +663,7 @@ class FolderSyncTest(Base):
         # Codex returns 1 when it is ready but not registered yet: the tmux session exists, so it is placed
         from unittest import mock
         self.live.add("n1")
+        self.registry([Row("n1", "codex", "alice", B, str(self.cwd), "active", "t", "srv", None)])  # as the daemon registers it
         with mock.patch("sampan.session_run._cmd_new", return_value=1):
             rc = cmd_new(self.cfg, self.runner(), self.msgs.append, "n1", "codex", str(self.cwd), folder="開發")
         self.assertEqual(rc, 1)

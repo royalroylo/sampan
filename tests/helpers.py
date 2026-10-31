@@ -26,6 +26,13 @@ plugins = ["tools@my-plugins"]
 """
 
 
+def register(cfg, *names):
+    """Put sessions with these names in the registry (folders.json refers to sessions by their registry id)."""
+    from sampan.registry import Row, write_rows
+    write_rows(cfg.registry_path, [Row(n, "claude", "alice", f"00000000-0000-4000-8000-{i:012d}", "/c")
+                                   for i, n in enumerate(names)], "t", cfg.history_dir)
+
+
 def make_env(tmp: Path, toml: str = TOML):
     home = tmp / "home"
     (home / ".claude" / "projects").mkdir(parents=True, exist_ok=True)

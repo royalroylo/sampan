@@ -8,7 +8,7 @@ from sampan.restore import Candidate
 from sampan.status import State
 from sampan.ui import Checklist, cmd_ui
 from tests.fakes import FakeRunner, cp
-from tests.helpers import make_env, status_row
+from tests.helpers import make_env, register, status_row
 
 
 def row(name, state=State.RUNNING, profile="alice", agent_status="idle", tokens=100_000, agent="claude"):
@@ -1209,8 +1209,12 @@ class ChecklistTest(unittest.TestCase):
 
 class FolderUiTest(unittest.TestCase):
     """The folder actions and S of cmd_ui (curses keys arrive through picker_fn; --plain types numbers)."""
-    setUp, ui, text = UiTest.setUp, UiTest.ui, UiTest.text
+    ui, text = UiTest.ui, UiTest.text
     ui_keys = InteractiveUiTest.ui_keys
+
+    def setUp(self):
+        UiTest.setUp(self)
+        register(self.cfg, "a", "b", "old")
 
     def tree(self, fn):
         from sampan import folders

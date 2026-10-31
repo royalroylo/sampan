@@ -1,5 +1,9 @@
 """Session folders: which folder each session sits in, kept apart from the registry (folders.json).
 
+On disk (version 2) a folder has an id and a parent folder id, and a session belongs to a folder by its sampan session id
+(Row.id), so renaming a session or a folder never loses the membership. In memory the Tree still speaks paths and session
+names; `load` and `save` translate with the registry rows. Version 1 files (path -> name) are still read.
+
 Only the display layer reads this. `load` raises FoldersError for a file it cannot trust and nothing here ever writes
 over such a file, and adds every folder a path implies (「客戶/甲」 makes 「客戶」 real); `resolve` makes a tree agree with the sessions that really exist. Operations are pure edits of a
 Tree, applied atomically (a failed operation leaves the tree as it was); `edit` wraps load, operation and save in the
@@ -9,11 +13,13 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import ids as idmod
 from . import registry
 from .fsutil import PRIVATE_FILE, atomic_write
 
 FOLDERS_FILE = "folders.json"
-VERSION = 1
+VERSION = 2
+READABLE = (1, 2)
 Item = tuple[str, str]  # ("session", name) or ("folder", path)
 
 
@@ -33,6 +39,7 @@ class NameTaken(FoldersError):
 class Tree:
     folders: dict[str, bool] = field(default_factory=dict)  # full path -> collapsed
     sessions: dict[str, str] = field(default_factory=dict)  # session name -> folder path
+    ids: dict[str, str] = field(default_factory=dict, compare=False)  # folder path -> folder id (kept across renames)
 
 
 def name_problem(name):
@@ -70,11 +77,19 @@ def _levels(path):
 
 
 def _copy(tree):
-    return Tree(dict(tree.folders), dict(tree.sessions))
+    return Tree(dict(tree.folders), dict(tree.sessions), dict(tree.ids))
 
 
 def _assign(tree, other):
-    tree.folders, tree.sessions = other.folders, other.sessions
+    tree.folders, tree.sessions, tree.ids = other.folders, other.sessions, other.ids
+
+
+def _fill(tree):
+    """Every folder has an id; ids of folders that are gone are dropped."""
+    for p in tree.folders:
+        tree.ids.setdefault(p, idmod.new_id())
+    for p in [p for p in tree.ids if p not in tree.folders]:
+        del tree.ids[p]
 
 
 def _unreadable(why):
@@ -88,21 +103,14 @@ def _check_path(file, p):
             raise _unreadable(f"{file} 裡的路徑「{p}」不對：{problem}")
 
 
-def load(state_dir):
-    path = Path(state_dir) / FOLDERS_FILE
-    if not path.exists():
-        return Tree()
+def _registry_rows(state_dir):
     try:
-        data = json.loads(path.read_text())
-    except (OSError, ValueError) as e:  # ValueError covers bad JSON and bad UTF-8
-        raise _unreadable(f"{path}（{e}）") from e
-    if not isinstance(data, dict):
-        raise _unreadable(f"{path} 的內容不是物件")
-    if data.get("version") != VERSION:
-        raise _unreadable(f"{path} 是未知的版本 {data.get('version')!r}（只認得 {VERSION}）。不會覆蓋它")
-    raw_folders, raw_sessions = data.get("folders"), data.get("sessions")
-    if not isinstance(raw_folders, dict) or not isinstance(raw_sessions, dict):
-        raise _unreadable(f"{path} 的 folders 或 sessions 格式不對")
+        return registry.load_rows(Path(state_dir) / "registry.json")
+    except registry.RegistryError as e:
+        raise _unreadable(f"登記表讀不到（{e}）") from e
+
+
+def _load_v1(path, raw_folders, raw_sessions):
     tree = Tree()
     for p, meta in raw_folders.items():
         if not isinstance(meta, dict) or not isinstance(meta.get("collapsed", False), bool):
@@ -114,41 +122,126 @@ def load(state_dir):
             raise _unreadable(f"{path} 的 session「{name}」格式不對")
         _check_path(path, p)
         tree.sessions[name] = p
-    for p in list(tree.folders) + list(tree.sessions.values()):  # 「客戶/甲」 implies 「客戶」: make it real
-        _ensure(tree, p)
     return tree
 
 
-def save(state_dir, tree):
-    data = {"version": VERSION,
-            "folders": {p: {"collapsed": c} for p, c in tree.folders.items()},
-            "sessions": tree.sessions}
-    atomic_write(Path(state_dir) / FOLDERS_FILE, json.dumps(data, ensure_ascii=False, indent=1, sort_keys=True) + "\n",
-                 mode=PRIVATE_FILE)
+def _load_v2(path, raw_folders, raw_sessions, rows):
+    for fid, meta in raw_folders.items():
+        if (not isinstance(meta, dict) or not isinstance(meta.get("name"), str)
+                or not isinstance(meta.get("collapsed", False), bool)
+                or not (meta.get("parent") is None or meta["parent"] in raw_folders)):
+            raise _unreadable(f"{path} 的資料夾 {fid} 格式不對")
+        problem = name_problem(meta["name"])
+        if problem:
+            raise _unreadable(f"{path} 的資料夾 {fid}「{meta['name']}」不對：{problem}")
+    paths = {}
+
+    def path_of(fid):
+        if fid in paths:
+            return paths[fid]
+        chain, cur = [], fid
+        while cur is not None:
+            if cur in chain:
+                raise _unreadable(f"{path} 的資料夾 {fid} 繞成一圈")
+            chain.append(cur)
+            cur = raw_folders[cur].get("parent")
+        text = "/".join(raw_folders[c]["name"] for c in reversed(chain))
+        paths[fid] = text
+        return text
+
+    tree = Tree()
+    for fid, meta in raw_folders.items():
+        p = path_of(fid)
+        if p in tree.ids:
+            raise _unreadable(f"{path} 的資料夾「{p}」重複了")
+        tree.folders[p] = meta.get("collapsed", False)
+        tree.ids[p] = fid
+    if raw_sessions:
+        if rows is None:
+            rows = _registry_rows(Path(path).parent)
+        names = {r.id: r.tmux for r in rows if r.id}
+        for sid, fid in raw_sessions.items():
+            if not isinstance(fid, str) or fid not in raw_folders:
+                raise _unreadable(f"{path} 的 session {sid} 格式不對")
+            if sid in names:  # a session that no longer exists is dropped
+                tree.sessions[names[sid]] = path_of(fid)
+    return tree
+
+
+def load(state_dir, rows=None):
+    """The tree in state_dir/folders.json. rows (registry rows) turn session ids back into names; without them the
+    registry is read (read only, no lock) when the file needs it."""
+    path = Path(state_dir) / FOLDERS_FILE
+    if not path.exists():
+        return Tree()
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError) as e:  # ValueError covers bad JSON and bad UTF-8
+        raise _unreadable(f"{path}（{e}）") from e
+    if not isinstance(data, dict):
+        raise _unreadable(f"{path} 的內容不是物件")
+    if data.get("version") not in READABLE:
+        raise _unreadable(f"{path} 是未知的版本 {data.get('version')!r}（只認得 1、2）。不會覆蓋它")
+    raw_folders, raw_sessions = data.get("folders"), data.get("sessions")
+    if not isinstance(raw_folders, dict) or not isinstance(raw_sessions, dict):
+        raise _unreadable(f"{path} 的 folders 或 sessions 格式不對")
+    if data["version"] == 1:
+        tree = _load_v1(path, raw_folders, raw_sessions)
+    else:
+        tree = _load_v2(path, raw_folders, raw_sessions, rows)
+    for p in list(tree.folders) + list(tree.sessions.values()):  # 「客戶/甲」 implies 「客戶」: make it real
+        _ensure(tree, p)
+    _fill(tree)
+    return tree
+
+
+def save(state_dir, tree, rows=None):
+    """Write version 2, sessions keyed by Row.id (a session not in rows is not written). While a member session has no
+    id yet (a registry from before 0.15) the version 1 format is written unchanged, so no membership is lost."""
+    path = Path(state_dir) / FOLDERS_FILE
+    if rows is None:
+        rows = _registry_rows(state_dir)
+    by_name = {r.tmux: r for r in rows}
+    if any(n in by_name and not by_name[n].id for n in tree.sessions):
+        data = {"version": 1,
+                "folders": {p: {"collapsed": c} for p, c in tree.folders.items()},
+                "sessions": tree.sessions}
+    else:
+        _fill(tree)
+        data = {"version": VERSION,
+                "folders": {tree.ids[p]: {"name": basename(p), "parent": tree.ids.get(parent(p)) if parent(p) else None,
+                                          "collapsed": c} for p, c in tree.folders.items()},
+                "sessions": {by_name[n].id: tree.ids[p] for n, p in tree.sessions.items()
+                             if n in by_name and p and p in tree.ids}}
+    atomic_write(path, json.dumps(data, ensure_ascii=False, indent=1, sort_keys=True) + "\n", mode=PRIVATE_FILE)
 
 
 def resolve(tree, names):
     """A new tree that matches the sessions that exist: unknown sessions dropped, missing folders added."""
     names = set(names)
-    out = Tree(dict(tree.folders), {n: p for n, p in tree.sessions.items() if n in names and p})
+    out = Tree(dict(tree.folders), {n: p for n, p in tree.sessions.items() if n in names and p}, dict(tree.ids))
     for p in list(out.folders) + list(out.sessions.values()):
         for level in _levels(p):
             out.folders.setdefault(level, False)
+    _fill(out)
     return out
 
 
 def edit(state_dir, fn):
     """load, fn(tree) (edits in place), save, under the registry lock. Nothing is written if load or fn raises."""
     with registry.lock(state_dir):
-        tree = load(state_dir)
+        rows = _registry_rows(state_dir)  # read directly: the lock is already held
+        tree = load(state_dir, rows)
         result = fn(tree)
-        save(state_dir, tree)
+        save(state_dir, tree, rows)
         return result
 
 
 def _ensure(tree, path):
     for level in _levels(path):
-        tree.folders.setdefault(level, False)
+        if level not in tree.folders:
+            tree.folders[level] = False
+            tree.ids.setdefault(level, idmod.new_id())
 
 
 def add(tree, path):
@@ -166,6 +259,7 @@ def _relocate(tree, src, dst, merge):
         return
     if dst in tree.folders and not merge:
         raise NameTaken(basename(dst))
+    _fill(tree)
 
     def new(p):
         return dst + p[len(src):] if _inside(p, src) else p
@@ -174,7 +268,12 @@ def _relocate(tree, src, dst, merge):
     for p, c in tree.folders.items():
         if _inside(p, src):
             folders.setdefault(new(p), c)
+    moved = {p: i for p, i in tree.ids.items() if not _inside(p, src)}
+    for p, i in tree.ids.items():
+        if _inside(p, src):
+            moved.setdefault(new(p), i)  # an existing dst keeps its own id
     tree.folders = folders
+    tree.ids = moved
     tree.sessions = {n: new(p) for n, p in tree.sessions.items()}
     _ensure(tree, dst)
 
@@ -205,6 +304,7 @@ def remove(tree, path):
     for n, p in list(work.sessions.items()):
         if p == path:
             place_session(work, n, up)
+    work.ids.pop(path, None)
     del work.folders[path]  # before relocating: a child named like path may merge into path's own place
     for child in children:
         _relocate(work, child, join(up, basename(child)), True)

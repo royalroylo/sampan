@@ -17,7 +17,7 @@ from sampan.ui import (
     text_width,
 )
 from tests.fakes import FakeRunner, cp, pane_line
-from tests.helpers import make_env
+from tests.helpers import make_env, register
 from tests.test_ui_screen import LEFT, NOW, TICK, FakeScr, row
 
 HEADER = ["proj-a-handy（預覽）", "─" * 200, "執行中（idle）・claude・carol・context 93k", "~/Projects/proj-a/handy",
@@ -294,6 +294,7 @@ class LightsPreviewTest(unittest.TestCase):
         self.steps = []
         self.cfg.state_dir.mkdir(parents=True, exist_ok=True)
         (self.cfg.state_dir / "seen.json").write_text("{}")  # not the first 0.14 run: no bootstrap
+        register(self.cfg, "a", "b")
 
     def tick(self):
         self.t[0] += self.steps.pop(0) if self.steps else 1.0

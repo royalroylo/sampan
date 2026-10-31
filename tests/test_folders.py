@@ -4,8 +4,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from sampan import folders
+from sampan import folders, registry
 from sampan.folders import FoldersError, Tree
+from sampan.registry import Row
 
 
 def mk(folder_paths=(), sessions=None, collapsed=()):
@@ -25,16 +26,128 @@ class StoreTest(unittest.TestCase):
     def test_missing_file_is_empty_tree(self):
         self.assertEqual(folders.load(self.dir), Tree({}, {}))
 
+    def rows(self, *names, with_id=True):
+        return [Row(n, "claude", "p", "c-" + n, "/c", id=("id-" + n) if with_id else "") for n in names]
+
+    def write_registry(self, rows):
+        self.dir.mkdir(parents=True, exist_ok=True)
+        registry.write_rows(self.dir / "registry.json", rows, "t", self.dir / "history")
+        return registry.load_rows(self.dir / "registry.json")
+
     def test_save_load_round_trip_and_mode(self):
+        rows = self.rows("a1")
         tree = Tree({"客戶": False, "客戶/甲": True}, {"a1": "客戶/甲"})
-        folders.save(self.dir, tree)
-        self.assertEqual(folders.load(self.dir), tree)
+        folders.save(self.dir, tree, rows)
+        self.assertEqual(folders.load(self.dir, rows), tree)
         path = self.dir / folders.FOLDERS_FILE
         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
         data = json.loads(path.read_text())
-        self.assertEqual(data["version"], 1)
-        self.assertEqual(data["folders"]["客戶/甲"], {"collapsed": True})
+        self.assertEqual(data["version"], 2)
+        fid = tree.ids["客戶/甲"]
+        self.assertEqual(data["folders"][fid], {"name": "甲", "parent": tree.ids["客戶"], "collapsed": True})
+        self.assertEqual(data["folders"][tree.ids["客戶"]]["parent"], None)
+        self.assertEqual(data["sessions"], {"id-a1": fid})
         self.assertIn("客戶", path.read_text())  # not escaped
+        self.assertEqual(folders.load(self.dir, rows).ids, tree.ids)
+
+    def test_v1_file_loads_and_saves_as_v2_with_same_membership(self):
+        rows = self.write_registry(self.rows("a1", "b1", with_id=False))
+        self.put('{"version": 1, "folders": {"客戶/甲": {"collapsed": true}}, "sessions": {"a1": "客戶/甲", "b1": "客戶"}}')
+        tree = folders.load(self.dir)
+        self.assertEqual(tree.sessions, {"a1": "客戶/甲", "b1": "客戶"})
+        self.assertEqual(set(tree.ids), {"客戶", "客戶/甲"})
+        folders.save(self.dir, tree, rows)  # rows from the registry carry ids now
+        self.assertEqual(json.loads((self.dir / folders.FOLDERS_FILE).read_text())["version"], 2)
+        again = folders.load(self.dir)
+        self.assertEqual(again.sessions, tree.sessions)
+        self.assertEqual(again.folders, tree.folders)
+        self.assertEqual(again.ids, tree.ids)
+
+    def test_save_keeps_v1_when_rows_lack_ids(self):
+        rows = self.rows("a1", with_id=False)
+        folders.save(self.dir, Tree({"客戶": False}, {"a1": "客戶"}), rows)
+        data = json.loads((self.dir / folders.FOLDERS_FILE).read_text())
+        self.assertEqual(data, {"version": 1, "folders": {"客戶": {"collapsed": False}}, "sessions": {"a1": "客戶"}})
+        self.assertEqual(folders.load(self.dir, rows).sessions, {"a1": "客戶"})
+
+    def two_level(self):
+        rows = self.rows("a1", "b1")
+        tree = mk(["客戶", "客戶/甲", "開發"], {"a1": "客戶/甲", "b1": "開發"})
+        folders.save(self.dir, tree, rows)
+        return rows, (self.dir / folders.FOLDERS_FILE)
+
+    def records(self, path):
+        data = json.loads(path.read_text())
+        return data["folders"], data["sessions"]
+
+    def test_rename_folder_changes_one_record(self):
+        rows, path = self.two_level()
+        before_f, before_s = self.records(path)
+        tree = folders.load(self.dir, rows)
+        folders.rename(tree, "客戶", "大客戶")
+        folders.save(self.dir, tree, rows)
+        after_f, after_s = self.records(path)
+        changed = [k for k in after_f if after_f[k] != before_f[k]]
+        self.assertEqual(changed, [tree.ids["大客戶"]])
+        self.assertEqual(after_f[changed[0]]["name"], "大客戶")
+        self.assertEqual(after_f.keys(), before_f.keys())
+        self.assertEqual(after_s, before_s)
+
+    def test_move_folder_changes_only_parent(self):
+        rows, path = self.two_level()
+        before_f, before_s = self.records(path)
+        tree = folders.load(self.dir, rows)
+        folders.move(tree, [("folder", "客戶/甲")], "開發")
+        folders.save(self.dir, tree, rows)
+        after_f, after_s = self.records(path)
+        jia = tree.ids["開發/甲"]
+        self.assertEqual(jia, [k for k, v in before_f.items() if v["name"] == "甲"][0])
+        self.assertEqual(after_f[jia]["parent"], tree.ids["開發"])
+        self.assertEqual({k: v for k, v in after_f.items() if k != jia}, {k: v for k, v in before_f.items() if k != jia})
+        self.assertEqual({k: v for k, v in before_f[jia].items() if k != "parent"},
+                         {k: v for k, v in after_f[jia].items() if k != "parent"})
+        self.assertEqual(after_s, before_s)
+
+    def test_remove_folder_keeps_children_ids(self):
+        rows, path = self.two_level()
+        tree = folders.load(self.dir, rows)
+        jia, ke = tree.ids["客戶/甲"], tree.ids["客戶"]
+        folders.remove(tree, "客戶")
+        self.assertEqual(tree.ids["甲"], jia)
+        self.assertNotIn(ke, tree.ids.values())
+        folders.save(self.dir, tree, rows)
+        self.assertEqual(folders.load(self.dir, rows).ids["甲"], jia)
+
+    def test_session_rename_in_registry_keeps_folder(self):
+        rows = self.write_registry(self.rows("a1"))
+        folders.edit(self.dir, lambda t: folders.place_session(t, "a1", "客戶"))
+        rows = registry.load_rows(self.dir / "registry.json")
+        rows[0].tmux = "a2"
+        registry.write_rows(self.dir / "registry.json", rows, "t", self.dir / "history")
+        self.assertEqual(folders.load(self.dir).sessions, {"a2": "客戶"})
+
+    def test_unknown_session_id_dropped(self):
+        rows = self.rows("a1")
+        folders.save(self.dir, Tree({"客戶": False}, {"a1": "客戶"}), rows)
+        self.assertEqual(folders.load(self.dir, []).sessions, {})
+        self.assertEqual(folders.load(self.dir, []).folders, {"客戶": False})
+
+    def test_v3_refused_untouched(self):
+        text = '{"version": 3, "folders": {}, "sessions": {}}'
+        self.put(text)
+        with self.assertRaises(FoldersError):
+            folders.load(self.dir)
+        with self.assertRaises(FoldersError):
+            folders.edit(self.dir, lambda t: folders.add(t, "x"))
+        self.assertEqual((self.dir / folders.FOLDERS_FILE).read_text(), text)
+
+    def test_v2_bad_shape_refused(self):
+        for folders_part in ('{"f1": {"name": "a", "parent": "nope"}}',
+                             '{"f1": {"name": "a", "parent": "f2"}, "f2": {"name": "b", "parent": "f1"}}',
+                             '{"f1": {"name": "a/b", "parent": null}}',
+                             '{"f1": {"name": "a", "parent": null}, "f2": {"name": "a", "parent": null}}'):
+            self.assert_unreadable('{"version": 2, "folders": %s, "sessions": {}}' % folders_part)
+        self.assert_unreadable('{"version": 2, "folders": {}, "sessions": {"s": "zz"}}')
 
     def assert_unreadable(self, text):
         self.put(text)
@@ -53,7 +166,7 @@ class StoreTest(unittest.TestCase):
         self.assert_unreadable("")
 
     def test_load_bad_version(self):
-        self.assert_unreadable('{"version": 2, "folders": {}, "sessions": {}}')
+        self.assert_unreadable('{"version": 3, "folders": {}, "sessions": {}}')
 
     def test_load_bad_shape(self):
         self.assert_unreadable("[]")
@@ -76,6 +189,11 @@ class StoreTest(unittest.TestCase):
     def test_edit_saves_and_returns(self):
         self.assertEqual(folders.edit(self.dir, lambda t: (folders.add(t, "客戶/甲"), 7)[1]), 7)
         self.assertEqual(set(folders.load(self.dir).folders), {"客戶", "客戶/甲"})
+
+    def test_edit_reads_rows_without_taking_the_lock_twice(self):
+        self.write_registry(self.rows("a1"))
+        folders.edit(self.dir, lambda t: folders.place_session(t, "a1", "客戶"))
+        self.assertEqual(json.loads((self.dir / folders.FOLDERS_FILE).read_text())["sessions"].keys(), {"id-a1"})
 
     def test_edit_does_not_write_on_error(self):
         with self.assertRaises(FoldersError):

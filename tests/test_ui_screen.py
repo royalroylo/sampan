@@ -25,7 +25,7 @@ from sampan.ui import (
 from sampan.ui.render import _cell_text
 from sampan.ui.screen import ESC_SEQ_WAIT_MS, ESC_WAIT_MS
 from tests.fakes import FakeRunner, cp, pane_line, ps_line
-from tests.helpers import TOML, make_env, status_row
+from tests.helpers import TOML, make_env, register, status_row
 
 NOW = datetime(2026, 10, 20, 14, 17, tzinfo=timezone.utc)
 SID = "b5768af2-0000-4000-8000-000000000001"
@@ -966,6 +966,7 @@ class FolderScreenTest(unittest.TestCase):
         self.r = FakeRunner(strict=True).on(["tmux", "-u", "list-panes"], cp()).on(["tmux", "-u", "list-windows"], cp())
         self.rows = [row("a"), row("b", agent_status="busy"), row("c", state=State.STOPPED, agent_status="-"),
                      row("d")]
+        register(self.cfg, "a", "b", "c", "d")
 
     def tree(self, fn):
         self.F.edit(self.cfg.state_dir, fn)

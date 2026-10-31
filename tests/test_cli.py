@@ -10,7 +10,7 @@ from unittest import mock
 from sampan import cli
 from sampan.send import TERMINAL, Caller
 from tests.fakes import FakeRunner, cp, ps_line
-from tests.helpers import make_env
+from tests.helpers import make_env, register
 
 
 class CliTest(unittest.TestCase):
@@ -403,8 +403,9 @@ class CliTest(unittest.TestCase):
 
     def test_send_batch_folder_expands_to_sessions_under_it(self):
         from sampan import folders
-        folders.save(self.cfg.state_dir, folders.Tree({"客戶": False, "客戶/甲": False, "其他": False},
-                                                      {"b": "客戶/甲", "a": "客戶", "c": "其他"}))
+        register(self.cfg, "a", "b", "c")
+        folders.edit(self.cfg.state_dir, lambda t: [folders.place_session(t, n, p) for n, p in
+                                                    {"b": "客戶/甲", "a": "客戶", "c": "其他"}.items()])
         buf = io.StringIO()
         with mock.patch("sampan.send.cmd_send_batch", return_value=0) as cs, redirect_stdout(buf), \
                 mock.patch("sampan.runner.run", FakeRunner(strict=True)), \
