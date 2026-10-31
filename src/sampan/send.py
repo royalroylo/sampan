@@ -595,15 +595,6 @@ def _check(cfg, d, row, now, run=None):
         _check_raw(cfg, d, row, now, run)
         return
     reply = _reply(cfg, row, d.text)
-    idle = row.agent_status == "idle"  # Claude's reply.done only means "some assistant text exists"
-    if not idle:  # a mark is about two idle looks in a row: a busy look in between starts over
-        if reply.found or d.reason in (REASON_NOT_SEEN, REASON_NO_TEXT_YET, REASON_SENDING, REASON_NO_THREAD):
-            d.reason = ""
-        return
-    sent = parse_iso(d.sent_at)
-    grace = STARTUP_GRACE_S if d.startup else NOT_SEEN_GRACE_S
-    # the first look at a new session that has just come up never judges either
-    early = was_starting or (sent is not None and (now - sent).total_seconds() < grace)
     if reply.found and row.agent == "codex":
         # Codex: only the rollout says the turn is over; idle looks (the screen can be misread mid-turn) never do
         if reply.text and (reply.done or reply.closed):
@@ -617,6 +608,15 @@ def _check(cfg, d, row, now, run=None):
         else:  # no task_complete and no turn_aborted yet: still working
             d.reason = ""
         return
+    idle = row.agent_status == "idle"  # Claude's reply.done only means "some assistant text exists"
+    if not idle:  # a mark is about two idle looks in a row: a busy look in between starts over
+        if reply.found or d.reason in (REASON_NOT_SEEN, REASON_NO_TEXT_YET, REASON_SENDING, REASON_NO_THREAD):
+            d.reason = ""
+        return
+    sent = parse_iso(d.sent_at)
+    grace = STARTUP_GRACE_S if d.startup else NOT_SEEN_GRACE_S
+    # the first look at a new session that has just come up never judges either
+    early = was_starting or (sent is not None and (now - sent).total_seconds() < grace)
     if reply.found:
         if reply.text and (reply.done or reply.closed):
             _finish(d, "done", now, reply=reply.text)

@@ -580,9 +580,7 @@ class AdvanceCodexTest(Base):
 
         self.rollout(TID_C, [codex_item("t1", "UserMessage", d.text), codex_item("t1", "AgentMessage", "codex says", "final_answer"),
                              codex_done("t1", "codex says")])
-        self.assertEqual(self.advance(FakeRunner(strict=True), d.id, later(5)).state, "sent")  # still working
-        self.set_row("c", agent_status="idle")
-        d = self.advance(FakeRunner(strict=True), d.id, later(10))
+        d = self.advance(FakeRunner(strict=True), d.id, later(5))  # the rollout has task_complete: done whatever the screen says
         self.assertEqual((d.state, d.reply), ("done", "codex says"))
 
     def test_uses_the_current_thread_not_the_cached_one(self):  # Ruling 2
@@ -1013,6 +1011,22 @@ class StuckSentTest(Base):
                              codex_item("t1", "AgentMessage", "the final", "final_answer"), codex_done("t1", "the final")])
         d = self.advance(FakeRunner(strict=True), d.id, later(60))
         self.assertEqual((d.state, d.reply), ("done", "the final"))
+
+    def test_codex_task_complete_finishes_even_while_the_screen_reads_working(self):
+        d = self.sent("c")
+        self.rollout(TID_C, [codex_item("t1", "UserMessage", d.text), codex_item("t1", "AgentMessage", "the final", "final_answer"),
+                             codex_done("t1", "the final")])
+        self.set_row("c", agent_status="working")
+        d = self.advance(FakeRunner(strict=True), d.id, later(20))
+        self.assertEqual((d.state, d.reply), ("done", "the final"))
+
+    def test_codex_turn_aborted_fails_even_while_the_screen_reads_working(self):
+        d = self.sent("c")
+        self.rollout(TID_C, [codex_item("t1", "UserMessage", d.text),
+                             {"type": "event_msg", "payload": {"type": "turn_aborted", "turn_id": "t1"}}])
+        self.set_row("c", agent_status="working")
+        d = self.advance(FakeRunner(strict=True), d.id, later(20))
+        self.assertEqual((d.state, d.reason), ("failed", send.REASON_ABORTED))
 
     def test_codex_turn_aborted_fails_with_reason(self):
         d = self.sent("c")
