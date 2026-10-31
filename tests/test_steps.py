@@ -5,6 +5,7 @@ from pathlib import Path
 
 from sampan import steps
 from sampan.registry import Row
+from sampan.screens import ANSI_RE, claude_input_state
 from sampan.steps import RC_DISCONNECT, RcMenu, rc_menu, rc_reset, rc_step, rc_wanted
 from tests.helpers import make_env
 
@@ -30,6 +31,25 @@ DRAFT = ACTIVE.replace("❯\xa0\n", "❯\xa0half typed\n")
 OTHER_MENU = ACTIVE.split("────")[0] + "\n Some other dialog\n ❯ 1. Yes\n   2. No\n Enter to confirm · Esc to cancel\n"
 
 
+def _split(screen):
+    """(transcript, input box and below) of a fixture screen."""
+    head, tail = screen.split("────", 1)
+    return head, "────" + tail
+
+
+# a resumed conversation reset under the same alias on its previous launch: the old reset is in the scrollback
+OLD_RESET = RECONNECTED
+OLD_THEN_DISCONNECTED = (_split(RECONNECTED)[0] + "❯ /remote-control\n  ⎿  Remote Control disconnected.\n"
+                         + _split(DISCONNECTED)[1])
+OLD_THEN_RECONNECTED = (_split(OLD_THEN_DISCONNECTED)[0] + f"❯ /remote-control {ALIAS}\n"
+                        "  /remote-control is active · Continue here, on your phone, or at\n"
+                        "  https://claude.ai/code/session_XXXX\n" + _split(DISCONNECTED)[1])
+# the input box with Claude's dim placeholder (needs the escape codes to be told from typed text)
+PLACEHOLDER_BOX = "\n".join((Path(__file__).parent / "fixtures" / "claude_empty_placeholder.ansi")
+                            .read_text(encoding="utf-8").rstrip("\n").split("\n")[-6:]) + "\n"
+ACTIVE_PLACEHOLDER = _split(ACTIVE)[0].rstrip("\n").rsplit("\n", 1)[0] + "\n" + PLACEHOLDER_BOX
+
+
 class FakeTmux:
     """A pane whose screen changes as keys are sent. Each state is a screen or a list of screens: every capture takes
     the next one and the last one sticks (so a list models a screen that settles after a few polls)."""
@@ -39,6 +59,7 @@ class FakeTmux:
         self.after = [self._queue(s) for s in after]  # the state after each send_keys, in order
         self.sent = []
         self.captures = 0
+        self.escapes = []
 
     @staticmethod
     def _queue(s):
@@ -51,7 +72,9 @@ class FakeTmux:
 
     def capture(self, target, lines=30, escapes=False):
         self.captures += 1
-        return self.state.pop(0) if len(self.state) > 1 else self.state[0]
+        self.escapes.append(escapes)
+        screen = self.state.pop(0) if len(self.state) > 1 else self.state[0]
+        return screen if escapes else ANSI_RE.sub("", screen)
 
 
 class Sleeps(list):
@@ -116,8 +139,52 @@ class RcResetTest(unittest.TestCase):
 
     def test_rc_reset_blocked_prompt_does_nothing(self):
         tmux = FakeTmux(OTHER_MENU.replace("Some other dialog", "/remote-control is active"))
-        self.assertIsNotNone(self.reset(tmux))
+        self.assertEqual(self.reset(tmux), "找不到空的輸入框")
         self.assertEqual(tmux.sent, [])
+
+    def test_dim_placeholder_counts_as_empty(self):
+        self.assertEqual(claude_input_state(ACTIVE_PLACEHOLDER), "empty")
+        self.assertEqual(claude_input_state(ANSI_RE.sub("", ACTIVE_PLACEHOLDER)), "draft")  # why escapes are needed
+        tmux = FakeTmux(ACTIVE_PLACEHOLDER, [MENU_CONTINUE, MENU_QR, MENU_DISCONNECT, DISCONNECTED, RECONNECTED])
+        self.assertIsNone(self.reset(tmux))
+        self.assertEqual(tmux.sent, HAPPY_KEYS)
+        self.assertTrue(all(tmux.escapes))
+
+    def test_old_reset_with_same_alias_does_not_confirm_the_new_one(self):
+        tmux = FakeTmux(OLD_RESET, [MENU_CONTINUE, MENU_QR, MENU_DISCONNECT, OLD_THEN_DISCONNECTED,
+                                    OLD_THEN_DISCONNECTED])
+        self.assertEqual(self.reset(tmux, wait=2), "重新連線沒確認")
+        self.assertEqual(tmux.sent, HAPPY_KEYS)
+
+    def test_old_reset_with_same_alias_then_new_reconnect(self):
+        tmux = FakeTmux(OLD_RESET, [MENU_CONTINUE, MENU_QR, MENU_DISCONNECT, OLD_THEN_DISCONNECTED,
+                                    [OLD_THEN_DISCONNECTED, OLD_THEN_RECONNECTED]])
+        self.assertIsNone(self.reset(tmux))
+        self.assertEqual(tmux.sent, HAPPY_KEYS)
+
+    def test_old_active_in_scrollback_without_menu_escapes(self):
+        # resumed: the old "is active" line passes step 1 before the new bridge is up; no menu → Escape, no Enter
+        tmux = FakeTmux(OLD_RESET, [OLD_RESET])
+        self.assertEqual(self.reset(tmux), "選單沒出現")
+        self.assertEqual(tmux.sent, [["/remote-control", "Enter"], ["Escape"]])
+
+    def test_alias_ending_in_semicolon_is_sent_literally(self):
+        alias = "PM;"
+        done = RECONNECTED.replace(f"/remote-control {ALIAS}", f"/remote-control {alias}")
+        tmux = FakeTmux(ACTIVE, [MENU_CONTINUE, MENU_QR, MENU_DISCONNECT, DISCONNECTED, done])
+        self.assertIsNone(rc_reset(tmux, "%1", alias, sleep=self.sleep))
+        self.assertEqual(tmux.sent[-1], ["/remote-control PM\\;", "Enter"])  # tmux: a trailing \; is a literal ;
+
+    def test_tmux_error_with_the_menu_open_escapes(self):
+        class Flaky(FakeTmux):
+            def send_keys(self, target, *keys):
+                if keys == ("Up",):
+                    raise OSError("tmux gone")
+                super().send_keys(target, *keys)
+        tmux = Flaky(ACTIVE, [MENU_CONTINUE])
+        with self.assertRaises(OSError):
+            self.reset(tmux)
+        self.assertEqual(tmux.sent, [["/remote-control", "Enter"], ["Escape"]])
 
     def test_rc_reset_menu_never_shows_escapes(self):
         tmux = FakeTmux(ACTIVE, [ACTIVE])

@@ -73,7 +73,7 @@ def _wait(tmux, pane, pred, seconds, sleep):
     """Capture until pred(screen) holds, polling every POLL for at most `seconds`; the last screen that held, or None."""
     polls = int(seconds / POLL)
     for i in range(polls + 1):
-        screen = tmux.capture(pane)
+        screen = tmux.capture(pane, escapes=True)  # escapes: claude_input_state needs them; the rest uses _plain
         if pred(screen):
             return screen
         if i < polls:
@@ -98,10 +98,14 @@ def _disconnected(screen):
 
 
 def _reconnected(screen, alias):
-    """RC_ACTIVE after the last `❯ /remote-control <alias>` line (the alias may wrap onto the next lines)."""
+    """RC_ACTIVE after the last `❯ /remote-control <alias>` line (the alias may wrap onto the next lines), and that line
+    after our disconnect (the last `❯ /remote-control` and RC_DISCONNECTED): a resumed transcript may hold an earlier
+    reset under the same alias."""
     lines = _plain(screen)
     cmd = _last(lines, lambda ln: ln.strip().startswith(f"❯ {RC_COMMAND} "))
-    if cmd is None:
+    marks = (_last(lines, lambda ln: ln.strip() == f"❯ {RC_COMMAND}"), _last(lines, lambda ln: RC_DISCONNECTED in ln))
+    ours = max((i for i in marks if i is not None), default=-1)
+    if cmd is None or cmd < ours:
         return False
     active = next((i for i in range(cmd + 1, len(lines)) if RC_ACTIVE in lines[i]), None)
     if active is None:
@@ -113,7 +117,7 @@ def _reconnected(screen, alias):
 def rc_reset(tmux, pane, alias, *, sleep, wait=RC_WAIT):
     """Disconnect Remote Control and reconnect it as `alias`. None when done, else why it was not (nothing pressed
     blindly: a step that does not see what it expects presses Escape if a menu may be open, and stops)."""
-    screen = _wait(tmux, pane, lambda s: RC_ACTIVE in s, wait, sleep)
+    screen = _wait(tmux, pane, lambda s: any(RC_ACTIVE in ln for ln in _plain(s)), wait, sleep)
     if screen is None:
         return "沒看到 Remote Control 連上"
     state = claude_input_state(screen)
@@ -122,27 +126,54 @@ def rc_reset(tmux, pane, alias, *, sleep, wait=RC_WAIT):
     if state != "empty":
         return "找不到空的輸入框"
     tmux.send_keys(pane, RC_COMMAND, "Enter")
+    try:
+        reason = _to_disconnect(tmux, pane, sleep)
+    except Exception:
+        _escape(tmux, pane)  # the menu may be open: leave the pane as it was, best effort
+        raise
+    if reason is not None:
+        return reason
+    if _wait(tmux, pane, _disconnected, MENU_WAIT, sleep) is None:
+        return "沒看到斷開"
+    tmux.send_keys(pane, _tmux_literal(f"{RC_COMMAND} {alias}"), "Enter")
+    if _wait(tmux, pane, lambda s: _reconnected(s, alias), wait, sleep) is None:
+        return "重新連線沒確認"
+    return None
+
+
+def _escape(tmux, pane):
+    try:
+        tmux.send_keys(pane, "Escape")
+    except Exception:
+        pass
+
+
+def _tmux_literal(text):
+    """tmux takes an argument ending in `;` as a command separator; `\\;` at the end is a literal `;`."""
+    return text[:-1] + "\\;" if text.endswith(";") else text
+
+
+def _to_disconnect(tmux, pane, sleep):
+    """Steps 3-4: wait for the menu, move the cursor to Disconnect and press Enter. None once Enter is pressed, else
+    the reason (Escape already sent)."""
     screen = _wait(tmux, pane, lambda s: rc_menu(s) is not None, MENU_WAIT, sleep)
     if screen is None:
         tmux.send_keys(pane, "Escape")
         return "選單沒出現"
     menu = rc_menu(screen)
     ups = 0
+    # a redraw slower than MOVE_WAIT may let a second Up queue behind the first, and the Enter then lands on another
+    # option: harmless (it only closes the menu), and step 5 reports it
     while menu is not None and not _on_disconnect(menu) and ups < MAX_UPS:
         tmux.send_keys(pane, "Up")
         ups += 1
         before = menu.cursor
         screen = _wait(tmux, pane, lambda s: (m := rc_menu(s)) is None or m.cursor != before, MOVE_WAIT, sleep)
-        menu = rc_menu(screen if screen is not None else tmux.capture(pane))
+        menu = rc_menu(screen if screen is not None else tmux.capture(pane, escapes=True))
     if menu is None or not _on_disconnect(menu):
         tmux.send_keys(pane, "Escape")
         return "游標沒到 Disconnect"
     tmux.send_keys(pane, "Enter")
-    if _wait(tmux, pane, _disconnected, MENU_WAIT, sleep) is None:
-        return "沒看到斷開"
-    tmux.send_keys(pane, f"{RC_COMMAND} {alias}", "Enter")
-    if _wait(tmux, pane, lambda s: _reconnected(s, alias), wait, sleep) is None:
-        return "重新連線沒確認"
     return None
 
 
