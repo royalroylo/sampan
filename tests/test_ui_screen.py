@@ -1135,8 +1135,17 @@ class EscapeKeyTest(unittest.TestCase):
         self.assertIsNone(s.key())
         self.assertEqual(self.scr.keys, [])
 
-    def test_gap_after_a_lone_esc_is_still_a_lone_esc(self):
-        self.assertEqual(self.pick(["KEY_DOWN", "\x1b", Gap(300), "A"]), ("adopt", []))  # Esc ignored, then A
+    def test_gap_right_after_the_esc_still_reads_the_arrow(self):
+        # ESC, 300 ms of nothing (a lone Esc, ignored), then "[" "A": the rest of the arrow, never adopt
+        self.assertEqual(self.pick(["KEY_DOWN", "\x1b", Gap(300), "[", "A", "\n"]), ("attach", ["a"]))
+        self.assertEqual(self.pick(["KEY_DOWN", "[", Gap(300), "A", "\n"]), ("attach", ["a"]))
+        self.assertEqual(self.pick(["KEY_DOWN", "[", TICK, "A"]), ("adopt", []))  # the sequence timed out: dropped
+
+    def test_bracket_is_text_while_searching(self):
+        self.scr = FakeScr(["/", "[", "\x1b", "q"])
+        s = CursesScreen(self.scr, self.cfg, FakeRunner(), now_fn=lambda: NOW)
+        self.assertEqual(s.pick([row("a"), row("b[1]")], None), ("quit", []))
+        self.assertTrue(any("/[" in "\n".join(scr) for scr in self.scr.screens))
 
     def test_q_quits(self):
         self.assertEqual(self.pick(["q"]), ("quit", []))

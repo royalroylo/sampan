@@ -282,9 +282,19 @@ class CursesScreen:
             if first not in ("[", "O"):  # Esc then another key: Esc, and that key comes next
                 self._pushed.append(first)
                 return "\x1b"
-            seq = first
+            return self._sequence(first)
+        finally:
             if set_timeout is not None:
-                set_timeout(ESC_SEQ_WAIT_MS)  # a sequence has begun: a slow link may still be bringing the rest
+                set_timeout(self._timeout_ms)
+
+    def _sequence(self, first):
+        """The rest of an escape sequence that began with first ("[" or "O"), each further byte waited for up to
+        ESC_SEQ_WAIT_MS: its KEY_ name, or None (unknown, or its final byte never came: dropped whole)."""
+        set_timeout = getattr(self.scr, "timeout", None)
+        if set_timeout is not None:
+            set_timeout(ESC_SEQ_WAIT_MS)  # a sequence has begun: a slow link may still be bringing the rest
+        try:
+            seq = first
             while len(seq) < 16:
                 ch = self._read()
                 if ch is None or len(ch) != 1:  # cut short: drop what came (an unknown key name is dropped too)
@@ -296,6 +306,15 @@ class CursesScreen:
         finally:
             if set_timeout is not None:
                 set_timeout(self._timeout_ms)
+
+    def _list_key(self, picker):
+        """The next key on the main list. "[" is no key there, so a "[" outside search is the rest of an escape
+        sequence whose Esc came too long before it (and was taken as a lone Esc): read on and map it or drop it
+        whole, so its last byte (e.g. "A", adopt) never runs as a command."""
+        k = self.key()
+        if k == "[" and picker.query is None:
+            return self._sequence("[")
+        return k
 
     def out(self, line=""):
         self.messages += str(line).split("\n")
@@ -648,7 +667,7 @@ class CursesScreen:
                 picker.width = self.scr.getmaxyx()[1] - 2  # draw()'s width less the prompt row's leading space
                 self.prompt = picker.prompt
                 self.draw()
-                k = self.key()
+                k = self._list_key(picker)
                 tick = k is None
                 if tick:
                     if self.updater is not None:
