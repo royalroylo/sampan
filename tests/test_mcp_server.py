@@ -1138,11 +1138,13 @@ class SendBatchToolTest(Base):
                               now=NOW, status_fn=self.status_fn)
         [d] = b.items
         with mock.patch.object(send, "_reply", lambda cfg, row, text: send.Reply(True, True, "答")):
-            c = self.serve(Client([init(1), call(2, "dispatch_result", {"id": b.id}),
-                                   call(3, "dispatch_result", {"id": b.id})]), run=tmux_runner())
-        self.assertEqual(tool_json(c.response(2)), {"batch": b.id, "items": [
+            # The server runs every tools/call in its own thread, so two calls on one pipe may run in either order.
+            # Each call that advances the batch must therefore be its own session, to make "first sent, then done" fixed.
+            first = self.serve(Client([init(1), call(2, "dispatch_result", {"id": b.id})]), run=tmux_runner())
+            second = self.serve(Client([init(1), call(3, "dispatch_result", {"id": b.id})]), run=tmux_runner())
+        self.assertEqual(tool_json(first.response(2)), {"batch": b.id, "items": [
             {"session": "d", "dispatch": d.id, "state": "sent"}], "skipped": 1})
-        self.assertEqual(tool_json(c.response(3)), {"batch": b.id, "items": [
+        self.assertEqual(tool_json(second.response(3)), {"batch": b.id, "items": [
             {"session": "d", "dispatch": d.id, "state": "done", "reply": "答"}], "skipped": 1})
         self.assertFalse(self.dispatches()[0].notify)  # the whole batch was reported: no notice
 
