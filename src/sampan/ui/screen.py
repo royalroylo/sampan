@@ -25,6 +25,7 @@ from .dispatch_watch import LIST_HELP as DISPATCH_HELP
 from .dispatch_watch import LIST_TITLE as DISPATCH_TITLE
 from .dispatch_watch import DispatchPicker, dispatch_cells, dispatch_cols, dispatch_summary
 from .folder_actions import save_collapsed
+from .help import help_frame
 from .plugin_actions import (
     add_flow,
     disabled_lines,
@@ -76,7 +77,7 @@ ARROW_ENDS = "ABCDHF"  # the final bytes of ↑↓→←, Home, End
 ESCAPES = {"[A": "KEY_UP", "[B": "KEY_DOWN", "[C": "KEY_RIGHT", "[D": "KEY_LEFT", "OA": "KEY_UP", "OB": "KEY_DOWN",
            "OC": "KEY_RIGHT", "OD": "KEY_LEFT", "[H": "KEY_HOME", "[F": "KEY_END", "OH": "KEY_HOME", "OF": "KEY_END",
            "[1~": "KEY_HOME", "[4~": "KEY_END", "[7~": "KEY_HOME", "[8~": "KEY_END"}
-KEYS_HELP = "/ 找　Tab 篩選　! 等人　v 預覽　* 全選　空白 勾選　s 停　S 重開　g 包　f 搬　n 新　D 派工　t 送　p 外掛　o 帳號　q 退"
+KEYS_HELP = "? 說明　/ 找　Tab 篩選　! 等人　* 全選　空白 勾選　s 停　S 重開　g 包　f 搬　n 新　D 派工　t 送　p 外掛　o 帳號　q 退"
 RESTORE_HELP = "↑↓ 移動　空白 勾選　Enter 確認接回　q 取消"
 ADOPT_HELP = "↑↓ 移動　空白 勾選　Enter 確認接手　q 取消"
 PLUGINS_HELP = "↑↓ 移動　1-9 跳列　/ 搜尋　Enter 選 profile　u 更新這個　U 全部更新　a 新增　r 檢查新版　q 返回　Tab 切到來源"
@@ -723,6 +724,9 @@ class CursesScreen:
                     continue
                 action = picker.key(k)
                 self.last_filter = picker.filter
+                if action is not None and action[0] == "help":
+                    self._help_page()
+                    continue
                 if action is not None and action[0] == "preview":
                     self.preview_on = not self.preview_on
                     if self.cfg is not None:
@@ -749,6 +753,14 @@ class CursesScreen:
             self.prompt = None
             self.view = dict(self.view, preview=None, notice=None)
             self._timeout(-1)
+
+    def _help_page(self):
+        """The ? page until any key (the list's ticks only redraw it, so a resize shows at the new size)."""
+        while True:
+            h, w = self.scr.getmaxyx()
+            self._paint(help_frame(w, h))
+            if self.key() is not None:
+                return
 
     def checklist(self, cands, *, title, help, cells, ident, card, cols):
         box = Checklist(cands, ident)

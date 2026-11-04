@@ -283,7 +283,7 @@ class ScreenTest(unittest.TestCase):
         self.assertIn("› 異常（0）", scr.screens[5][0])
         self.assertIn("沒有異常的 session", "\n".join(scr.screens[5]))
         self.assertIn("Tab 篩選　! 等人", KEYS_HELP)
-        self.assertIn("v 預覽", KEYS_HELP)
+        self.assertIn("? 說明", KEYS_HELP)  # v 預覽 moved to the ? page to make room
         self.assertIn("* 全選　空白 勾選", KEYS_HELP)  # marking keys stay listed (batch sends use the marks)
         self.assertIn("D 派工　t 送", KEYS_HELP)
         from sampan.ui.text import text_width

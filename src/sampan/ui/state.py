@@ -432,6 +432,8 @@ class Picker:
             return ("profiles", [])
         if k == "D":
             return ("dispatches", [])
+        if k == "?":
+            return ("help", [])
         if k == "/":
             self._start_search()
             return None

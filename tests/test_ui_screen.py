@@ -22,8 +22,9 @@ from sampan.ui import (
     show_state,
     text_width,
 )
+from sampan.ui.help import KEY_GROUPS, help_frame
 from sampan.ui.render import _cell_text
-from sampan.ui.screen import ESC_SEQ_WAIT_MS, ESC_WAIT_MS, LIST_BRACKET_WAIT_S
+from sampan.ui.screen import ESC_SEQ_WAIT_MS, ESC_WAIT_MS, KEYS_HELP, LIST_BRACKET_WAIT_S
 from tests.fakes import FakeRunner, cp, pane_line, ps_line
 from tests.helpers import TOML, make_env, register, status_row
 
@@ -550,7 +551,7 @@ class ListSearchScreenTest(unittest.TestCase):
     def test_help_mentions_jump_and_search(self):
         s = self.screen(["q"])
         s.pick([row("a")], None)
-        self.assertIn("/ 找　Tab 篩選　! 等人　v 預覽　* 全選　空白 勾選", self.scr.screens[0][-1])
+        self.assertIn("? 說明　/ 找　Tab 篩選　! 等人　* 全選　空白 勾選", self.scr.screens[0][-1])
 
 
 class CursesUiTest(unittest.TestCase):
@@ -1128,6 +1129,62 @@ class KeysWrapTest(unittest.TestCase):
         from sampan.ui.render import _card_rows
         rows = [r[0][0].rstrip() for r in _card_rows([Keys("x" * 25)], 10)]
         self.assertEqual(rows, ["x" * 10, "x" * 10, "x" * 5])
+
+
+class HelpPageTest(unittest.TestCase):
+    def setUp(self):
+        self.cfg = make_env(Path(tempfile.mkdtemp()))
+
+    def test_question_mark_shows_every_key_and_any_key_goes_back(self):
+        self.scr = FakeScr(["?", TICK, "x", "q"], h=45)
+        s = CursesScreen(self.scr, self.cfg, FakeRunner(), now_fn=lambda: NOW)
+        self.assertEqual(s.pick([row("a"), row("b")], None), ("quit", []))  # x on the page is not a command
+        page = next(scr for scr in self.scr.screens if "sampan 按鍵說明" in scr[0])
+        text = "\n".join(page)
+        for group, keys in KEY_GROUPS:
+            self.assertIn(group, text)
+            for _k, desc in keys:
+                self.assertIn(desc, text)
+        self.assertIn("按任意鍵回到清單", page[-1])
+        self.assertIn("? 說明", self.scr.screens[-1][-1])  # back on the list
+
+    def test_question_mark_is_text_while_searching(self):
+        self.scr = FakeScr(["/", "?", "\x1b", "q"])
+        s = CursesScreen(self.scr, self.cfg, FakeRunner(), now_fn=lambda: NOW)
+        self.assertEqual(s.pick([row("a")], None), ("quit", []))
+        self.assertFalse(any("sampan 按鍵說明" in scr[0] for scr in self.scr.screens))
+        self.assertTrue(any("/?" in "\n".join(scr) for scr in self.scr.screens))
+
+    def test_every_listed_key_does_something_on_the_list(self):
+        from sampan.ui.state import Picker
+        from tests.test_ui import row as list_row
+        singles = {k for _g, keys in KEY_GROUPS for k, _d in keys if len(k) == 1 and k not in "←"}
+        for k in sorted(singles):
+            p = Picker([list_row("a"), list_row("b")], None)
+            before = (p.cursor, set(p.marked), p.query, p.filter_name, p._stop, p._restart)
+            res = p.key(k)
+            after = (p.cursor, set(p.marked), p.query, p.filter_name, p._stop, p._restart)
+            self.assertTrue(res is not None or before != after, f"{k} does nothing")
+
+    def test_footer_keys_are_all_on_the_page(self):
+        listed = {k for _g, keys in KEY_GROUPS for k, _d in keys}
+        for item in KEYS_HELP.split("　"):
+            key = item.split(" ")[0]
+            self.assertTrue(any(key == k or key in k.split("／") for k in listed), item)
+
+    def test_small_screens(self):
+        def text(frame):
+            return ["".join(t for t, _s in r) for r in frame]
+        wide = text(help_frame(160, 30))  # too short for one column: two, and all of it fits
+        self.assertEqual(len(wide), 30)
+        self.assertTrue(any("移動與選取" in r and "資料夾" in r for r in wide))
+        self.assertNotIn("沒有全部列出", wide[-1])
+        narrow = text(help_frame(80, 30))  # no room for two columns: what fits, and it says so
+        self.assertIn("沒有全部列出", narrow[-1])
+        tiny = text(help_frame(40, 10))
+        self.assertIn("沒有全部", tiny[-1])
+        self.assertEqual(len(tiny), 10)
+        self.assertTrue(all(text_width(r) <= 39 for r in tiny))
 
 
 class EscapeKeyTest(unittest.TestCase):
