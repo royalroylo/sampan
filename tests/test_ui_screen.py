@@ -1179,6 +1179,7 @@ class HelpPageTest(unittest.TestCase):
         self.assertEqual(len(wide), 30)
         self.assertTrue(any("移動與選取" in r and "資料夾" in r for r in wide))
         self.assertNotIn("沒有全部列出", wide[-1])
+        self.assertNotIn("沒有全部列出", text(help_frame(120, 30))[-1])  # a 120-column terminal gets two columns
         narrow = text(help_frame(80, 30))  # no room for two columns: what fits, and it says so
         self.assertIn("沒有全部列出", narrow[-1])
         tiny = text(help_frame(40, 10))
