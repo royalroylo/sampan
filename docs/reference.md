@@ -9,7 +9,7 @@
 | 欄位 | 說明 |
 |---|---|
 | `version` | 整數，必須是 `1` |
-| `[restore] recent_days` | 非負整數，預設 7；`restore` 預設只勾選最近幾天有動過的 |
+| `[restore] recent_days` | 非負整數，預設 7；`restore` 預設只勾選最近幾天有動過的（重開機或 tmux server 被關掉之後改勾「最後一次存檔時在跑的」） |
 | `[ui] start_dir` | 字串路徑，`n`（開新工作）的選目錄畫面從這裡開始；沒寫時用 `~/Projects`（存在的話），否則 `~` |
 | `[ui] detach_key` | 字串，預設 `"C-q"`。在 sampan 管的 session 裡按這個鍵就跳回 sampan：從 tmux 外接上的會 detach，sampan 在 tmux 裡切過去的會切回原本的 session；其他 tmux session 裡這個鍵照常傳給程式。sampan 打開畫面與接上 session 前把綁定寫進正在跑的 tmux（不改 `~/.tmux.conf`），並在它管的 session 設 `@sampan` 標記；你自己已經把這個鍵綁成別的，sampan 不覆蓋，`sampan doctor` 會提示。`""` 不綁（並拿掉 sampan 之前綁的）。限制：在 `sampan` 畫面外（例如 `sampan new` 後直接 `tmux attach`）開的 session，要等 `sampan` 畫面下次打開或做完一個動作才有標記；從 tmux 外接上後自己切過別的 session（`Ctrl-b s`），Ctrl-q 會切回上一個 session 而不是 detach |
 | `[ui] codex_auto_start` | 布林，預設 `true`。打開 `sampan` 畫面時若 Codex 常駐服務沒在執行，就在背景跑一次 `codex remote-control start`；`false` 不啟動 |

@@ -35,7 +35,7 @@
 | 暫時收起來（省記憶體、清畫面） | `s`（空白鍵可勾多個） | 在畫面底部問確定；agent 正常結束，tmux 也一起關掉。對話保留，之後 Enter 或 `R` 接回 |
 | 重開（停掉再接回同一段對話，不進去） | `S`（空白鍵可勾多個；在資料夾列上是底下全部） | 畫面底部列出會重開的和略過的（`將重開：A、B　略過：C（忙）　確定？(y/N)`），按 y 開始。閒著的正常結束後在背景接回；正在回答中的、sampan 自己所在的 pane、retired 的略過並在最後列出原因。已停止的只有在它那一列（或勾了它）按 `S` 時才在背景接回，只經由資料夾列選到的已停止 session 維持停止。確認行太長時名單會縮短成前幾個加「等 n 個」，`確定？(y/N)` 一定看得到。記在 `actions.log`（`[重開]`） |
 | 整理成資料夾 | `g` 包成新資料夾、`f` 搬進資料夾；資料夾列上 Enter 收合／展開、`e` 改名、`X` 刪除 | 只改 `folders.json`，不動任何 session，見下面「資料夾」 |
-| 一次接回好幾個 | `R` | 勾選清單（預設勾最近 7 天有動過的），接回後進到第一個 |
+| 一次接回好幾個 | `R` | 勾選清單（重開機或 tmux server 被關掉之後，預設勾「最後一次存檔時在跑的」；其他時候預設勾最近 7 天有動過的），接回後進到第一個 |
 | 把 tmux 外的終端機（任何終端機程式）裡的 Claude 收進來 | `A` | 勾選要接手的，逐一取名；你自己在原本那個終端機分頁打 `/exit`，sampan 等它結束後在 tmux 接回同一段對話，然後進去 |
 | 改名 | `e` | tmux 與登記表一起改，agent 照常跑；id 與資料夾歸屬不變 |
 | 設別名 | `L` | 設（或清掉）這個 session 的別名；不動 tmux、不動 id，下次啟動時才套用到 Claude 的名稱與 Remote Control |
@@ -205,7 +205,7 @@ Claude Code 只在狀態列指令的輸入裡提供 5h／週額度，所以要�
 | 開新的工作視窗 | `sampan new <名稱> <claude:profile｜profile｜codex> <目錄>`（名稱不要用 `.`、`:`、換行或控制字元，也不能是「終端機」或以「未登記的 session」開頭；`rename`、`adopt` 同規則） |
 | 以某個帳號開 claude／開 codex | `sampan claude [profile] [claude 參數…]`（不帶 profile 會列選單；第一個字不是 profile 也不是 `-` 開頭會報錯，不會當成提示詞送出）、`sampan codex` |
 | 存下目前每個 session 的對話 id | `sampan save`（排程每 5 分鐘也會跑） |
-| 讓 agent 正常結束（先收起來，要用時再 restore） | `sampan stop [名稱…] [--profile <p>] [--force] [--keep-tmux]`：結束後若那個 tmux session 只剩這一個 pane，就一起關掉；有其他視窗或 pane 則保留 |
+| 讓 agent 正常結束（先收起來，要用時再 restore） | `sampan stop [名稱…] [--profile <p>] [--force] [--keep-tmux] [-v]`：結束後若那個 tmux session 只剩這一個 pane，就一起關掉；有其他視窗或 pane 則保留。停之前會先存檔，已停止的只給數量（`存檔：已停止 7（-v 看清單）`），警告照樣全部列出；`-v` 列出每一個 |
 | 重開指定的 session | `sampan restart <名稱…>`：閒置的先停再背景接回原對話（不會把你帶進去），已停止的直接接回；忙碌中的、sampan 自己所在的 pane、retired 的略過，並在最後列出名稱與原因。全部都不能重開時回傳 1 |
 | 重開機後接回 | `sampan restore [名稱…] [--all] [--dry-run]` |
 | 接手在 tmux 外（例如終端機程式的分頁）跑的 claude／codex | `sampan adopt [--dry-run]`（或 ui 按 A）：列出 tmux 外的 claude／codex（目錄、最後活動、最後一句話），勾選後逐一問 session 名稱；你自己在原視窗 `/exit`（Codex：`/quit`），sampan 等它結束後才在新的 tmux session 接回同一段對話並登記。sampan 不對原視窗按任何鍵；判斷不出對話 id 或 profile 的不能選（Codex：新開的要先送出第一個 prompt、剛 `codex resume` 的要先送一則訊息，sampan 才認得出是哪段對話） |
@@ -304,7 +304,7 @@ session 可以放進資料夾（多層用 `/`，例如 `客戶/甲`）。資料�
 `sampan restore` 是整個工具裡最保守的一步：
 
 - **不會自動執行**：沒有任何排程或 hook 會呼叫它，只有你手動下指令。
-- **逐一確認**：先列出可接回的 session，預設勾選的是「active 而且最近 `recent_days` 天內有動過」的；retired 與太久沒動的不勾。`--all` 勾選全部可接回的，仍會先確認。
+- **逐一確認**：先列出可接回的 session。最後一次存檔時的 tmux server 已經不在（重開機、server 被關掉）時，預設勾選「那次存檔時在跑的」；server 還是同一個、或沒有存檔紀錄時，預設勾選「active 而且最近 `recent_days` 天內有動過」的。標題會寫用的是哪一條。retired 與太久沒動的不勾。`--all` 勾選全部可接回的，仍會先確認。沒有終端機時（腳本、agent 的 shell）：帶名稱就直接接回，不帶名稱會報錯（結束碼 2）。`sampan stop` 停完會再存一次檔，所以還有別的在跑時刻意停掉的不會被當成「在跑」；全部都停掉再重開機時，它們就是最後在跑的那批，會被勾選。
 - **一個一個接**，每個都用原對話：`claude --resume <id>`、`codex resume <id>`。
 - **不送任何訊息**，也不在提示畫面替你按任何東西：停在啟動提示時，只有在 `sampan` 畫面或互動終端機裡由你選了選項，才送那一個選項（見「常見情境」）；信任提示只有 `sampan move` 在路徑完全相等時才會自動按。沿用既有的 shell pane 時，只會先送一個 `C-u` 清掉那一行還沒送出的輸入，再打接回指令。
 - 確認時直接按 Enter（或輸入 `y`）接回預設勾選的；輸入編號改選；`q` 取消。

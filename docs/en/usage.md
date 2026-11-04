@@ -41,7 +41,7 @@ list. Press `q` to quit (a lone Esc on the list does not quit).
 | Put one away (free memory, clear the screen) | `s` (space checks several) | Asks to confirm at the bottom of the screen; the agent exits normally and tmux closes too. The conversation is kept; resume with Enter or `R` |
 | Restart (stop, then resume the same conversation, without going in) | `S` (space checks several; on a folder row, everything under it) | The bottom of the screen lists what will restart and what is skipped (`將重開：A、B　略過：C（忙）　確定？(y/N)`); y starts it. Idle ones exit normally and are resumed in the background; busy ones, the pane sampan itself runs in and retired ones are skipped and listed with their reason at the end. A stopped one is resumed in the background only when `S` is pressed on its own row (or it is checked); stopped ones reached only through a folder row stay stopped. A confirm line too long for the screen shortens its lists to the first few and 「等 n 個」, so `確定？(y/N)` always shows. Logged in `actions.log` (`[重開]`) |
 | Organise into folders | `g` wraps into a new folder, `f` moves into a folder; on a folder row Enter folds / unfolds, `e` renames, `X` deletes | Only `folders.json` changes, no session is touched; see "Folders" below |
-| Resume several at once | `R` | Checklist (pre-checked: active in the last 7 days); after resuming, takes you into the first one |
+| Resume several at once | `R` | Checklist (after a reboot or a killed tmux server, pre-checked are the ones running at the last save; otherwise those active in the last 7 days); after resuming, takes you into the first one |
 | Bring Claude agents running outside tmux (in any terminal program) into tmux | `A` | Pick which, name each; you type `/exit` in the original terminal, sampan waits, then resumes the same conversation in tmux and takes you in |
 | Rename | `e` | tmux and registry together; the agent keeps running; id and folder are unchanged |
 | Set an alias | `L` | Sets (or clears) the session's alias; touches neither tmux nor the id, and applies to Claude's name and Remote Control at the next launch |
@@ -240,7 +240,7 @@ Every action also has a command, for scripts or when you prefer typing commands 
 | New session | `sampan new <name> <claude:profile｜profile｜codex> <dir>` (no `.`, `:`, newline or control character in the name, and not 「終端機」 or starting with 「未登記的 session」; `rename` and `adopt` follow the same rule) |
 | Open claude / codex with an account | `sampan claude [profile] [claude args…]` (without a profile it lists a menu; a first word that is neither a profile nor starts with `-` is an error, not sent as a prompt), `sampan codex` |
 | Record each session's conversation id | `sampan save` (the schedule also runs it every 5 minutes) |
-| End agents normally (put away; `restore` brings them back) | `sampan stop [name…] [--profile <p>] [--force] [--keep-tmux]`: afterwards, if that tmux session has only this one pane left, it is closed too; with other windows or panes it is kept |
+| End agents normally (put away; `restore` brings them back) | `sampan stop [name…] [--profile <p>] [--force] [--keep-tmux] [-v]`: (the save it runs first gives the stopped sessions as one count line and warnings in full; `-v` lists each one) afterwards, if that tmux session has only this one pane left, it is closed too; with other windows or panes it is kept |
 | Restart named sessions | `sampan restart <name…>`: idle ones are stopped and then reattached to the same conversation in the background (you are not taken into them); stopped ones are just reattached. Busy ones, the pane sampan itself runs in and retired ones are skipped and listed with their reason at the end. Exits 1 when nothing could be restarted |
 | Resume after a reboot | `sampan restore [name…] [--all] [--dry-run]` |
 | Adopt claude / codex running outside tmux (e.g. a terminal program's tab) | `sampan adopt [--dry-run]` (or `A` in the ui): lists claude / codex outside tmux (directory, last activity, last message), you check some and name each; you type `/exit` (Codex: `/quit`) in the original window, and only after it ends does sampan resume the same conversation in a new tmux session and register it. sampan presses no key in the original window; ones whose conversation id or profile cannot be determined cannot be picked (Codex: send the first prompt in a new one, or one message after `codex resume`, so sampan can tell which conversation it is) |
@@ -339,8 +339,13 @@ Sessions can be put in folders (levels separated by `/`, such as `客戶/甲`). 
 `sampan restore` is the most conservative step in the tool:
 
 - It never runs on its own: no schedule or hook calls it; only you, by hand.
-- It lists what can be resumed and asks; pre-checked are active sessions seen within `recent_days`. Retired ones and ones
-  untouched for too long are not checked. `--all` checks everything resumable and still asks first.
+- It lists what can be resumed and asks. When the tmux server of the last save is gone (a reboot, a killed server),
+  pre-checked are the sessions running at that save; with the same server up, or no save on record, pre-checked are
+  active sessions seen within `recent_days`. The header says which rule it used. Retired ones and ones untouched for too
+  long are not checked. `--all` checks everything resumable and still asks first. Without a terminal (a script, an
+  agent's shell) named sessions are resumed without asking, and no names is an error (exit 2). `sampan stop` saves again
+  after stopping, so sessions stopped on purpose while others run are not pre-checked; stop everything and reboot, and
+  they are the last running set and get checked.
 - It resumes one at a time with the original conversation (`claude --resume <id>`, `codex resume <id>`).
 - It sends no message and presses nothing for you at a prompt. At a startup prompt it sends only the one option you picked
   in the `sampan` screen or an interactive terminal (see "Common situations"). The one automatic answer is `sampan move`

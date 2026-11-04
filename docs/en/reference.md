@@ -9,7 +9,7 @@ For migration or conversion scripts. A version sampan does not understand is nev
 | Field | Meaning |
 |---|---|
 | `version` | integer, must be `1` |
-| `[restore] recent_days` | non-negative integer, default 7; `restore` pre-checks only sessions active within this many days |
+| `[restore] recent_days` | non-negative integer, default 7; `restore` pre-checks only sessions active within this many days (after a reboot or a killed tmux server it pre-checks those running at the last save instead) |
 | `[ui] start_dir` | path where the directory chooser of `n` (start new work) starts; default `~/Projects` if it exists, else `~` |
 | `[ui] detach_key` | string, default `"C-q"`. In a session sampan manages, this key jumps back to sampan: a client attached from outside tmux detaches, and when sampan switched over from inside tmux it switches back to the previous session; in other tmux sessions the key goes to the program as usual. sampan writes the binding into the running tmux server when its screen opens and before attaching (never into `~/.tmux.conf`) and marks its sessions with the `@sampan` session option; if you already bound the key to something else, sampan leaves it and `sampan doctor` says so. `""` binds nothing (and removes a binding sampan wrote). Limits: a session opened outside the `sampan` screen (say `sampan new`, then `tmux attach`) is marked the next time the screen opens or finishes an action; after attaching from outside and switching sessions yourself (`Ctrl-b s`), Ctrl-q switches back to the previous session instead of detaching |
 | `[ui] codex_auto_start` | boolean, default `true`. When the `sampan` screen opens and the Codex daemon is not running, run `codex remote-control start` once in the background; `false` never starts it |
