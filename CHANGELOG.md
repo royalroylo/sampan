@@ -5,6 +5,20 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `?` on the main list (outside search) shows every key with one line on what it does, in groups, two columns when the terminal is short; any key goes back. The bottom key line starts with `? 說明` and is now built from the same table (`v 預覽` moved to the page to stay within 120 columns).
+- `sampan stop -v` / `--verbose` lists every stopped session in the save that runs before stopping.
+
+### Changed
+- After a reboot (or a killed tmux server), `R` / `sampan restore` pre-selects the sessions that were running at the last save, instead of everything active in the last 7 days. With the same tmux server still up, or no save on record, the `recent_days` rule stays, and the header says which rule was used. `sampan stop` saves again after stopping, so sessions stopped on purpose while others keep running are not pre-selected.
+- The save before `sampan stop` (and `restart`) prints the stopped sessions as one count line (`存檔：已停止 7（-v 看清單）`); real warnings are still printed in full.
+- Unknown session names are errors in `stop`, `restore` and `restart` alike: `❌ 找不到 session：<name>`, and exit 2 when none was known (restart used to fold them into its 略過 list, stop said nothing). An argument that is several registered names joined by spaces (zsh does not split `$L`) says so and nothing runs.
+
+### Fixed
+- `sampan restore <names>` without a terminal no longer cancels silently: the named sessions are reattached without asking. With no names (or only `--all`) and no terminal it says why and exits 2.
+- MCP `folder_move` resolves and checks session names under the registry lock it writes under, so a rename in between cannot write a stale name.
+- On the main list, the last byte of an arrow key still counts as the arrow up to 3 s after its `[` (the screen keeps refreshing meanwhile), so a slow link no longer turns ↑ into `A` (adopt). Other screens keep the 1 s wait; the docs list this as a known limit.
+
 ## [0.15.2] - 2026-11-01
 
 ### Fixed
