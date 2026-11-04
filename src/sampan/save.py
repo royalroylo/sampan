@@ -29,7 +29,9 @@ def stamp_missing(tmux, observed, rows):
             tmux.set_session_id(ob.tmux, row.id)
 
 
-def cmd_save(cfg, run, out, *, quiet=False, dry_run=False, proc_root=PROC_ROOT):
+def cmd_save(cfg, run, out, *, quiet=False, brief=False, dry_run=False, proc_root=PROC_ROOT):
+    """quiet: say nothing unless there are warnings. brief (with quiet, for stop): the stopped ones as one count line
+    instead of one line each; warnings are still printed in full."""
     tmux = Tmux(run)
     server = tmux.server_id()
     if server is None:
@@ -68,6 +70,14 @@ def cmd_save(cfg, run, out, *, quiet=False, dry_run=False, proc_root=PROC_ROOT):
     summary = (f"新增 {len(res.added)}、更新 {len(res.updated)}、改名 {len(res.renamed)}、"
                f"已停止 {len(res.pending)}、警告 {len(warnings)}，共 {len(res.rows)} 列")
     append_log(cfg, f"{'dry-run' if dry_run else 'ok'} {summary}")
+    if brief:
+        head = [f"已停止 {len(res.pending)}（-v 看清單）"] if res.pending else []
+        head += [f"警告 {len(warnings)}"] if warnings else []
+        if head:
+            out(f"存檔：{'、'.join(head)}")
+        for w in warnings:
+            out(f"  ⚠ {w}")
+        return 0
     if quiet and not warnings:
         return 0
     out(f"sampan save{'（dry-run，未寫入）' if dry_run else ''}：{summary}")

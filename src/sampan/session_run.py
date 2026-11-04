@@ -410,9 +410,10 @@ def cmd_forget(cfg, run, out, name, *, dry_run=False):
 
 def cmd_stop(cfg, run, out, *, names=(), profile=None, force=False, dry_run=False, keep_tmux=False,
              sleep=time.sleep, timeout=90, own_pane=None, kill=os.kill, proc_root=Path("/proc"),
-             stopped=None, left=None, why=None):
+             stopped=None, left=None, why=None, verbose=False):
     """stopped / left: when given lists, receive the names of sessions that ended, and of wanted sessions that were not stopped.
-    why: when given a dict, receives {name: reason} for each one in left (shown next to the name by a restart)."""
+    why: when given a dict, receives {name: reason} for each one in left (shown next to the name by a restart).
+    verbose: the save before stopping lists every stopped session (otherwise just their count; warnings always)."""
     from .save import cmd_save
     if not dry_run:
         out = actionlog.tee(cfg, "stop", out)
@@ -420,7 +421,8 @@ def cmd_stop(cfg, run, out, *, names=(), profile=None, force=False, dry_run=Fals
     # save's lines are held back until we know tmux is readable: when it is not, save has said so already and
     # the stop message below says it again, so only that one is shown
     save_lines = []
-    save_rc = 0 if dry_run else cmd_save(cfg, run, save_lines.append, quiet=True, proc_root=proc_root)
+    save_rc = 0 if dry_run else cmd_save(cfg, run, save_lines.append, quiet=not verbose,
+                                         brief=not verbose, proc_root=proc_root)
     if save_rc == 2:
         for line in save_lines:
             out(line)

@@ -115,6 +115,31 @@ class StopTest(unittest.TestCase):
         names, _when, _server = last_running(load_rows(self.cfg.registry_path))
         self.assertEqual(names, {"b", "me"})
 
+    def stopped_and_warned(self):
+        from sampan.registry import Row, write_rows
+        self.panes.append(pane_line("empty", "%4", 103, "zsh", "/c"))  # registered, no agent: a warning
+        write_rows(self.cfg.registry_path, [Row(f"gone{i}", "claude", "alice", f"dddddddd-0000-4000-8000-00000000000{i}", "/c")
+                                             for i in range(7)]
+                   + [Row("empty", "claude", "alice", B, "/c")], "t", self.cfg.history_dir)
+
+    def test_save_before_stop_counts_the_stopped_ones_and_keeps_warnings(self):
+        self.stopped_and_warned()
+        self.stop(self.runner(), names=("a",))
+        save = [m for m in self.msgs if m.startswith("存檔") or m.startswith("  ⚠") or m.startswith("  …")]
+        self.assertEqual(save, ["存檔：已停止 7（-v 看清單）、警告 1", "  ⚠ empty：沒有 claude，沿用上次的對話 bbbbbbbb"])
+
+    def test_verbose_lists_every_stopped_one(self):
+        self.stopped_and_warned()
+        self.stop(self.runner(), names=("a",), verbose=True)
+        text = "\n".join(self.msgs)
+        self.assertEqual(sum("：已停止（sampan restore 接回" in m for m in self.msgs), 7)
+        self.assertIn("⚠ empty：沒有 claude", text)
+        self.assertNotIn("-v 看清單", text)
+
+    def test_nothing_to_say_says_nothing(self):
+        self.stop(self.runner(), names=("a",))
+        self.assertFalse(any(m.startswith("存檔") for m in self.msgs))
+
     def test_closed_session_stays_in_registry_for_restore(self):
         # Regression: since v0.3.2 stop closes tmux, and the next save treated it as closed by the user and deleted that row
         from sampan.registry import load_rows, merge

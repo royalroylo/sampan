@@ -48,6 +48,7 @@ def build_parser():
     sp.add_argument("--timeout", type=int, default=90, help="等待秒數（預設 90）")
     sp.add_argument("--keep-tmux", action="store_true", help="agent 結束後保留 tmux session（預設：只剩那個 pane 就關掉）")
     sp.add_argument("--dry-run", action="store_true")
+    sp.add_argument("-v", "--verbose", action="store_true", help="停之前的存檔列出每個已停止的 session（預設只給數量）")
     rt = sub.add_parser("restart", help="重開這些 session：閒置的先停再背景接回原對話，已停止的直接接回，忙的略過")
     rt.add_argument("names", nargs="+", help="session 名稱")
     rn = sub.add_parser("rename", help="改 session 名稱（tmux 與登記表一起改，agent 照常執行）")
@@ -649,7 +650,7 @@ def _dispatch(cfg, args):
                 return 2
             return session_run.cmd_stop(cfg, run, out, names=tuple(names), profile=args.profile,
                                         force=args.force, dry_run=args.dry_run, timeout=args.timeout,
-                                        keep_tmux=args.keep_tmux,
+                                        keep_tmux=args.keep_tmux, verbose=args.verbose,
                                         own_pane=os.environ.get("TMUX_PANE"))
         if cmd == "rename":
             return session_run.cmd_rename(cfg, run, out, args.name, args.new)
