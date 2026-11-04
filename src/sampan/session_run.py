@@ -510,6 +510,10 @@ def cmd_stop(cfg, run, out, *, names=(), profile=None, force=False, dry_run=Fals
                    | {s: "sampan 自己所在的 pane" for s in skipped_self} | {s: "worktree，讀不到畫面" for s in blind}
                    | {p.session: f"{timeout} 秒內沒結束" for p, _lc in timed_out})
     closed, kept = _close_sessions(tmux, done) if done and not keep_tmux else ([], [])
+    if done:
+        # save again, so the ones just stopped are not among those the last save saw running (restore's default
+        # after a reboot); with nothing left running this save sees no agent and changes no seen_at
+        cmd_save(cfg, run, lambda _line: None, quiet=True, proc_root=proc_root)
     if force and timed_out:
         procs = list_procs(run)
         for pane, lc in timed_out:

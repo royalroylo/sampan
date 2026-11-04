@@ -38,6 +38,7 @@ class Base(unittest.TestCase):
         self.procs = []
         self.screen = ""
         self.server = True
+        self.server_id = None  # the live tmux server's pid-start_time (None: list-sessions prints none)
         self.on_send = None
 
     def transcript(self, sid, days_ago=1, profile="alice"):
@@ -76,7 +77,12 @@ class Base(unittest.TestCase):
             return cp(out=f"%{49 + len(made)}\n")
 
         r.on(["tmux", "-u", "list-panes"], list_panes)
-        r.on(["tmux", "-u", "list-sessions"], lambda a: cp() if self.server else cp(rc=1))
+        def list_sessions(a):
+            if not self.server:
+                return cp(rc=1)
+            return cp(out=f"{self.server_id}\n") if "#{pid}-#{start_time}" in a and self.server_id else cp()
+
+        r.on(["tmux", "-u", "list-sessions"], list_sessions)
         r.on(["tmux", "-u", "new-session"], new_session)
         r.on(["tmux", "-u", "set-option"], cp())
         r.on(["tmux", "-u", "send-keys"], send)
@@ -167,6 +173,58 @@ class CandidatesTest(Base):
         self.assertEqual(skips, {"w": "profile work 已停用（sampan profile enable work 後可接回）",
                                  "cx": "profile cx 已停用（sampan profile enable cx 後可接回）",
                                  "cx-old": "profile cx 已停用（sampan profile enable cx 後可接回）"})
+
+
+class LastRunningTest(Base):
+    SAVE = "2026-10-20T01:00:00+00:00"  # the last save (09:00 +08:00)
+
+    def setup_abc(self):
+        for sid, days in ((A, 0), (B, 0), (C, 3)):
+            self.transcript(sid, days_ago=days)
+        self.registry([Row("a", "claude", "alice", A, str(self.cwd), seen_at=self.SAVE, server="111-1"),
+                       Row("b", "claude", "alice", B, str(self.cwd), seen_at="2026-10-20T09:00:00+08:00", server="111-1"),
+                       Row("c", "claude", "alice", C, str(self.cwd), seen_at="2026-10-17T01:00:00+00:00", server="111-1")])
+
+    def picked(self):
+        return {c.row.tmux: c.selected for c in candidates(self.cfg, self.runner(), _rows(self.cfg), NOW)}
+
+    def test_after_a_reboot_only_the_ones_running_at_the_last_save(self):
+        self.setup_abc()
+        self.server = False  # no tmux server at all
+        self.assertEqual(self.picked(), {"a": True, "b": True, "c": False})
+        self.server, self.server_id = True, "222-2"  # a new server (sampan opened one already)
+        self.assertEqual(self.picked(), {"a": True, "b": True, "c": False})
+
+    def test_same_server_keeps_the_recent_days_rule(self):
+        self.setup_abc()
+        self.server_id = "111-1"
+        self.assertEqual(self.picked(), {"a": True, "b": True, "c": True})
+
+    def test_no_save_on_record_keeps_the_recent_days_rule(self):
+        for sid, days in ((A, 0), (C, 3)):
+            self.transcript(sid, days_ago=days)
+        self.registry([Row("a", "claude", "alice", A, str(self.cwd), seen_at="junk", server="111-1"),
+                       Row("c", "claude", "alice", C, str(self.cwd))])
+        self.server = False
+        self.assertEqual(self.picked(), {"a": True, "c": True})
+
+    def test_header_says_which_rule(self):
+        self.setup_abc()
+        self.server = False
+        self.restore(self.runner(), answers=("q",))
+        from sampan.clock import fmt_local
+        when = fmt_local(datetime(2026, 10, 20, 1, tzinfo=timezone.utc))
+        self.assertIn(f"[x] = 預設勾選：關機前在跑的，最後存檔 {when}", self.text())
+
+    def test_last_running(self):
+        from sampan.restore import last_running
+        rows = [Row("a", "claude", "p", A, "/", seen_at="2026-10-20T01:00:00+00:00", server="s"),
+                Row("b", "claude", "p", B, "/", seen_at="2026-10-20T09:00:00+08:00", server="s"),
+                Row("c", "claude", "p", C, "/", seen_at="2026-10-19T01:00:00+00:00", server="s"),
+                Row("d", "claude", "p", C, "/", seen_at="2026-10-21T01:00:00", server="s")]  # no zone: ignored
+        names, when, server = last_running(rows)
+        self.assertEqual((names, when, server), ({"a", "b"}, datetime(2026, 10, 20, 1, tzinfo=timezone.utc), "s"))
+        self.assertEqual(last_running([Row("a", "claude", "p", A, "/")]), (None, None, ""))
 
 
 def _rows(cfg):

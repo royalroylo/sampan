@@ -103,6 +103,18 @@ class StopTest(unittest.TestCase):
         self.assertIn("a：已結束，tmux session 已關閉", text)
         self.assertNotIn("保留 session", text)
 
+    def test_saves_again_after_stopping_so_the_stopped_one_is_not_last_running(self):
+        import itertools
+        from unittest import mock
+
+        from sampan.registry import load_rows
+        from sampan.restore import last_running
+        times = (f"2026-11-04T01:00:{n:02d}+00:00" for n in itertools.count())  # save.log stamps use it too
+        with mock.patch("sampan.save.now_iso", lambda: next(times)):
+            self.stop(self.runner(), names=("a",))
+        names, _when, _server = last_running(load_rows(self.cfg.registry_path))
+        self.assertEqual(names, {"b", "me"})
+
     def test_closed_session_stays_in_registry_for_restore(self):
         # Regression: since v0.3.2 stop closes tmux, and the next save treated it as closed by the user and deleted that row
         from sampan.registry import load_rows, merge

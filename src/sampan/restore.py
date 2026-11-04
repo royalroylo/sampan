@@ -100,9 +100,40 @@ def _blocker(cfg, row, live, alive):
     return transcript_problem(cfg.profiles.values(), row.profile, row.session_id)
 
 
-def candidates(cfg, run, rows, now, *, alive=os.kill):
-    """Active rows whose tmux session has no agent running, with last activity, default selection and skip reason."""
+def _seen(row):
+    try:
+        t = datetime.fromisoformat(row.seen_at)
+    except (TypeError, ValueError):
+        return None
+    return t if t.tzinfo is not None else None
+
+
+def last_running(rows):
+    """What the last save saw running: (tmux names, when, tmux server id), or (None, None, "") with no such save on record.
+    Every save stamps all the agents it sees with the same seen_at and server, so they are the rows with the latest seen_at
+    (compared as times: old rows mix +08:00 and +00:00)."""
+    seen = [(t, r) for r in rows if r.server and (t := _seen(r)) is not None]
+    if not seen:
+        return None, None, ""
+    when = max(t for t, _r in seen)
+    last = [r for t, r in seen if t == when]
+    return {r.tmux for r in last}, when, last[0].server
+
+
+def default_rule(cfg, run, rows):
+    """How restore picks its default [x]: (names running at the last save, when) once that save's tmux server is gone
+    (a reboot, or a killed server), else (None, None) for the recent_days rule."""
+    names, when, server = last_running(rows)
+    if names is None or server == Tmux(run).server_id():
+        return None, None
+    return names, when
+
+
+def candidates(cfg, run, rows, now, *, alive=os.kill, rule=None):
+    """Active rows whose tmux session has no agent running, with last activity, default selection and skip reason.
+    rule: default_rule's result (worked out here when None)."""
     live = _observe(cfg, run)
+    running, _when = rule if rule is not None else default_rule(cfg, run, rows)
     recent = timedelta(days=cfg.recent_days)
     result = []
     for row in rows:
@@ -110,7 +141,10 @@ def candidates(cfg, run, rows, now, *, alive=os.kill):
             continue
         skip = _blocker(cfg, row, live, alive)
         last, tokens, _window = _activity(cfg, row.agent, row.profile, row.session_id)
-        selected = skip is None and last is not None and now - last <= recent
+        if running is not None:
+            selected = skip is None and row.tmux in running
+        else:
+            selected = skip is None and last is not None and now - last <= recent
         result.append(Candidate(row, last, tokens, selected, skip))
     return result
 
@@ -254,6 +288,7 @@ def cmd_restore(cfg, run, out, ask, *, names=(), select_all=False, dry_run=False
     except RegistryError as e:
         out(f"❌ {e}")
         return 2
+    all_rows = rows
     known = {r.tmux for r in rows}
     for n in names:
         if n not in known:
@@ -265,7 +300,8 @@ def cmd_restore(cfg, run, out, ask, *, names=(), select_all=False, dry_run=False
         for n in retired:
             out(f"{n} 是 retired；先 sampan activate {n}")
     try:
-        cands = candidates(cfg, run, rows, now_fn(), alive=alive)
+        rule = default_rule(cfg, run, all_rows)
+        cands = candidates(cfg, run, rows, now_fn(), alive=alive, rule=rule)
     except TmuxUnreadable as e:
         out(f"❌ {e}；不知道哪些 session 還在，什麼都沒建、沒接回")
         return 1
@@ -275,7 +311,10 @@ def cmd_restore(cfg, run, out, ask, *, names=(), select_all=False, dry_run=False
         if not retired:
             out("沒有要接回的 session（登記表裡 active 的都已在執行）")
         return 0
-    out(f"可接回的 session（[x] = 預設勾選：{cfg.recent_days} 天內有活動）：")
+    if rule[0] is not None and not (names or select_all):
+        out(f"可接回的 session（[x] = 預設勾選：關機前在跑的，最後存檔 {_fmt_time(rule[1])}）：")
+    else:
+        out(f"可接回的 session（[x] = 預設勾選：{cfg.recent_days} 天內有活動）：")
     _show(out, cands)
     if dry_run or not confirm or all(c.skip for c in cands):
         picked = [c.row.tmux for c in cands if c.selected]  # no reattachable rows, nothing to ask
