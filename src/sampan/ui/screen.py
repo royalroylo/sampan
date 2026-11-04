@@ -71,6 +71,8 @@ from .tree import FolderItem, folder_key, folder_of
 # card), R and A still work, they are only left out here; g / f are short here, their folder card spells them out
 ESC_WAIT_MS = 80  # after Esc, how long to wait for a next byte: none → a lone Esc
 ESC_SEQ_WAIT_MS = 1000  # inside an escape sequence (after ESC [ or ESC O), how long to wait for each further byte
+LIST_BRACKET_WAIT_S = 3  # on the main list, how long after a "[" the end of an arrow still counts as part of it
+ARROW_ENDS = "ABCDHF"  # the final bytes of ↑↓→←, Home, End
 ESCAPES = {"[A": "KEY_UP", "[B": "KEY_DOWN", "[C": "KEY_RIGHT", "[D": "KEY_LEFT", "OA": "KEY_UP", "OB": "KEY_DOWN",
            "OC": "KEY_RIGHT", "OD": "KEY_LEFT", "[H": "KEY_HOME", "[F": "KEY_END", "OH": "KEY_HOME", "OF": "KEY_END",
            "[1~": "KEY_HOME", "[4~": "KEY_END", "[7~": "KEY_HOME", "[8~": "KEY_END"}
@@ -171,6 +173,8 @@ class CursesScreen:
         self.messages = []
         self._pushed = []  # keys read while telling a lone Esc from an escape sequence, given out next
         self._timeout_ms = -1  # the wait set by _timeout, put back after reading an escape sequence
+        self._bracket_at = None  # main list: clock() when a "[" came that may be the start of a split arrow
+        self._cut_bracket = False  # the last escape sequence was cut short right after its "["
         self.warning = None  # one-line explanation when tmux is unreadable (the hint line of the list screen)
         self.prompt = None
         self.extra = []  # question under the message area (agent startup prompt)
@@ -251,6 +255,7 @@ class CursesScreen:
         in several reads); it is read to its final byte (0x40-0x7E after "[", any one byte after "O"), waiting up to
         ESC_SEQ_WAIT_MS for each further byte. The known ones are the KEY_ names (↑↓←→, Home/End), so "[" and "A"
         never act as keys of their own."""
+        self._cut_bracket = False  # only ever about this read
         if self._pushed:
             return self._pushed.pop(0)
         ch = self._read()
@@ -288,8 +293,10 @@ class CursesScreen:
                 set_timeout(self._timeout_ms)
 
     def _sequence(self, first):
-        """The rest of an escape sequence that began with first ("[" or "O"), each further byte waited for up to
-        ESC_SEQ_WAIT_MS: its KEY_ name, or None (unknown, or its final byte never came: dropped whole)."""
+        """The rest of an escape sequence that began with first ("[" or "O", or "[" and its first parameter bytes),
+        each further byte waited for up to ESC_SEQ_WAIT_MS: its KEY_ name, or None (unknown, or its final byte never
+        came: dropped whole)."""
+        self._cut_bracket = False
         set_timeout = getattr(self.scr, "timeout", None)
         if set_timeout is not None:
             set_timeout(ESC_SEQ_WAIT_MS)  # a sequence has begun: a slow link may still be bringing the rest
@@ -298,6 +305,7 @@ class CursesScreen:
             while len(seq) < 16:
                 ch = self._read()
                 if ch is None or len(ch) != 1:  # cut short: drop what came (an unknown key name is dropped too)
+                    self._cut_bracket = ch is None and seq == "["
                     return None
                 seq += ch
                 if first == "O" or "@" <= ch <= "~":  # SS3 takes one character; a CSI ends with a final byte
@@ -308,12 +316,32 @@ class CursesScreen:
                 set_timeout(self._timeout_ms)
 
     def _list_key(self, picker):
-        """The next key on the main list. "[" is no key there, so a "[" outside search is the rest of an escape
-        sequence whose Esc came too long before it (and was taken as a lone Esc): read on and map it or drop it
-        whole, so its last byte (e.g. "A", adopt) never runs as a command."""
+        """The next key on the main list (None: a tick). "[" is no key there, so a "[" outside search is the rest of
+        an escape sequence whose Esc came too long before it (and was taken as a lone Esc), or one cut short after
+        its "[": for LIST_BRACKET_WAIT_S an arrow's last byte (ARROW_ENDS) still ends it, and a parameter byte reads
+        the rest as one sequence, so that byte (e.g. "A", adopt) never runs as a command. The wait is the list's own
+        ticks, so the screen keeps refreshing meanwhile; any other key is itself at once."""
         k = self.key()
-        if k == "[" and picker.query is None:
-            return self._sequence("[")
+        if picker.query is not None:
+            self._bracket_at = None
+            return k
+        if k is None:
+            if self._cut_bracket:  # that "[" came one sequence wait ago
+                self._cut_bracket = False
+                self._bracket_at = self.clock() - ESC_SEQ_WAIT_MS / 1000
+            elif self._bracket_at is not None and self.clock() - self._bracket_at >= LIST_BRACKET_WAIT_S:
+                self._bracket_at = None
+            return None
+        if k == "[":
+            self._bracket_at = self.clock()
+            return None
+        since, self._bracket_at = self._bracket_at, None
+        if since is None or self.clock() - since >= LIST_BRACKET_WAIT_S:
+            return k
+        if k in ARROW_ENDS and len(k) == 1:
+            return ESCAPES.get("[" + k)
+        if len(k) == 1 and "0" <= k <= "?":  # a parameter byte (digits, ;): the rest of a longer sequence
+            return self._sequence("[" + k)
         return k
 
     def out(self, line=""):

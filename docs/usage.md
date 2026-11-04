@@ -180,6 +180,8 @@ Claude Code 只在狀態列指令的輸入裡提供 5h／週額度，所以要�
 
 **Remote Control 的名稱不對（手機 app 的列表顯示舊名稱）**：接回舊對話時，Claude 會沿用舊的 Remote Control 連線和舊名稱。所以只要 profile 開了 Remote Control，sampan 在每次啟動後（接回／`R`、重開／`S`、換帳號、搬目錄、接手）都會做一次「RC 校正」：Claude 回來之後打 `/remote-control`，確認游標停在「Disconnect this session」才按 Enter，再打 `/remote-control <別名>`。每次都做、不先判斷名稱對不對，所以 app 的 RC 列表每次會多一個新項目（舊的消失）。`new` 不做（新對話一開始就是對的名稱）；在 sampan 自己那個 pane 裡原地接回時 sampan 已先結束，也做不了。畫面上單按 Enter 接回一個 session，會等接回與校正做完（通常幾秒，Remote Control 連不上時最多約 20 秒，畫面會顯示「RC 校正中」）才帶你進去；等待時按的鍵不算數。認不得畫面時 sampan 按 Esc 離開，印出 `RC 校正沒做：<原因>`，其他動作不受影響。要修一個現有 session 的名稱：`sampan restart <名稱>`（畫面上 `S`）；agent 也可以在自己的 shell 對**別的** session 跑它（自己的 pane 與忙碌中的會略過）。手動做法：`/remote-control` → Disconnect this session → `/remote-control <名稱>`。
 
+**連線很慢時方向鍵偶爾變成別的鍵（已知限制）**：方向鍵送出的是 Esc、`[`、`A` 三個字元，連線很慢時可能分好幾次到。主畫面上 `[` 不是任何鍵，所以它之後 3 秒內來的 `A`～`D`、`H`、`F` 都還算方向鍵的一部分（等待時畫面照常更新）。其他畫面（勾選清單、外掛、設定）只等 1 秒，再晚才到的 `A`、`D` 會被當成一般鍵：最壞是開了接手（`A`）或派工（`D`）畫面，按 `q` 回去就好。這些畫面不能再等更久，否則真的按 Esc 的時候會覺得卡住。
+
 **給 session 一個好認的別名**：`sampan alias <名稱> "RC 校正 一"`（畫面上 `L`），清掉用 `--clear`。別名只在下次啟動時套用，所以改完再 `sampan restart <名稱>` 就會出現在 Remote Control 列表。agent 在 `[mcp] confirm` 開著時不能自己改別名。
 
 **把整個資料夾的 session 換到另一個 profile**：`sampan switch --folder 客戶/甲 team-b --from main --yes`（或 `sampan switch 名稱1 名稱2 team-b`；畫面上標記多個、或在資料夾列按 `P`）。`--from` 只換目前在那個 profile 的（別人的跳過），`--dry-run` 先看。忙碌或等人、Codex、retired、worktree、自己所在的 pane、已經在目標 profile 的都會跳過，最後用一張表列出每個 session 的結果；對話 id 不變。

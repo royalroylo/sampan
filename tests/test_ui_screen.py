@@ -23,7 +23,7 @@ from sampan.ui import (
     text_width,
 )
 from sampan.ui.render import _cell_text
-from sampan.ui.screen import ESC_SEQ_WAIT_MS, ESC_WAIT_MS
+from sampan.ui.screen import ESC_SEQ_WAIT_MS, ESC_WAIT_MS, LIST_BRACKET_WAIT_S
 from tests.fakes import FakeRunner, cp, pane_line, ps_line
 from tests.helpers import TOML, make_env, register, status_row
 
@@ -1171,7 +1171,42 @@ class EscapeKeyTest(unittest.TestCase):
         # ESC, 300 ms of nothing (a lone Esc, ignored), then "[" "A": the rest of the arrow, never adopt
         self.assertEqual(self.pick(["KEY_DOWN", "\x1b", Gap(300), "[", "A", "\n"]), ("attach", ["a"]))
         self.assertEqual(self.pick(["KEY_DOWN", "[", Gap(300), "A", "\n"]), ("attach", ["a"]))
-        self.assertEqual(self.pick(["KEY_DOWN", "[", TICK, "A"]), ("adopt", []))  # the sequence timed out: dropped
+
+    def timed_pick(self, keys, *, search=False):
+        """pick on the main list with a clock that each TICK (one second of the list's wait) moves on by 1 s."""
+        now = [0.0]
+
+        def tick():
+            now[0] += 1.0
+        self.scr = FakeScr(keys, on_tick=tick)
+        s = CursesScreen(self.scr, self.cfg, FakeRunner(), now_fn=lambda: NOW, clock=lambda: now[0])
+        return s.pick([row("a"), row("b")], None)
+
+    def test_bracket_waits_three_seconds_for_the_rest_on_the_list(self):
+        # 0.16: "[" then 2 s of nothing then "A": still the arrow (cursor up), not adopt
+        self.assertEqual(self.timed_pick(["KEY_DOWN", "[", TICK, TICK, "A", "\n"]), ("attach", ["a"]))
+        self.assertEqual(self.timed_pick(["KEY_DOWN", "[", TICK, TICK, "B", "\n"]), ("attach", ["b"]))
+        # past 3 s it is a key of its own again
+        self.assertEqual(self.timed_pick(["KEY_DOWN", "[", TICK, TICK, TICK, TICK, "A"]), ("adopt", []))
+        # ESC "[" whose rest is cut off (1 s inside the sequence), then "A" 1 s later: still the arrow
+        self.assertEqual(self.timed_pick(["KEY_DOWN", "\x1b", "[", TICK, TICK, "A", "\n"]), ("attach", ["a"]))
+        # a key that cannot end an arrow is itself, at once
+        self.assertEqual(self.timed_pick(["[", "q"]), ("quit", []))
+        # parameters: "[" "1" ";" "5" "A" (modified arrow) is read whole and dropped, never adopt
+        self.assertEqual(self.timed_pick(["KEY_DOWN", "[", TICK, "1", ";", "5", "A", "\n"]), ("attach", ["b"]))
+
+    def test_the_list_keeps_ticking_while_a_bracket_waits(self):
+        ticks = []
+        now = [0.0]
+
+        def tick():
+            now[0] += 1.0
+            ticks.append(now[0])
+        self.scr = FakeScr(["[", TICK, TICK, "A", "\n"], on_tick=tick)
+        s = CursesScreen(self.scr, self.cfg, FakeRunner(), now_fn=lambda: NOW, clock=lambda: now[0])
+        s.pick([row("a"), row("b")], None)
+        self.assertNotIn(LIST_BRACKET_WAIT_S * 1000, self.scr.timeouts)  # no long blocking read
+        self.assertEqual(ticks, [1.0, 2.0])
 
     def test_bracket_is_text_while_searching(self):
         self.scr = FakeScr(["/", "[", "\x1b", "q"])
