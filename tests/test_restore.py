@@ -772,6 +772,37 @@ class IsolationTest(unittest.TestCase):
         self.assertEqual(r.stdout.strip(), "False", r.stderr)
 
 
+class NoTerminalTest(Base):
+    def setUp(self):
+        super().setUp()
+        self.transcript(A)
+        self.registry([Row("x", "claude", "alice", A, str(self.cwd)), Row("y", "claude", "alice", B, str(self.cwd))])
+
+    def test_names_without_a_terminal_reattach_without_asking(self):
+        asked = []
+        r = self.runner()
+        rc = cmd_restore(self.cfg, r, self.msgs.append, lambda p: asked.append(p) or (_ for _ in ()).throw(EOFError),
+                         names=("x",), sleep=self.sleep, now_fn=lambda: NOW, timeout=0, alive=dead,
+                         interactive=False)
+        self.assertEqual(asked, [])
+        self.assertEqual(len(r.called(["tmux", "-u", "new-session"])), 1)
+        self.assertNotIn("已取消", self.text())
+        self.assertIn("接回：x", self.text())
+        self.assertNotEqual(rc, 2)  # 1 here: the fake agent never shows it is back within timeout=0
+
+    def test_no_names_without_a_terminal_is_an_error(self):
+        for kw in ({}, {"select_all": True}):
+            self.msgs.clear()
+            r = self.runner()
+            self.assertEqual(self.restore(r, interactive=False, **kw), 2)
+            self.assertEqual(r.called(["tmux", "-u", "new-session"]), [])
+            self.assertEqual(self.text(), "❌ 沒有終端機可以確認；指定名稱（sampan restore <名稱…>）或用 sampan restart <名稱…>")
+
+    def test_dry_run_without_a_terminal_still_lists(self):
+        self.assertEqual(self.restore(self.runner(), interactive=False, dry_run=True), 0)
+        self.assertIn("可接回的 session", self.text())
+
+
 class CliTest(unittest.TestCase):
     def test_start_is_renamed(self):
         from sampan.cli import main

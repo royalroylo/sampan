@@ -159,6 +159,7 @@ def _show(out, cands):
             out(f"         ↷ 跳過：{c.skip}")
 
 
+NO_TERMINAL = "沒有終端機可以確認；指定名稱（sampan restore <名稱…>）或用 sampan restart <名稱…>"
 RESTORE_PROMPT = "Enter（或 y）接回勾選的 [x]；輸入編號改選（例如 1 3）；q 取消："
 
 
@@ -276,13 +277,20 @@ def _watch(cfg, run, launched, timeout, sleep, out=lambda _l: None, relay=None):
 
 def cmd_restore(cfg, run, out, ask, *, names=(), select_all=False, dry_run=False, interval=3, sleep=time.sleep,
                 picker_fn=None, now_fn=lambda: datetime.now(timezone.utc), timeout=10, alive=os.kill,
-                confirm=True, opened=None, on_prompt=None, wait=True):
+                confirm=True, opened=None, on_prompt=None, wait=True, interactive=True):
     """confirm=False: do not ask, reattach the default-selected ones directly (used when the ui presses Enter on a single stopped session).
     wait=False: finish once the reattach command is sent, without waiting or looking at the screen (when the ui reattaches one with Enter, it then goes straight into tmux and the user handles any menu).
     Unless a launched row gets the Remote Control reset (steps.rc_wanted): then it waits as with wait=True, so the ui
     goes in only after the reset.
+    interactive=False (no terminal to confirm at): with names they are reattached without asking; without names
+    nothing is done and it says why (2).
     opened: given a list, append the names of tmux sessions created / sent the reattach command, in order (the ui then attaches to the first).
     on_prompt(name, agent, prompt): asked when an agent stops at a startup menu during the wait (see prompts.Relay); None = press no keys."""
+    if confirm and not interactive and not dry_run:
+        if not names:
+            out(f"❌ {NO_TERMINAL}")
+            return 2
+        confirm = False  # the names say which: nothing left to ask
     try:
         rows = load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)
     except RegistryError as e:

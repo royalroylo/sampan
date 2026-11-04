@@ -36,8 +36,8 @@ def build_parser():
     nw.add_argument("--folder", help="放進這個資料夾（沒有就建；用 / 分層）；開成功才記")
     nw.add_argument("--message", help="開場訊息，當作 agent 啟動時的第一個 prompt（會建一筆派工）；- 從 stdin 讀")
     rs = sub.add_parser("restore", help="挑選並逐一接回登記表裡的原對話（不開新對話、不送訊息）")
-    rs.add_argument("names", nargs="*", help="只看這些 session（仍會先確認）")
-    rs.add_argument("--all", action="store_true", help="勾選所有可接回的（仍會先確認）")
+    rs.add_argument("names", nargs="*", help="只看這些 session（有終端機時會先確認）")
+    rs.add_argument("--all", action="store_true", help="勾選所有可接回的（要有終端機確認）")
     rs.add_argument("--dry-run", action="store_true")
     ad = sub.add_parser("adopt", help="接手 tmux 外的終端機（例如 iTerm、Terminal）裡的 claude／codex：你自己 /exit 後在 tmux 接回同一段對話")
     ad.add_argument("--dry-run", action="store_true", help="只列出會接手哪些、用什麼指令；不等待、不改任何東西")
@@ -504,7 +504,7 @@ def _dispatch(cfg, args):
             return 2
         on_prompt, want = _prompt_fn()
         rc = cmd_restore(cfg, run, out, input, names=tuple(names), select_all=args.all, dry_run=args.dry_run,
-                         on_prompt=on_prompt)
+                         on_prompt=on_prompt, interactive=bool(sys.stdin and sys.stdin.isatty()))
         return _go_in(run, want, rc)
     if cmd == "adopt":
         from .adopt import cmd_adopt
