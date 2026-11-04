@@ -456,20 +456,17 @@ class Server:
         if not isinstance(dest, str):
             raise ToolError("參數 folder 要是字串（\"/\" 是最上層）")
         dest = _folder(dest)
-        try:
-            reg_rows = load_rows(self.cfg.registry_path, codex_profile=self.cfg.codex.profile)
-        except RegistryError as e:
-            raise ToolError(str(e)) from e
-        known = {r.tmux for r in reg_rows}
-        resolved = []
-        for n in names:
-            resolved.append(n if n in known else _resolve_ref(reg_rows, n))
-        names = list(dict.fromkeys(resolved))
-        for n in names:
-            if n not in known:
-                raise ToolError(f"找不到 session {n}（list_sessions 看名稱）")
+
+        def apply(tree, reg_rows):  # names are checked against the registry read under edit's lock
+            known = {r.tmux for r in reg_rows}
+            moved = list(dict.fromkeys(n if n in known else _resolve_ref(reg_rows, n) for n in names))
+            for n in moved:
+                if n not in known:
+                    raise ToolError(f"找不到 session {n}（list_sessions 看名稱）")
+            folders.move(tree, [("session", n) for n in moved], dest)
+            return moved
         try:  # edit: loads first, and never writes over a file it cannot trust
-            folders.edit(self.cfg.state_dir, lambda t: folders.move(t, [("session", n) for n in names], dest))
+            names = folders.edit(self.cfg.state_dir, apply, with_rows=True)
         except folders.FoldersError as e:
             raise ToolError(f"{e}（資料夾沒有改動）") from e
         except OSError as e:

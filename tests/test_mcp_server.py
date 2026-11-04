@@ -796,6 +796,25 @@ class FolderToolTest(Base):
         self.assertEqual(tool_json(c.response(2))["folder"], "")
         self.assertEqual(self.tree().sessions, {"b": "客戶/甲"})
 
+    def test_folder_move_checks_names_under_the_lock(self):
+        # a rename that lands just before folder_move takes the lock: the old name must not be written in
+        from contextlib import contextmanager
+        from unittest import mock
+
+        from sampan import registry
+        real = registry.lock
+
+        @contextmanager
+        def renamed_first(state_dir):
+            write_rows(self.cfg.registry_path, [Row(n, "claude", "alice", f"s{n}", f"/w/{n}") for n in ("z", "b", "c")],
+                       "t", self.cfg.history_dir)
+            with real(state_dir):
+                yield
+        with mock.patch("sampan.folders.registry.lock", renamed_first):
+            c = self.serve(Client([init(1), call(2, "folder_move", {"sessions": ["a"], "folder": "x"})]), confirm=False)
+        self.assertIn("找不到 session a", tool_text(c.response(2)))
+        self.assertEqual(self.tree().sessions, {})
+
     def test_folder_move_refuses_and_writes_nothing(self):
         cases = [({"sessions": ["a", "nope"], "folder": "x"}, "找不到 session nope"),
                  ({"sessions": [], "folder": "x"}, "sessions"),

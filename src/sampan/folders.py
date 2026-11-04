@@ -246,14 +246,15 @@ def resolve(tree, names):
     return out
 
 
-def edit(state_dir, fn):
-    """load, fn(tree) (edits in place), save, under the registry lock. Nothing is written if load or fn raises."""
+def edit(state_dir, fn, *, with_rows=False):
+    """load, fn(tree) (edits in place), save, under the registry lock. Nothing is written if load or fn raises.
+    with_rows: fn(tree, rows) gets the registry rows read under that lock too (names checked there cannot go stale)."""
     with registry.lock(state_dir):
         rows = _registry_rows(state_dir)  # read directly: the lock is already held
         if not rows and not (Path(state_dir) / "registry.json").exists() and _has_id_members(state_dir):
             raise _unreadable("登記表不見了，沒辦法把 session 對回資料夾。不會覆蓋資料夾設定")
         tree = load(state_dir, rows)
-        result = fn(tree)
+        result = fn(tree, rows) if with_rows else fn(tree)
         save(state_dir, tree, rows)
         return result
 
