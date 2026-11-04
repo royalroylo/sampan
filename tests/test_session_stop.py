@@ -115,6 +115,17 @@ class StopTest(unittest.TestCase):
         names, _when, _server = last_running(load_rows(self.cfg.registry_path))
         self.assertEqual(names, {"b", "me"})
 
+    def test_stopping_everything_leaves_them_as_the_last_running(self):
+        # stop all, then reboot: the last save still has them running, so R pre-selects them (on purpose: they are
+        # what ran before the shutdown); the second save finds no agent (or no server) and changes no seen_at
+        from sampan.registry import load_rows
+        from sampan.restore import last_running
+        self.alive = {200}  # only a runs
+        self.panes = self.panes[:1]
+        self.stop(self.runner(), own_pane=None)
+        names, _when, _server = last_running(load_rows(self.cfg.registry_path))
+        self.assertEqual(names, {"a"})
+
     def stopped_and_warned(self):
         from sampan.registry import Row, write_rows
         self.panes.append(pane_line("empty", "%4", 103, "zsh", "/c"))  # registered, no agent: a warning

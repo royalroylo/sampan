@@ -1,23 +1,24 @@
-"""The main list's ? page: every key with one line on what it does (KEY_GROUPS), laid out by help_frame (pure)."""
+"""The main list's keys (KEY_GROUPS): the ? page (help_frame, pure) and the bottom help line (FOOTER) both come from it.
+An entry is (key, what it does) or (key, what it does, its short name on the bottom line)."""
 from ..textwidth import ljust, text_width
 
 KEY_GROUPS = [
     ("移動與選取", [
         ("↑ ↓", "移動游標"),
         ("1–9", "跳到第幾列（10 以上 1 秒內打兩位數）"),
-        ("/", "搜尋名稱或別名（Esc 取消）"),
-        ("Tab／Shift+Tab", "依狀態篩選：全部、等人、執行中…"),
-        ("!", "直接看「等人」，再按回到「全部」"),
-        ("空白", "勾選／取消這一列（勾好幾列一起做）"),
-        ("*", "全選；都勾了再按一次全部取消"),
+        ("/", "搜尋名稱或別名（Esc 取消）", "找"),
+        ("Tab／Shift+Tab", "依狀態篩選：全部、等人、執行中…", "篩選"),
+        ("!", "直接看「等人」，再按回到「全部」", "等人"),
+        ("空白", "勾選／取消這一列（勾好幾列一起做）", "勾選"),
+        ("*", "全選；都勾了再按一次全部取消", "全選"),
         ("v", "顯示／隱藏右邊的即時預覽"),
     ]),
     ("session", [
         ("Enter", "進到這個 session（已停止的先接回）"),
-        ("s", "停掉（agent 正常結束，對話保留）"),
-        ("S", "重開：停掉再接回同一段對話，不進去"),
-        ("t", "傳訊息給它（勾了多列就一起送）"),
-        ("n", "開一個新的 session"),
+        ("s", "停掉（agent 正常結束，對話保留）", "停"),
+        ("S", "重開：停掉再接回同一段對話，不進去", "重開"),
+        ("t", "傳訊息給它（勾了多列就一起送）", "送"),
+        ("n", "開一個新的 session", "新"),
         ("R", "一次接回好幾個已停止的"),
         ("A", "接手 tmux 外的 claude／codex"),
         ("e", "改名（tmux 與登記表一起改）"),
@@ -28,35 +29,43 @@ KEY_GROUPS = [
         ("X", "從登記表移除（已停止或 retired 的）"),
     ]),
     ("資料夾", [
-        ("g", "把游標或勾選的包成新資料夾"),
-        ("f", "搬進某個資料夾"),
+        ("g", "把游標或勾選的包成新資料夾", "包"),
+        ("f", "搬進某個資料夾", "搬"),
         ("←", "跳到所在的資料夾列"),
         ("Enter（資料夾）", "收合／展開"),
         ("e／X（資料夾）", "改名／刪除資料夾（session 不動）"),
     ]),
     ("其他畫面與工具", [
-        ("D", "派工清單（取消排隊中的）"),
-        ("p", "plugin 與 marketplace 管理"),
-        ("o", "帳號：額度、改名、停用、新增"),
+        ("D", "派工清單（取消排隊中的）", "派工"),
+        ("p", "plugin 與 marketplace 管理", "外掛"),
+        ("o", "帳號：額度、改名、停用、新增", "帳號"),
         ("w", "立刻存一次登記表"),
         ("U", "更新 sampan（有新版時）"),
-        ("?", "這一頁"),
-        ("q", "離開 sampan"),
+        ("?", "這一頁", "說明"),
+        ("q", "離開 sampan", "退"),
     ]),
 ]
 
+def _footer():
+    """The bottom line: ? first, then the keys with a short name in the table's order. Tab／Shift+Tab shows as Tab."""
+    items = [(k.split("／")[0], e[2]) for _g, keys in KEY_GROUPS for e in keys if len(e) == 3 for k in [e[0]]]
+    items.sort(key=lambda kv: kv[0] != "?")
+    return "　".join(f"{k} {name}" for k, name in items)
+
+
+FOOTER = _footer()
 TITLE = "sampan 按鍵說明"
 FOOT = "按任意鍵回到清單"
 
 
 def _lines():
-    key_w = max(text_width(k) for _g, keys in KEY_GROUPS for k, _d in keys)
+    key_w = max(text_width(e[0]) for _g, keys in KEY_GROUPS for e in keys)
     out = []
     for group, keys in KEY_GROUPS:
         if out:
             out.append([])
         out.append([(group, "head")])
-        out += [[("  " + ljust(k, key_w) + "  ", "key"), (d, "")] for k, d in keys]
+        out += [[("  " + ljust(e[0], key_w) + "  ", "key"), (e[1], "")] for e in keys]
     return out
 
 

@@ -551,7 +551,7 @@ class ListSearchScreenTest(unittest.TestCase):
     def test_help_mentions_jump_and_search(self):
         s = self.screen(["q"])
         s.pick([row("a")], None)
-        self.assertIn("? 說明　/ 找　Tab 篩選　! 等人　* 全選　空白 勾選", self.scr.screens[0][-1])
+        self.assertIn("? 說明　/ 找　Tab 篩選　! 等人　空白 勾選　* 全選", self.scr.screens[0][-1])
 
 
 class CursesUiTest(unittest.TestCase):
@@ -1110,7 +1110,7 @@ class FolderScreenTest(unittest.TestCase):
     def test_help_and_row_keys_mention_S(self):
         s = self.screen(["q"])
         s.pick(self.rows, None)
-        self.assertIn("S 重開　g 包　f 搬", self.shown()[-1])
+        self.assertIn("S 重開　t 送　n 新　g 包　f 搬", self.shown()[-1])
         self.assertIn("S 重開", row_keys(row("x"), {"panes": 1}))
         self.assertIn("S 背景接回", row_keys(row("x", state=State.STOPPED), {"panes": 0}))
 
@@ -1143,8 +1143,8 @@ class HelpPageTest(unittest.TestCase):
         text = "\n".join(page)
         for group, keys in KEY_GROUPS:
             self.assertIn(group, text)
-            for _k, desc in keys:
-                self.assertIn(desc, text)
+            for entry in keys:
+                self.assertIn(entry[1], text)
         self.assertIn("按任意鍵回到清單", page[-1])
         self.assertIn("? 說明", self.scr.screens[-1][-1])  # back on the list
 
@@ -1158,7 +1158,7 @@ class HelpPageTest(unittest.TestCase):
     def test_every_listed_key_does_something_on_the_list(self):
         from sampan.ui.state import Picker
         from tests.test_ui import row as list_row
-        singles = {k for _g, keys in KEY_GROUPS for k, _d in keys if len(k) == 1 and k not in "←"}
+        singles = {e[0] for _g, keys in KEY_GROUPS for e in keys if len(e[0]) == 1 and e[0] not in "←"}
         for k in sorted(singles):
             p = Picker([list_row("a"), list_row("b")], None)
             before = (p.cursor, set(p.marked), p.query, p.filter_name, p._stop, p._restart)
@@ -1166,8 +1166,11 @@ class HelpPageTest(unittest.TestCase):
             after = (p.cursor, set(p.marked), p.query, p.filter_name, p._stop, p._restart)
             self.assertTrue(res is not None or before != after, f"{k} does nothing")
 
+    def test_footer_fits_120_columns(self):
+        self.assertLessEqual(text_width(KEYS_HELP), 118)
+
     def test_footer_keys_are_all_on_the_page(self):
-        listed = {k for _g, keys in KEY_GROUPS for k, _d in keys}
+        listed = {e[0] for _g, keys in KEY_GROUPS for e in keys}
         for item in KEYS_HELP.split("　"):
             key = item.split(" ")[0]
             self.assertTrue(any(key == k or key in k.split("／") for k in listed), item)
