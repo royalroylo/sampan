@@ -140,6 +140,16 @@ class StopTest(unittest.TestCase):
         self.stop(self.runner(), names=("a",))
         self.assertFalse(any(m.startswith("存檔") for m in self.msgs))
 
+    def test_unknown_names_are_errors(self):
+        r = self.runner()
+        self.assertEqual(self.stop(r, names=("zz",)), 2)
+        self.assertEqual(self.sent(r), [])
+        self.assertIn("❌ 找不到 session：zz（tmux 裡沒有：沒在跑，或名稱打錯）", self.msgs)
+        self.msgs.clear()
+        self.stop(r, names=("a", "zz"))  # the known one is still stopped
+        self.assertEqual(self.sent(r), [["%1", "C-u"], ["%1", "/exit", "Enter"]])
+        self.assertIn("❌ 找不到 session：zz（tmux 裡沒有：沒在跑，或名稱打錯）", self.msgs)
+
     def test_closed_session_stays_in_registry_for_restore(self):
         # Regression: since v0.3.2 stop closes tmux, and the next save treated it as closed by the user and deleted that row
         from sampan.registry import load_rows, merge

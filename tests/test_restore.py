@@ -594,7 +594,14 @@ class RestoreTest(Base):
                     sleep=self.sleep, now_fn=lambda: NOW, timeout=0, alive=dead)
         self.assertEqual(len(asked), 1)
         self.assertEqual([c["args"][-3] for c in r.called(["tmux", "-u", "new-session"])], ["b"])
-        self.assertIn("登記表沒有 nope", self.text())
+        self.assertIn("❌ 找不到 session：nope（登記表沒有）", self.text())
+
+    def test_only_unknown_names_is_rc2(self):
+        self.registry([Row("a", "claude", "alice", A, str(self.cwd))])
+        r = self.runner()
+        self.assertEqual(self.restore(r, names=("nope",)), 2)
+        self.assertEqual(r.called(["tmux", "-u", "new-session"]), [])
+        self.assertEqual(self.text(), "❌ 找不到 session：nope（登記表沒有）")
 
     def test_interval_between_launches(self):
         for sid in (A, B, C):

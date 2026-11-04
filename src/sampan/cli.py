@@ -390,6 +390,11 @@ def _resolve_refs(cfg, refs, out):
             if not r.startswith("找不到"):
                 out(f"❌ {r}")
                 return None
+            parts = ref.split()
+            if len(parts) > 1 and all(not isinstance(ids.resolve(rows, p), str) for p in parts):
+                out(f"❌ 找不到 session：「{ref.strip()}」")
+                out(f"   這像是 {len(parts)} 個名稱黏成一個參數（zsh 的 $L 不會自動拆開：用 ${{=L}}，或把名稱分開寫）")
+                return None
             names.append(ref)
         else:
             names.append(r.tmux)
@@ -608,8 +613,14 @@ def _dispatch(cfg, args):
         if refs is None:
             return 2
         plan = restart.plan_restart(status.status_rows(cfg, run), refs, resume_stopped=True, own_pane=own)
+        missing = [n for n, why in plan.skip if why == restart.NOT_FOUND]
+        for n in missing:
+            out(f"❌ 找不到 session：{n}")
+        plan.skip[:] = [(n, why) for n, why in plan.skip if why != restart.NOT_FOUND]
         if not plan.restart and not plan.resume:
-            out("沒有可重開的 session。" + (restart.skip_text(plan.skip) if plan.skip else ""))
+            if not plan.skip:
+                return 2
+            out("沒有可重開的 session。" + restart.skip_text(plan.skip))
             return 1
         on_prompt, _want = _prompt_fn()
         return restart.cmd_restart(cfg, run, out, input, plan, own_pane=own, on_prompt=on_prompt)

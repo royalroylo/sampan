@@ -298,9 +298,11 @@ def cmd_restore(cfg, run, out, ask, *, names=(), select_all=False, dry_run=False
         return 2
     all_rows = rows
     known = {r.tmux for r in rows}
-    for n in names:
-        if n not in known:
-            out(f"⚠ 登記表沒有 {n}")
+    missing = [n for n in names if n not in known]
+    for n in missing:
+        out(f"❌ 找不到 session：{n}（登記表沒有）")
+    if names and len(missing) == len(set(names)):
+        return 2
     retired = []
     if names:
         rows = [r for r in rows if r.tmux in names]

@@ -439,6 +439,11 @@ def cmd_stop(cfg, run, out, *, names=(), profile=None, force=False, dry_run=Fals
         return 2
     for line in save_lines:
         out(line)
+    missing = [n for n in dict.fromkeys(names) if n not in {p.session for p in panes}]
+    for n in missing:
+        out(f"❌ 找不到 session：{n}（tmux 裡沒有：沒在跑，或名稱打錯）")
+    if names and len(missing) == len(set(names)):
+        return 2
     procs = list_procs(run)
     found, multi = _agents(cfg, run, panes, procs, proc_root)
 

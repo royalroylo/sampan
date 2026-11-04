@@ -23,6 +23,9 @@ def _other_state(row):
         return LABELS[row.state]
 
 
+NOT_FOUND = "找不到"
+
+
 def plan_restart(rows, names, *, resume_stopped, own_pane=None):
     """Classify names (in the given order, each once). StatusRow.pane is the tmux pane id, the same kind of id
     cmd_stop compares with own_pane. resume_stopped: True / False for every stopped session, or the collection of
@@ -36,7 +39,7 @@ def plan_restart(rows, names, *, resume_stopped, own_pane=None):
         seen.add(name)
         row = by_name.get(name)
         if row is None:
-            plan.skip.append((name, "找不到"))
+            plan.skip.append((name, NOT_FOUND))
         elif row.state is State.RUNNING:
             if own_pane and row.pane == own_pane:
                 plan.skip.append((name, "sampan 就在這個 pane"))

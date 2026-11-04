@@ -119,7 +119,43 @@ class CliTest(unittest.TestCase):
                 mock.patch("sampan.restart.cmd_restart") as cr, redirect_stdout(out):
             self.assertEqual(cli.main(["restart", "a", "zz"]), 1)
         cr.assert_not_called()
-        self.assertIn("略過：a（retired）、zz（找不到）", out.getvalue())
+        self.assertIn("❌ 找不到 session：zz", out.getvalue())
+        self.assertIn("略過：a（retired）", out.getvalue())
+        self.assertNotIn("zz（找不到）", out.getvalue())
+
+    def test_names_stuck_together_by_the_shell_get_a_hint(self):
+        # 10/31: zsh passed `sampan restart $L` as one argument holding every name
+        register(self.cfg, "a", "b", "c")
+        for cmd in ("restart", "stop", "restore"):
+            out = io.StringIO()
+            with mock.patch("sampan.restart.cmd_restart") as cr, mock.patch("sampan.session_run.cmd_stop") as cs, \
+                    mock.patch("sampan.restore.cmd_restore") as cre, redirect_stdout(out):
+                self.assertEqual(cli.main([cmd, "a b c "]), 2)
+            for m in (cr, cs, cre):
+                m.assert_not_called()
+            self.assertIn("❌ 找不到 session：「a b c」", out.getvalue())
+            self.assertIn("3 個名稱黏成一個參數", out.getvalue())
+            self.assertIn("${=L}", out.getvalue())
+
+    def test_a_name_with_a_space_that_is_not_several_names_gets_no_hint(self):
+        from sampan.status import State
+        from tests.helpers import status_row
+        register(self.cfg, "a")
+        out = io.StringIO()
+        with mock.patch("sampan.status.status_rows", return_value=[status_row("a", State.RETIRED)]), \
+                mock.patch("sampan.restart.cmd_restart") as cr, redirect_stdout(out):
+            self.assertEqual(cli.main(["restart", "a nope"]), 2)
+        cr.assert_not_called()
+        self.assertIn("❌ 找不到 session：a nope", out.getvalue())
+        self.assertNotIn("黏成", out.getvalue())
+
+    def test_restart_with_only_unknown_names_is_rc2(self):
+        out = io.StringIO()
+        with mock.patch("sampan.status.status_rows", return_value=[]), \
+                mock.patch("sampan.restart.cmd_restart") as cr, redirect_stdout(out):
+            self.assertEqual(cli.main(["restart", "zz", "yy"]), 2)
+        cr.assert_not_called()
+        self.assertEqual(out.getvalue().splitlines(), ["❌ 找不到 session：zz", "❌ 找不到 session：yy"])
 
     def test_new_passes_folder_only_when_given(self):
         with mock.patch("sampan.session_run.cmd_new", return_value=0) as nw:
