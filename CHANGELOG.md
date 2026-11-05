@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-06
+
 ### Added
 - `?` on the main list (outside search) shows every key with one line on what it does, in groups, two columns when the terminal is short; any key goes back. The bottom key line starts with `? 說明` and is now built from the same table (`v 預覽` moved to the page to stay within 120 columns).
 - `sampan stop -v` / `--verbose` lists every stopped session in the save that runs before stopping.
