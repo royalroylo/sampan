@@ -833,7 +833,9 @@ class CursesScreen:
         def card(c):
             quote = _quote_of(self.cfg, c.row.agent, c.row.profile, c.row.session_id) if self.cfg else ""
             return restore_card(self.cfg, c, now, quote)
-        return self.checklist(cands, title="sampan restore：勾選要接回的", help=RESTORE_HELP, cells=_restore_cells,
+        rule = next((c.rule for c in cands if getattr(c, "rule", "")), "")
+        title = f"sampan restore：勾選要接回的（[x] = 預設勾選：{rule}）" if rule else "sampan restore：勾選要接回的"
+        return self.checklist(cands, title=title, help=RESTORE_HELP, cells=_restore_cells,
                               ident=_row_key, card=card, cols=(6, 10))
 
     def adopt_checklist(self, cands):

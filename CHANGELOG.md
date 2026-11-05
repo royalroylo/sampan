@@ -5,6 +5,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-11-06
+
+### Fixed
+- The `R` checklist now says what its default checkmarks mean in its title (`[x] = 預設勾選：7 天內有活動`, or `關機前在跑的，最後存檔 …` after a reboot); before, only the terminal `sampan restore` printed it, and an unchecked row looked unexplained. An unchecked resumable row's card says why (for example `超過 7 天沒動，所以沒預設勾`) and how to check it.
+- Enter with nothing checked in the restore checklist (or the terminal prompt) says `沒有勾選任何 session，沒有接回` instead of looking like a cancel.
+
 ## [0.16.0] - 2026-11-06
 
 ### Added

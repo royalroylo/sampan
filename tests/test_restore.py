@@ -216,6 +216,26 @@ class LastRunningTest(Base):
         when = fmt_local(datetime(2026, 10, 20, 1, tzinfo=timezone.utc))
         self.assertIn(f"[x] = 預設勾選：關機前在跑的，最後存檔 {when}", self.text())
 
+    def test_candidates_carry_the_rule_and_why_not_checked(self):
+        self.setup_abc()
+        self.server = False
+        by = {c.row.tmux: c for c in candidates(self.cfg, self.runner(), _rows(self.cfg), NOW)}
+        self.assertTrue(by["a"].rule.startswith("關機前在跑的，最後存檔 "))
+        self.assertEqual((by["a"].why, by["c"].why), ("", "最後一次存檔時它沒在跑，所以沒預設勾"))
+        self.server, self.server_id = True, "111-1"
+        self.transcript(C, days_ago=10)
+        by = {c.row.tmux: c for c in candidates(self.cfg, self.runner(), _rows(self.cfg), NOW)}
+        self.assertEqual((by["c"].rule, by["c"].why), ("7 天內有活動", "超過 7 天沒動，所以沒預設勾"))
+
+    def test_nothing_checked_says_so_instead_of_cancelled(self):
+        self.transcript(A, days_ago=10)
+        self.registry([Row("old", "claude", "alice", A, str(self.cwd))])
+        r = self.runner()
+        self.assertEqual(self.restore(r, picker_fn=lambda cands: []), 0)
+        self.assertEqual(r.called(["tmux", "-u", "new-session"]), [])
+        self.assertIn("沒有勾選任何 session，沒有接回", self.text())
+        self.assertNotIn("已取消", self.text())
+
     def test_last_running(self):
         from sampan.restore import last_running
         rows = [Row("a", "claude", "p", A, "/", seen_at="2026-10-20T01:00:00+00:00", server="s"),

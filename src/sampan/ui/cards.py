@@ -177,6 +177,8 @@ def restore_card(cfg, c, now, quote=""):
         lines += ["", "最後一句話", Wrap(f"「{quote}」")]
     if c.skip:
         lines += ["", Wrap(f"↷ 不能接回：{c.skip}")]
+    elif getattr(c, "why", ""):
+        lines += ["", Wrap(f"[ ] {c.why}；要接回就按空白勾起來，再按 Enter")]
     return lines
 
 

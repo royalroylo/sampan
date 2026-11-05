@@ -29,6 +29,8 @@ class Candidate:
     tokens: int | None
     selected: bool
     skip: str | None
+    why: str = ""  # why a resumable row is not pre-checked (shown on its card)
+    rule: str = ""  # what the default [x] means this time, e.g. "7 天內有活動" ("" when names or --all picked them)
 
 
 def _is_agent(p):
@@ -133,7 +135,8 @@ def candidates(cfg, run, rows, now, *, alive=os.kill, rule=None):
     """Active rows whose tmux session has no agent running, with last activity, default selection and skip reason.
     rule: default_rule's result (worked out here when None)."""
     live = _observe(cfg, run)
-    running, _when = rule if rule is not None else default_rule(cfg, run, rows)
+    running, when = rule if rule is not None else default_rule(cfg, run, rows)
+    label = rule_label(cfg, (running, when))
     recent = timedelta(days=cfg.recent_days)
     result = []
     for row in rows:
@@ -143,10 +146,21 @@ def candidates(cfg, run, rows, now, *, alive=os.kill, rule=None):
         last, tokens, _window = _activity(cfg, row.agent, row.profile, row.session_id)
         if running is not None:
             selected = skip is None and row.tmux in running
+            why = "" if selected or skip else "最後一次存檔時它沒在跑，所以沒預設勾"
         else:
             selected = skip is None and last is not None and now - last <= recent
-        result.append(Candidate(row, last, tokens, selected, skip))
+            why = ("" if selected or skip else "沒有活動紀錄，所以沒預設勾" if last is None
+                   else f"超過 {cfg.recent_days} 天沒動，所以沒預設勾")
+        result.append(Candidate(row, last, tokens, selected, skip, why, label))
     return result
+
+
+def rule_label(cfg, rule):
+    """What the default [x] means for default_rule's result."""
+    running, when = rule
+    if running is not None:
+        return f"關機前在跑的，最後存檔 {_fmt_time(when)}"
+    return f"{cfg.recent_days} 天內有活動"
 
 
 def _show(out, cands):
@@ -316,15 +330,12 @@ def cmd_restore(cfg, run, out, ask, *, names=(), select_all=False, dry_run=False
         out(f"❌ {e}；不知道哪些 session 還在，什麼都沒建、沒接回")
         return 1
     if names or select_all:
-        cands = [Candidate(c.row, c.last, c.tokens, c.skip is None, c.skip) for c in cands]
+        cands = [Candidate(c.row, c.last, c.tokens, c.skip is None, c.skip) for c in cands]  # all checked: no rule
     if not cands:
         if not retired:
             out("沒有要接回的 session（登記表裡 active 的都已在執行）")
         return 0
-    if rule[0] is not None and not (names or select_all):
-        out(f"可接回的 session（[x] = 預設勾選：關機前在跑的，最後存檔 {_fmt_time(rule[1])}）：")
-    else:
-        out(f"可接回的 session（[x] = 預設勾選：{cfg.recent_days} 天內有活動）：")
+    out(f"可接回的 session（[x] = 預設勾選：{rule_label(cfg, rule)}）：")
     _show(out, cands)
     if dry_run or not confirm or all(c.skip for c in cands):
         picked = [c.row.tmux for c in cands if c.selected]  # no reattachable rows, nothing to ask
@@ -332,6 +343,9 @@ def cmd_restore(cfg, run, out, ask, *, names=(), select_all=False, dry_run=False
         picked = picker_fn(cands) if picker_fn is not None else text_picker(out, ask, cands)
         if picked is None:
             out("已取消，什麼都沒做")
+            return 0
+        if not picked:
+            out("沒有勾選任何 session，沒有接回（在要接回的那一列按空白勾起來，再按 Enter）")
             return 0
     if not dry_run and picked:  # from here on what happens is logged (a restart's own label stays when it runs this)
         out = actionlog.tee(cfg, "接回", out)

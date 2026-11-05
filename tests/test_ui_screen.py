@@ -442,6 +442,23 @@ class CursesScreenTest(unittest.TestCase):
         self.assertIn("[-] b", shown)
         self.assertIn("找不到逐字稿", shown)
 
+    def test_restore_checklist_says_the_rule_and_why_a_row_is_not_checked(self):
+        old = NOW - timedelta(days=8)
+        cands = [Candidate(Row("tb", "claude", "alice", SID, "/c"), old, 112_000, False, None,
+                           "超過 7 天沒動，所以沒預設勾", "7 天內有活動")]
+        s = self.screen(["q"])
+        self.assertIsNone(s.restore_checklist(cands))
+        shown = "\n".join(self.scr.screens[-1])
+        self.assertIn("sampan restore：勾選要接回的（[x] = 預設勾選：7 天內有活動）", shown)
+        self.assertIn("[ ] 超過 7 天沒動，所以沒預設勾；要接回就按空白勾起來", shown)  # the card wraps the rest
+
+    def test_restore_checklist_without_a_rule_keeps_the_plain_title(self):
+        cands = [Candidate(Row("a", "claude", "alice", SID, "/c"), NOW, None, True, None)]
+        s = self.screen(["q"])
+        s.restore_checklist(cands)
+        self.assertIn("sampan restore：勾選要接回的", self.scr.screens[-1][0])
+        self.assertNotIn("預設勾選", self.scr.screens[-1][0])
+
     def test_adopt_checklist_cancel(self):
         c = NS(key="600", agent="claude", profile="alice", session_id=SID, cwd="/p", where="~/p", last=NOW,
                ago="3 分鐘前", text="修 bug", quote="「修 bug」", selected=True, skip=None, guessed=False)
