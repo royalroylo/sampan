@@ -17,6 +17,7 @@ All notable changes to this project are documented here. The format follows
 ### Fixed
 - `sampan restore <names>` without a terminal no longer cancels silently: the named sessions are reattached without asking. With no names (or only `--all`) and no terminal it says why and exits 2.
 - MCP `folder_move` resolves and checks session names under the registry lock it writes under, so a rename in between cannot write a stale name.
+- The test suite no longer leaves temp folders behind (tens of thousands had piled up in the system temp dir): every temp directory goes under one root per run, removed at exit, and a run that leaves one outside it fails.
 - On the main list, the last byte of an arrow key still counts as the arrow up to 3 s after its `[` (the screen keeps refreshing meanwhile), so a slow link no longer turns ↑ into `A` (adopt). Other screens keep the 1 s wait; the docs list this as a known limit.
 
 ## [0.15.2] - 2026-11-01

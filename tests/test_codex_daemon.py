@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from sampan import codex_daemon as cd
+from tests import SHORT_TMP
 from tests.fakes import FakeRunner, cp
 
 NOW = datetime(2026, 10, 25, 4, 0, tzinfo=timezone.utc)
@@ -54,7 +55,7 @@ class FakeDaemon:
 
     def __init__(self, results=None, notify=False, silent_after=None, drop_after=None, upgrade=True, split=False,
                  pings=False, errors=(), rel="d.sock"):
-        self.dir = tempfile.mkdtemp(dir="/tmp")
+        self.dir = tempfile.mkdtemp(dir=SHORT_TMP)
         self.path = Path(self.dir) / rel
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.results = dict(RESULTS if results is None else results)
@@ -262,7 +263,7 @@ class SnapshotTests(DaemonCase):
         self.assertEqual(len(snap.threads), 2)
 
     def test_slow_version_command_cannot_exceed_budget(self):
-        home = Path(tempfile.mkdtemp(dir="/tmp"))
+        home = Path(tempfile.mkdtemp(dir=SHORT_TMP))
         self.addCleanup(shutil.rmtree, home, True)
         seen = []
 
@@ -280,7 +281,7 @@ class SnapshotTests(DaemonCase):
         self.assertEqual(inspect.signature(cd.snapshot).parameters["timeout"].default, 3.0)
 
     def test_no_socket_returns_none(self):
-        home = Path(tempfile.mkdtemp(dir="/tmp"))
+        home = Path(tempfile.mkdtemp(dir=SHORT_TMP))
         self.addCleanup(shutil.rmtree, home, True)
         self.assertIsNone(cd.snapshot(home, FakeRunner().on(["codex"], cp(rc=1)), now=NOW))
 
@@ -317,7 +318,7 @@ class ParserTests(unittest.TestCase):
 
 class SocketPathTests(unittest.TestCase):
     def setUp(self):
-        self.home = Path(tempfile.mkdtemp(dir="/tmp"))
+        self.home = Path(tempfile.mkdtemp(dir=SHORT_TMP))
         self.addCleanup(shutil.rmtree, self.home, True)
 
     def test_socket_path_prefers_default_then_version(self):

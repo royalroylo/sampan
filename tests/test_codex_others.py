@@ -21,6 +21,7 @@ from sampan.ui.codex_others import (
     other_rows,
     rel_time,
 )
+from tests import SHORT_TMP
 from tests.helpers import status_row
 
 NOW = datetime(2026, 10, 25, 9, 0, tzinfo=timezone.utc)
@@ -166,7 +167,7 @@ class TmpRootsTest(unittest.TestCase):
         from unittest import mock
 
         from sampan.ui.screen import tmp_roots
-        link = Path(tempfile.mkdtemp(dir="/tmp"))
+        link = Path(tempfile.mkdtemp(dir=SHORT_TMP))
         self.addCleanup(link.rmdir)
         real = Path(os.path.realpath(link))
         with mock.patch.dict(os.environ, {"TMPDIR": str(link) + "/."}):

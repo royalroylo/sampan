@@ -99,3 +99,16 @@ class StrictFakeRunnerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TempRootTest(unittest.TestCase):
+    def test_temp_dirs_land_under_the_runs_own_root(self):
+        import os
+        import tempfile
+
+        import tests
+        self.assertEqual(tempfile.gettempdir(), tests._ROOT)
+        self.assertEqual(os.environ["TMPDIR"], tests._ROOT)  # child processes too
+        with tempfile.TemporaryDirectory() as d:
+            self.assertTrue(d.startswith(tests._ROOT + os.sep))
+        self.assertTrue(tests.SHORT_TMP.startswith("/tmp/"))

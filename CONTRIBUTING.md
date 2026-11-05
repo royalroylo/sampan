@@ -21,6 +21,10 @@ uv run python -m unittest discover -s tests -t .
 (and `tests/test_isolation.py` checks it); use `FakeRunner` from `tests/fakes.py` and temporary directories. Anything that
 needs a real tmux must use a private socket (`tmux -L <name>`) and be run by hand, never in the suite.
 
+`tests/__init__.py` points every temp directory (also `TMPDIR` for child processes) at one root per run and removes it
+at exit; use `tests.SHORT_TMP` (under `/tmp`) where a unix socket path must stay short. A run that leaves a test's
+temp folder in the system temp dir or `/tmp` fails at exit.
+
 ## Testing on Linux
 
 ```
