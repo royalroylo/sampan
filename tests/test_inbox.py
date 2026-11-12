@@ -58,6 +58,11 @@ class InboxBase(DoorbellBase):
         self.append([tool_use("mcp__sampan__inbox_take", "tk"), _result(text, "tk")])
         return receipt_of(text)
 
+    def ended(self, run, did, at):
+        """Two idle looks in a row (the first at at - 1, with its own runner) end a turn; run sees the second."""
+        self.advance(runner(), did, later(at - 1))
+        return self.advance(run, did, later(at))
+
     def conn(self):
         conn = store.connect(self.cfg.state_dir)
         self.addCleanup(conn.close)
@@ -253,7 +258,8 @@ class TurnEndTest(InboxBase):
         fixture = FIXTURE.read_text().replace("{receipt}", did).replace("{first}", a1.id).replace("{second}", a2.id)
         with self.path().open("a") as fh:
             fh.write(fixture)
-        self.assertEqual(self.advance(runner(), a2.id, later(10)).state, "done")
+        self.assertEqual(self.advance(runner(), a2.id, later(10)).state, "sent")  # one idle look is not enough
+        self.assertEqual(self.advance(runner(), a2.id, later(13)).state, "done")
         self.assertEqual(self.parts(a1.id), [("tool", "answer one", False)])
         self.assertEqual(self.parts(a2.id), [("fill", "第二則也做完了：answer two", False)])
         for x, reply in ((a1, "answer one"), (a2, "第二則也做完了：answer two")):
@@ -273,7 +279,7 @@ class TurnEndTest(InboxBase):
         did = self.taken(a1)
         self.append([ts.assistant("done")])
         self.set_row("a", agent_status="busy")  # the notice has to wait
-        self.advance(runner(), a1.id, later(30))
+        self.ended(runner(), a1.id, 30)
         self.assertEqual((self.stored(a1.id).state, self.stored(a1.id).notified), ("done", False))
         self.reply(a1.id, "better answer", did, at=40)
         self.set_row("a", agent_status="idle")
@@ -281,6 +287,35 @@ class TurnEndTest(InboxBase):
         self.advance(run, a1.id, later(45))
         self.assertEqual(self.notices(run, "%1"),
                          [f"〔sampan：給 b 的派工 {a1.id} 已回覆；用 sampan 工具 dispatch_result 看內容〕"])
+
+    def test_a_busy_look_in_between_starts_over(self):
+        a1 = self.send_at(0, "one")
+        self.taken(a1)
+        self.append([ts.assistant("done")])
+        self.assertEqual(self.advance(runner(), a1.id, later(30)).status, "taken")
+        self.set_row("b", agent_status="busy")
+        self.assertEqual(self.advance(runner(), a1.id, later(33)).status, "taken")
+        self.set_row("b", agent_status="idle")
+        self.assertEqual(self.advance(runner(), a1.id, later(36)).status, "taken")  # a first look again
+        self.assertEqual(self.advance(runner(), a1.id, later(39)).state, "done")
+
+    def test_two_late_replies_after_the_notice_are_both_more(self):
+        a1 = self.send_at(0, "one")
+        did = self.taken(a1)
+        self.append([ts.assistant("done")])
+        run = runner()
+        self.ended(run, a1.id, 30)
+        self.assertEqual(self.notices(run, "%1"),
+                         [f"〔sampan：給 b 的派工 {a1.id} 已回覆；用 sampan 工具 dispatch_result 看內容〕"])
+        self.set_row("a", agent_status="busy")  # the next notice has to wait
+        self.reply(a1.id, "more one", did, at=40)
+        self.reply(a1.id, "more two", did, at=41)
+        self.advance(runner(), a1.id, later(42))
+        self.set_row("a", agent_status="idle")
+        run = runner()
+        self.advance(run, a1.id, later(45))
+        self.assertEqual(self.notices(run, "%1"),
+                         [f"〔sampan：給 b 的派工 {a1.id} 又多了一段回覆；用 sampan 工具 dispatch_result 看內容〕"])
 
     def test_busy_target_is_not_judged(self):
         a1 = self.send_at(0, "one")
@@ -294,7 +329,8 @@ class TurnEndTest(InboxBase):
         self.taken(a1)
         self.append([tool_use("Bash", "b1"), _result("[Request interrupted by user for tool use]", "b1")])
         self.append([ts.user([{"type": "text", "text": "[Request interrupted by user]"}])])
-        got = self.advance(runner(), a1.id, later(30))
+        self.assertEqual(self.advance(runner(), a1.id, later(30)).status, "taken")  # one idle look is not enough
+        got = self.advance(runner(), a1.id, later(33))
         self.assertEqual((got.state, got.status, got.reason), ("failed", "unanswered", "已取走，這一輪結束卻沒有回覆"))
 
     def test_take_not_in_the_transcript_is_unanswered_after_the_grace(self):
@@ -302,7 +338,8 @@ class TurnEndTest(InboxBase):
         self.rung(a1)
         self.take()  # its result never reaches the transcript
         self.assertEqual(self.advance(runner(), a1.id, later(10)).status, "taken")  # within the grace
-        got = self.advance(runner(), a1.id, later(30))
+        self.assertEqual(self.advance(runner(), a1.id, later(30)).status, "taken")  # one idle look is not enough
+        got = self.advance(runner(), a1.id, later(33))
         self.assertEqual((got.state, got.status), ("failed", "unanswered"))
 
     def test_stopped_target_fails_the_unreplied(self):
@@ -341,7 +378,7 @@ class TurnEndTest(InboxBase):
         self.taken(a1, a2, z1)
         self.append([ts.assistant("all three done")])
         run = runner()
-        self.advance(run, a1.id, later(30))
+        self.ended(run, a1.id, 30)
         self.assertEqual(self.notices(run, "%1"),
                          [f"〔sampan：給 b 的派工 {a1.id}、{a2.id}（一起送出）已回覆；用 sampan 工具 dispatch_result 看內容〕"])
         self.assertEqual(self.notices(run, "%9"), [])  # z is told by its own watcher
@@ -357,7 +394,7 @@ class TurnEndTest(InboxBase):
         did = self.taken(t)
         self.append([ts.assistant("done")])
         run = runner()
-        got = self.advance(run, t.id, later(30))
+        got = self.ended(run, t.id, 30)
         self.assertEqual((got.state, got.notify), ("done", False))
         self.assertEqual(ts.tmux_writes(run), [])
         self.reply(t.id, "one more", did, at=40)
@@ -372,7 +409,7 @@ class TurnEndTest(InboxBase):
         self.assertEqual((got.state, got.reason), ("queued", send.BUSY["busy"]))
         self.assertEqual(ts.tmux_writes(run, "%2"), [])
         self.append([ts.assistant("done one")])
-        got = self.advance(runner(), a2.id, later(30))  # the turn ended: the delivery is over, a2 gets its ring
+        got = self.ended(runner(), a2.id, 30)  # the turn ended: the delivery is over, a2 gets its ring
         self.assertEqual((self.stored(a1.id).state, got.status), ("done", "rung"))
 
 

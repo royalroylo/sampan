@@ -770,16 +770,28 @@ def _check_inbox(cfg, d, row, now, items, delivery):
         return
     for x in waiting:
         x.reason = REASON_PARTIAL if x.status == "partial" else REASON_TAKEN
-    if row.agent_status not in READY:
+    if row.agent_status not in READY:  # a busy look in between: the two idle looks start over
+        _mark_turn_end(conn, delivery, "")
         return
     path = find_transcript(cfg.profiles.values(), row.sid, prefer=row.profile)
     info = after_marker(path, receipt_marker(delivery["id"]), start=delivery["cursor"]) if path else TurnInfo(False)
-    if info.found and not info.ended:
-        return
     created = parse_iso(delivery["created"])
-    if not info.found and created is not None and (now - created).total_seconds() < NOT_SEEN_GRACE_S:
-        return  # the take's result may not be written yet
+    if (info.found and not info.ended) or (not info.found and created is not None
+                                           and (now - created).total_seconds() < NOT_SEEN_GRACE_S):
+        _mark_turn_end(conn, delivery, "")  # still going, or the take's result may not be written yet
+        return
+    if delivery["reason"] != TURN_END_SEEN:  # as a paste: the turn looks over on two idle looks in a row
+        _mark_turn_end(conn, delivery, TURN_END_SEEN)
+        return
     _end_inbox(cfg, conn, delivery, waiting, now, info.last_text if info.found else "")
+
+
+TURN_END_SEEN = "這一輪看起來結束了"  # the mark of one idle look at an inbox delivery whose turn looked over (internal)
+
+
+def _mark_turn_end(conn, delivery, mark):
+    if (delivery["reason"] or "") != mark:
+        conn.execute("UPDATE deliveries SET reason=? WHERE id=?", (mark, delivery["id"]))
 
 
 def _end_inbox(cfg, conn, delivery, waiting, now, last_text, *, status="unanswered", reason=REASON_UNANSWERED):

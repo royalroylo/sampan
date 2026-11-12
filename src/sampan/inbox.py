@@ -121,6 +121,7 @@ def reply(cfg, caller, dispatch_id, text, receipt=None, *, now):
         if delivery is None:
             raise InboxError(WRONG_RECEIPT if receipt and _taken_in(conn, d.id, None) else NOT_TAKEN)
         late = bool(delivery["archived"] or delivery["link_archived"]) or d.state == "cancelled"
+        unannounced = _first_notice_pending(conn, d, delivery["id"])
         deliveries.add_part(conn, delivery_id=delivery["id"], message=d.id, text=text, how="tool", now=now, late=late)
         if late:
             return LATE
@@ -130,13 +131,23 @@ def reply(cfg, caller, dispatch_id, text, receipt=None, *, now):
         if delivery["state"] == deliveries.ACTIVE:
             d.status, d.reason = "partial", send.REASON_PARTIAL
         else:  # its turn already ended (replied or unanswered): one more part, and one more notice
-            if d.notify and not d.notified or not d.done_at:  # its sender was not told yet: one notice, of the reply
+            if unannounced or not d.done_at:  # the notice of the turn's end is still owed: it tells this reply
                 d.done_at = send._iso(now)
             d.state, d.status, d.reason = "done", "replied", ""
             if d.from_kind == "session" and d.batch is None:
                 d.notify, d.notified = True, False
     send._log(cfg, "send", f"派工 {d.id}：{caller.name} 回覆（第 {k} 段，送達 {delivery['id']}）")
     return f"已記下，派工 {d.id} 的回覆（第 {k} 段）"
+
+
+def _first_notice_pending(conn, d, delivery_id):
+    """d's turn ended and the notice of that end is still owed: no reply part came after done_at yet (one would mean
+    that notice was sent, and the parts since are told as 又多了一段回覆), and the notice was not sent."""
+    if d.state not in dispatch.FINISHED or not d.notify or d.notified:
+        return False
+    latest, end = deliveries.latest_part(conn, d.id, delivery=delivery_id), parse_iso(d.done_at)
+    at = parse_iso(latest["at"]) if latest is not None else None
+    return at is None or end is None or at <= end
 
 
 def _taken_in(conn, message, receipt):
