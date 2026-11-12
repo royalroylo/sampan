@@ -41,9 +41,16 @@ def tool_use(name, uid="t1"):
         {"type": "tool_use", "id": uid, "name": name, "input": {}}]}}
 
 
-def tool_result(text, uid="t1"):
-    return {"type": "user", "message": {"role": "user", "content": [
-        {"type": "tool_result", "tool_use_id": uid, "content": text}]}}
+def tool_result(text, uid="t1", error=False):
+    part = {"type": "tool_result", "tool_use_id": uid, "content": text}
+    if error:
+        part["is_error"] = True
+    return {"type": "user", "message": {"role": "user", "content": [part]}}
+
+
+INTERRUPTED = {"type": "user", "message": {"role": "user", "content": [
+    {"type": "text", "text": "[Request interrupted by user]"}]}}
+USER_PASTE = "[Pasted text #1 +12 lines]"  # how Claude shows a user's own multi-line paste on the prompt line
 
 
 class DoorbellBase(ts.Base):
@@ -76,6 +83,70 @@ class DoorbellBase(ts.Base):
         self.heartbeat(at=later(at))
         self.advance(runner(), msgs[0].id, later(at))
         return self.rings()[-1]
+
+
+class FixRoundOneTest(DoorbellBase):
+    def ring_line(self, ring):
+        return dispatch.outbox_path(self.cfg.state_dir, f"ring-{ring['id']}").read_text()
+
+    def test_interrupted_ring_turn_then_a_typed_message_is_no_answer(self):
+        a = self.submit_at(0)
+        ring = self.ring(a)
+        self.transcript(SID_B, [ts.user(self.ring_line(ring)), INTERRUPTED, ts.user("something else"),
+                                ts.assistant("other answer")])
+        got = self.advance(runner(), a.id, later(40))
+        self.assertEqual((self.rings()[0]["result"], got.state), ("no_answer", "sent"))
+
+    def test_pending_tool_then_a_typed_message_is_no_answer(self):
+        a = self.submit_at(0)
+        ring = self.ring(a)
+        self.transcript(SID_B, [ts.user(self.ring_line(ring)), tool_use("Bash"), ts.user("never mind")])
+        self.advance(runner(), a.id, later(40))
+        self.assertEqual(self.rings()[0]["result"], "no_answer")
+
+    def test_ended_turn_with_a_busy_target_is_not_no_answer(self):
+        a = self.submit_at(0)
+        ring = self.ring(a)
+        self.transcript(SID_B, [ts.user(self.ring_line(ring)), ts.assistant("not now")])
+        self.set_row("b", agent_status="busy")
+        got = self.advance(FakeRunner(strict=True), a.id, later(40))
+        self.assertEqual((got.status, self.rings()[0]["result"]), ("rung", "ringing"))
+
+    def test_user_paste_draft_never_gets_enter_from_a_new_ring(self):
+        a = self.submit_at(0)
+        self.heartbeat(at=later(1))
+        run = runner(ring_screen(USER_PASTE))
+        got = self.advance(run, a.id, later(1))
+        self.assertEqual(run.sent_keys(), [])
+        self.assertEqual((got.status, got.reason, self.rings()[0]["result"]), ("", deliver.REASON_DRAFT, "paste_failed"))
+
+    def test_user_paste_draft_never_gets_enter_from_settle(self):
+        a = self.submit_at(0)
+        self.ring(a)  # never reaches the transcript
+        run = runner(ring_screen(USER_PASTE))
+        got = self.advance(run, a.id, later(40))
+        self.assertEqual(run.sent_keys(), [])
+        self.assertEqual(self.rings()[0]["result"], "no_answer")
+        self.assertEqual((got.state, got.reason), ("queued", deliver.REASON_DRAFT))  # the paste waits for an empty box
+
+    def test_ringing_too_long_with_an_idle_target_is_no_answer(self):
+        a = self.submit_at(0)
+        ring = self.ring(a)
+        self.transcript(SID_B, [ts.user(self.ring_line(ring)), tool_use("Bash")])  # looks mid-turn forever
+        self.heartbeat(at=later(doorbell.RING_LIMIT_S + 10))
+        self.assertEqual(self.advance(runner(), a.id, later(doorbell.RING_LIMIT_S - 10)).status, "rung")
+        got = self.advance(runner(), a.id, later(doorbell.RING_LIMIT_S + 10))
+        self.assertEqual((self.rings()[0]["result"], got.state, got.reason),
+                         ("no_answer", "sent", doorbell.REASON_NO_ANSWER))
+
+    def test_ringing_too_long_with_a_stopped_target_goes_back_in_line(self):
+        a = self.submit_at(0)
+        self.ring(a)
+        self.set_row("b", state=ts.State.STOPPED)
+        self.assertEqual(self.advance(FakeRunner(strict=True), a.id, later(60)).status, "rung")
+        got = self.advance(FakeRunner(strict=True), a.id, later(doorbell.RING_LIMIT_S + 10))
+        self.assertEqual((got.state, got.status, got.reason), ("queued", "", send.REASON_NOT_RUNNING))
+        self.assertEqual(self.rings()[0]["result"], "no_answer")
 
 
 class RingTest(DoorbellBase):
@@ -349,6 +420,28 @@ class AfterMarkerTest(unittest.TestCase):
         self.write([ts.user("門鈴 abcd"), ts.assistant("old"), ts.user("門鈴 abcd again")])
         info = after_marker(self.path, "門鈴 abcd")
         self.assertEqual((info.found, info.ended, info.last_text), (True, False, ""))
+
+    def test_typed_message_ends_the_turn_whatever_came_before(self):
+        self.write([ts.user("門鈴 abcd"), INTERRUPTED, ts.user("other")])
+        self.assertTrue(after_marker(self.path, "門鈴 abcd").ended)
+        self.write([ts.user("門鈴 abcd"), tool_use("Bash"), ts.user("other")])
+        self.assertTrue(after_marker(self.path, "門鈴 abcd").ended)
+
+    def test_successful_tool_result_last_is_mid_turn(self):
+        self.write([ts.user("門鈴 abcd"), ts.assistant("checking"), tool_use("Bash"), tool_result("ok")])
+        self.assertFalse(after_marker(self.path, "門鈴 abcd").ended)
+
+    def test_a_failed_tool_is_mid_turn(self):
+        self.write([ts.user("門鈴 abcd"), tool_use("Bash"), tool_result("Exit code 1", error=True)])
+        self.assertFalse(after_marker(self.path, "門鈴 abcd").ended)
+
+    def test_denied_or_interrupted_tool_ends_the_turn(self):
+        self.write([ts.user("門鈴 abcd"), tool_use("mcp__sampan__inbox_take"), tool_result(
+            "The user doesn't want to proceed with this tool use. The tool use was rejected.", error=True)])
+        info = after_marker(self.path, "門鈴 abcd")
+        self.assertEqual((info.ended, info.take_seen), (True, True))
+        self.write([ts.user("門鈴 abcd"), tool_use("Bash"), INTERRUPTED])
+        self.assertTrue(after_marker(self.path, "門鈴 abcd").ended)
 
     def test_start_offset(self):
         self.write([ts.user("門鈴 abcd"), ts.assistant("old")])

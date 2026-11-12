@@ -237,12 +237,26 @@ def _reply_to(path, sent):
 
 
 INBOX_TAKE = "mcp__sampan__inbox_take"
+INTERRUPTED = "[Request interrupted"  # Claude's record of an Esc (or a denied tool call)
+DENIED = ("doesn't want to proceed", "was rejected", "permission")  # in the error result of a tool call not allowed
+
+
+def _denied(part):
+    """A tool_result that says the call was not allowed (the user said no to the permission prompt)."""
+    if not part.get("is_error"):
+        return False
+    content = part.get("content")
+    if isinstance(content, list):
+        content = " ".join(c.get("text", "") for c in content if isinstance(c, dict) and isinstance(c.get("text"), str))
+    return isinstance(content, str) and any(m in content for m in DENIED)
 
 
 @dataclass(frozen=True)
 class TurnInfo:
     """The turn after a marker (up to the next typed message or the end of the file): found: a user record holds the
-    marker; ended: the assistant spoke and no tool call of it is still waiting for its result; last_text: the last assistant text of that turn;
+    marker; ended: a typed message came after it, or the turn's last step was an assistant text with no tool call
+    waiting for its result, or a tool call that was denied or interrupted (any other tool result last is mid-turn);
+    last_text: the last assistant text of that turn;
     take_seen: inbox_take was called in it."""
     found: bool
     ended: bool = False
@@ -317,28 +331,33 @@ def _after_marker(path, marker, start):
                 after.append(rec)
     if after is None:
         return TurnInfo(False)
-    last_text, pending, take_seen, spoke = "", set(), False, False
+    last_text, pending, take_seen, last = "", set(), False, None  # last: what the turn did last
     for rec in after:
         if _user_content(rec, join=True) is not None:
-            break  # the next typed message: the turn is over
+            return TurnInfo(True, True, last_text, take_seen)  # a typed message: that turn is over, however it went
         msg = rec.get("message")
         content = msg.get("content") if isinstance(msg, dict) else None
-        if rec.get("type") == "user" and isinstance(content, list):
-            for part in content:
+        if rec.get("type") == "user":
+            if _user_text_anywhere(rec).lstrip().startswith(INTERRUPTED):
+                last = "stopped"
+            for part in content if isinstance(content, list) else ():
                 if isinstance(part, dict) and part.get("type") == "tool_result":
                     pending.discard(part.get("tool_use_id"))
+                    last = "stopped" if _denied(part) else "result"  # a plain error goes on like any result
+            continue
         if rec.get("type") != "assistant" or rec.get("isSidechain"):
             continue
-        spoke = True
         for part in content if isinstance(content, list) else [{"type": "text", "text": content}]:
             if not isinstance(part, dict):
                 continue
             if part.get("type") == "tool_use":
                 pending.add(part.get("id"))
                 take_seen = take_seen or part.get("name") == INBOX_TAKE
+                last = "tool"
             elif part.get("type") == "text" and isinstance(part.get("text"), str) and part["text"].strip():
-                last_text = part["text"]
-    return TurnInfo(True, spoke and not pending, last_text, take_seen)
+                last_text, last = part["text"], "text"
+    ended = last == "stopped" or (last == "text" and not pending)
+    return TurnInfo(True, ended, last_text, take_seen)
 
 
 def command_reply(path, sent, after):

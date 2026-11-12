@@ -503,6 +503,10 @@ def _deliver(cfg, run, d, row, sleep, now, save, items):
     one active delivery per target at a time); a direct send goes alone, once nothing is before it. Whoever advances
     a message moves the target's whole line: an active delivery is judged first (its own senders may never look
     again), and the head of the line is sent even when d is behind it (d then stays queued)."""
+    if d.status == "rung" and (row is None or row.state != State.RUNNING or row.agent != d.to_agent):
+        rung = [x for x in items if x.state == "queued" and x.status == "rung"
+                and (x.to_id == d.to_id if d.to_id else x.to_name == d.to_name)]
+        doorbell.give_up_if_old(items.conn, d.to_id or d.to_name, rung, now, lambda line: _log(cfg, "send", line))
     if row is None or row.state in GONE:
         d.reason = REASON_NOT_RUNNING
         return

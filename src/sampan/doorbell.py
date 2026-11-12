@@ -12,6 +12,7 @@ from typing import Protocol
 from . import deliver, deliveries, dispatch, heartbeat, store
 from .claude_state import TurnInfo, after_marker, find_transcript
 from .clock import parse_iso
+from .screens import claude_input_state, claude_prompt_text
 from .tmux import Tmux
 
 RINGING, TAKEN, NO_ANSWER, PASTE_FAILED, SUPERSEDED = "ringing", "taken", "no_answer", "paste_failed", "superseded"
@@ -23,12 +24,24 @@ RING_TEXT = ("〔sampan 門鈴 {code}〕你有 {n} 則新訊息（來自 {sender
              "每則做完用 mcp__sampan__reply 回一次（那是最終回覆，不要用來報進度）。工具沒載入時先用 ToolSearch 找 sampan。")
 READY = ("idle", "shell")  # as send.READY: the prompt takes input
 SEEN_GRACE_S = 15  # right after a ring the transcript may not have it yet
+RING_LIMIT_S = 10 * 60  # a ring still unanswered after this long is no_answer, so it never holds the target's line
 PERMISSION_MARKS = ("mcp__sampan__inbox_take", "sampan - inbox_take")  # how a permission prompt for it names the tool
 
 
 def marker(code):
     """What a ring's code looks like in the transcript."""
     return f"〔sampan 門鈴 {code}〕"
+
+
+def ring_pending(screen, line):
+    """The prompt holds this very ring as typed text (its marker with the same code, then as much of the line as the
+    prompt shows). Never a paste mark: a user's own paste looks the same, and sampan never presses Enter on it."""
+    if claude_input_state(screen) != "draft":
+        return False
+    text = (claude_prompt_text(screen) or "").strip()
+    head = line.split("〕", 1)[0] + "〕"
+    n = min(len(text), len(line))
+    return n >= len(head) and text[:n] == line[:n]
 
 
 def ring_text(code, counts, n):
@@ -52,7 +65,7 @@ class PasteDoorbell:
     def ring(self, target_row, text):
         tmux = Tmux(self.run)
         pane = target_row.pane
-        if deliver._ours_pending(tmux.capture(pane, escapes=True), text.split("\n", 1)[0]):
+        if ring_pending(tmux.capture(pane, escapes=True), text.split("\n", 1)[0]):
             if tmux.pane_in_mode(pane) is not False:
                 return deliver.Pasted(deliver.REASON_COPY_MODE)
             r = tmux.send_keys(pane, "Enter")
@@ -183,6 +196,9 @@ def settle_ring(conn, cfg, run, ring, target_row, rung, now, *, sleep, log, bell
         return
     if target_row.agent_status not in READY:
         return
+    if _too_old(ring, now):
+        give_up(conn, ring, members, log)
+        return
     path = find_transcript(cfg.profiles.values(), target_row.sid, prefer=target_row.profile)
     info = after_marker(path, marker(code)) if path else TurnInfo(False)
     if info.found and not info.ended:
@@ -192,13 +208,33 @@ def settle_ring(conn, cfg, run, ring, target_row, rung, now, *, sleep, log, bell
         if at is not None and (now - at).total_seconds() < SEEN_GRACE_S:
             return
         text = _ring_outbox(cfg, code)
-        if text and target_row.pane and deliver._ours_pending(tmux.capture(target_row.pane, escapes=True), text):
+        if text and target_row.pane and ring_pending(tmux.capture(target_row.pane, escapes=True), text):
             why = (bell or PasteDoorbell(cfg, run, sleep)).ring(target_row, text)
             log(f"門鈴 {code}：還在輸入框，再按一次 Enter" + (f"（{why}）" if why else ""))
             return
-    _set_result(conn, code, NO_ANSWER)
+    give_up(conn, ring, members, log)
+
+
+def _too_old(ring, now):
+    at = parse_iso(ring["at"])
+    return at is not None and (now - at).total_seconds() > RING_LIMIT_S
+
+
+def give_up(conn, ring, members, log):
+    """The ring is `no_answer`: its messages go back in line, to be pasted."""
+    _set_result(conn, ring["id"], NO_ANSWER)
     _back_in_line(members, REASON_NO_ANSWER)
-    log(f"門鈴 {code}：{REASON_NO_ANSWER}（派工 {'、'.join(x.id for x in members)}）")
+    log(f"門鈴 {ring['id']}：{REASON_NO_ANSWER}（派工 {'、'.join(x.id for x in members)}）")
+
+
+def give_up_if_old(conn, to_id, rung, now, log):
+    """For a target that is not there to answer (stopped, not running, another agent): its ringing ring, once older
+    than RING_LIMIT_S, is no_answer, so its messages wait in line like any other."""
+    ring = ringing(conn, to_id)
+    if ring is None or not _too_old(ring, now):
+        return
+    members = [x for x in rung if x.id in _ids(ring)]
+    give_up(conn, ring, members, log)
 
 
 def _ring_outbox(cfg, code):
