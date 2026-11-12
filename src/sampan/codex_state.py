@@ -321,19 +321,20 @@ def _user_event(kind, payload):
     return None, None
 
 
-def reply_to(path, sent):
+def reply_to(path, sent, start=None):
     """The reply to the last user message of a rollout whose text equals sent: the last AgentMessage of that turn
     (final_answer preferred), else task_complete.last_agent_message; done once that turn's task_complete is seen.
-    Also reads the older user_message / agent_message events. Reply(False, False, "") when sent is not in the rollout."""
+    Also reads the older user_message / agent_message events. Reply(False, False, "") when sent is not in the rollout.
+    start: only events from that byte offset on (as claude_state.reply_to)."""
     try:
-        return _reply_to(path, sent)
+        return _reply_to(path, sent, start or 0)
     except OSError:
         return Reply(False, False, "")
 
 
-def _reply_to(path, sent):
+def _reply_to(path, sent, start):
     after = []  # (kind, payload) after the candidate, newest first
-    for line in reverse_lines(path):
+    for line in reverse_lines(path, start=start):
         kind, payload = _event(line)
         if kind is None:
             continue

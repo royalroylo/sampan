@@ -80,6 +80,7 @@ KIND_LABELS = {"inbox": "取信", "paste": "貼全文", "raw": "直接送"}
 RING_LABELS = {"ringing": "等對方取信", "taken": "已取信", "no_answer": "沒人應", "paste_failed": "貼不進去",
                "superseded": "已取代"}
 RESENDABLE = ("failed", "cancelled", "done")
+REQUEUED_AT = "requeued_at"  # extra key: when resend put it back in line (created stays: line order, batch order)
 REPLY_PREVIEW = 2_000  # dispatch_result: the text of each reply part, up to this many characters
 LOG_PREVIEW = 100
 
@@ -563,7 +564,7 @@ def _deliver(cfg, run, d, row, sleep, now, save, items):
     try:
         did = deliveries.open_delivery(items.conn, kind="raw" if lead.raw else "paste", to_id=target, to_name=row.name,
                                        messages=[x.id for x in group], text=text, conversation=row.sid or None,
-                                       cursor=None, now=now)
+                                       cursor=_transcript_size(cfg, row), now=now)
     except deliveries.ActiveDelivery:
         d.reason = BUSY["busy"]
         return
@@ -609,6 +610,21 @@ def _deliver(cfg, run, d, row, sleep, now, save, items):
         _log(cfg, "send", f"派工 {lead.id}：已送到 {lead.to_name}")
     else:
         _log(cfg, "send", f"派工 {ids}：一起送到 {lead.to_name}（送達 {did}，{len(group)} 則）")
+
+
+def _transcript_size(cfg, row):
+    """The size of the target's transcript (Claude) or rollout (Codex) before a paste, or None: its reply is read only
+    from there on, so a text pasted before (the same message, resent) never counts."""
+    if not row.sid:
+        return None
+    if row.agent == "codex":
+        path = find_rollout(cfg.codex.home, row.sid)
+    else:
+        path = find_transcript(cfg.profiles.values(), row.sid, prefer=row.profile)
+    try:
+        return path.stat().st_size if path else None
+    except OSError:
+        return None
 
 
 def _for_target(x, row):
@@ -670,7 +686,7 @@ def _expire(cfg, d, now):
     screen sampan cannot use: a menu, a draft, copy mode, a status it cannot read; a `codex queue` error), fails, so it
     does not wait forever; the caller is told like any failure. Waiting for the target (busy, waiting for its user,
     not running, no thread yet) has no limit, as before."""
-    created = parse_iso(d.created)
+    created = parse_iso(d.extra.get(REQUEUED_AT)) or parse_iso(d.created)  # a resent one: since it was requeued
     if d.state != "queued" or created is None or (now - created).total_seconds() <= QUEUE_LIMIT_S:
         return
     if d.status == "rung":  # rung: the target has it; settle_ring decides when it goes back in line
@@ -686,12 +702,12 @@ def _finish(d, state, now, reason="", reply=None):
     d.state, d.done_at, d.reason, d.reply = state, _iso(now), reason, reply
 
 
-def _reply(cfg, row, text):
+def _reply(cfg, row, text, start=None):
     if row.agent == "codex":
         path = find_rollout(cfg.codex.home, row.sid)
-        return codex_reply_to(path, text) if path else Reply(False, False, "")
+        return codex_reply_to(path, text, start) if path else Reply(False, False, "")
     path = find_transcript(cfg.profiles.values(), row.sid, prefer=row.profile)
-    return claude_reply_to(path, text) if path else Reply(False, False, "")
+    return claude_reply_to(path, text, start) if path else Reply(False, False, "")
 
 
 def _starting(d, row, now):
@@ -716,7 +732,8 @@ def _check(cfg, d, row, now, run=None, items=None):
     if delivery is not None and delivery["kind"] == "inbox":
         _check_inbox(cfg, d, row, now, items, delivery)
         return
-    _judge(cfg, d, row, now, run, delivery["text"] if delivery is not None and delivery["text"] else d.text)
+    start = delivery["cursor"] if delivery is not None and row is not None and delivery["conversation"] == row.sid else None
+    _judge(cfg, d, row, now, run, delivery["text"] if delivery is not None and delivery["text"] else d.text, start)
     if delivery is not None:
         _settle(conn, items, d, delivery, now)
 
@@ -824,7 +841,7 @@ def _end_inbox(cfg, conn, delivery, waiting, now, last_text, *, status="unanswer
     _log(cfg, "send", f"送達 {delivery['id']}：這一輪結束" + (f"（{'；'.join(said)}）" if said else ""))
 
 
-def _judge(cfg, d, row, now, run, text):
+def _judge(cfg, d, row, now, run, text, start=None):
     was_starting = d.reason == REASON_STARTING
     if _starting(d, row, now) or (d.startup and row is not None and row.state == State.AWAIT_TRUST):
         d.reason = REASON_STARTING  # wait, do not judge
@@ -844,7 +861,7 @@ def _judge(cfg, d, row, now, run, text):
     if d.raw:
         _check_raw(cfg, d, row, now, run)
         return
-    reply = _reply(cfg, row, text)
+    reply = _reply(cfg, row, text, start)
     if reply.found and row.agent == "codex":
         # Codex: only the rollout says the turn is over; idle looks (the screen can be misread mid-turn) never do
         if reply.text and (reply.done or reply.closed):
@@ -1146,9 +1163,9 @@ def resend_refusal(d):
 
 def resend(cfg, did, *, now=None, notify=None):
     """Put a failed, cancelled or done dispatch back in line, as one transaction: its links to the deliveries it was
-    in are archived (a reply to one of those is late history and never finishes it), and it is queued again with
-    created = now (it goes behind what is queued already), no reason, sent / done times or cached reply. It keeps its
-    id and every reply part it got. notify: None keeps whether its sender is told when it finishes (a notice already
+    in are archived (a reply to one of those is late history and never finishes it), and it is queued again with no
+    reason, sent / done times or cached reply. It keeps its id, created (its place in line and in its batch) and every
+    reply part it got; the queue limit counts from extra[REQUEUED_AT]. notify: None keeps whether its sender is told when it finishes (a notice already
     given is owed again). The queued Dispatch, or why not (str)."""
     now = now or _utcnow()
     try:
@@ -1161,7 +1178,7 @@ def resend(cfg, did, *, now=None, notify=None):
                 return refusal
             with dispatch._sqlite_errors(cfg.state_dir):
                 _leave_deliveries(items, d, now)
-            d.state, d.status, d.created = "queued", "queued", _iso(now)
+            d.state, d.status, d.extra = "queued", "queued", {**d.extra, REQUEUED_AT: _iso(now)}
             d.reason, d.sent_at, d.done_at, d.reply = "", None, None, None
             d.startup = False  # its session is up by now: an ordinary message
             if notify is not None:

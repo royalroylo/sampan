@@ -241,6 +241,15 @@ class ReplyToTest(unittest.TestCase):
         f = write_jsonl([w("ab12", "ab12", "x\ny\nz\nw"), a(text("r"))])
         self.assertEqual(reply_to(f, "Base directory for this skill: /tmp/skills/x"), Reply(False, False, ""))
 
+    def test_start_skips_the_same_text_pasted_before(self):
+        f = write_jsonl([u("again"), a(text("old reply"))])
+        size = Path(f).stat().st_size
+        self.assertEqual(reply_to(f, "again", size), Reply(False, False, ""))
+        with open(f, "a") as fh:
+            fh.write(json.dumps(u("again")) + "\n" + json.dumps(a(text("new reply"))) + "\n")
+        self.assertEqual(reply_to(f, "again", size), Reply(True, True, "new reply"))
+        self.assertEqual(reply_to(f, "again", 0).text, "new reply")
+
     def test_question_and_answer(self):
         f = write_jsonl([u("old"), a(text("old reply")), u("hi"), a(text("hello"))])
         self.assertEqual(reply_to(f, "hi"), Reply(True, True, "hello"))

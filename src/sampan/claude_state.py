@@ -197,12 +197,14 @@ def _bound_text(content):
     return (m.group(2) if m else content).rstrip("\n")
 
 
-def reply_to(path, sent):
+def reply_to(path, sent, start=None):
     """The reply to the last user record whose text equals sent: the last assistant text after it and before the next
     message the user typed. Skill injections, compaction summaries, tool results and thinking-only records are never
-    the reply, and never the bound message. Reply(False, False, "") when sent is not in the transcript (/clear, a new file)."""
+    the reply, and never the bound message. Reply(False, False, "") when sent is not in the transcript (/clear, a new file).
+    start: only records from that byte offset on (the size of the transcript when this delivery was pasted, so the
+    same text pasted earlier, e.g. before a resend, is never bound)."""
     try:
-        return _reply_to(path, sent)
+        return _reply_to(path, sent, start or 0)
     except OSError:
         return Reply(False, False, "")
 
@@ -220,9 +222,9 @@ def _window_reply(after):
     return Reply(True, True, texts[-1], closed) if texts else Reply(True, False, "", closed)
 
 
-def _reply_to(path, sent):
+def _reply_to(path, sent, start):
     after = []  # records after the candidate, newest first
-    for line in reverse_lines(path):
+    for line in reverse_lines(path, start=start):
         try:
             rec = json.loads(line)
         except ValueError:

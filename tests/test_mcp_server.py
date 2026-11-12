@@ -655,7 +655,7 @@ class SendToolTest(Base):
 
     def test_wait_returns_the_reply_when_done(self):
         replies = iter([send.Reply(True, True, "答案")])
-        with mock.patch.object(send, "_reply", lambda cfg, row, text: next(replies)):
+        with mock.patch.object(send, "_reply", lambda cfg, row, text, start=None: next(replies)):
             c = self.serve(Client([init(1), call(2, "send", {"session": "b", "message": "hi", "wait": True})]),
                            run=tmux_runner(), confirm=False)
         body = tool_json(c.response(2))
@@ -1317,7 +1317,7 @@ class SendBatchToolTest(Base):
 
     def test_send_batch_wait_returns_the_replies(self):
         self.rows["e"] = status_row("e", sid="se", pane="%5")
-        with mock.patch.object(send, "_reply", lambda cfg, row, text: send.Reply(True, True, f"答 {row.name}")):
+        with mock.patch.object(send, "_reply", lambda cfg, row, text, start=None: send.Reply(True, True, f"答 {row.name}")):
             c = self.serve(Client([init(1), call(2, "send_batch", {"sessions": ["d", "e"], "message": "hi",
                                                                    "wait": True})]),
                            run=tmux_runner(), confirm=False)
@@ -1343,7 +1343,7 @@ class SendBatchToolTest(Base):
         b = send.submit_batch(self.cfg, FakeRunner(strict=True), CALLER_A, ["b", "d"], "hi", raw=False, notify=True,
                               now=NOW, status_fn=self.status_fn)
         [d] = b.items
-        with mock.patch.object(send, "_reply", lambda cfg, row, text: send.Reply(True, True, "答")):
+        with mock.patch.object(send, "_reply", lambda cfg, row, text, start=None: send.Reply(True, True, "答")):
             # The server runs every tools/call in its own thread, so two calls on one pipe may run in either order.
             # Each call that advances the batch must therefore be its own session, to make "first sent, then done" fixed.
             first = self.serve(Client([init(1), call(2, "dispatch_result", {"id": b.id})]), run=tmux_runner())

@@ -61,15 +61,16 @@ def atomic_write(path, text, *, mode=None, new_mode=None, encoding=None):
     return target
 
 
-def reverse_lines(path, chunk=1 << 16):
+def reverse_lines(path, chunk=1 << 16, start=0):
     """A text file's lines, last line first, reading backwards chunk by chunk (only as far as the caller iterates).
-    Lines are split on bytes before decoding, so a multibyte character split by a chunk edge stays whole."""
+    Lines are split on bytes before decoding, so a multibyte character split by a chunk edge stays whole.
+    start: only the bytes from that offset on (the file is read as if it began there)."""
     with open(path, "rb") as fh:
         pos = fh.seek(0, os.SEEK_END)
         rest = b""
         first = True
-        while pos > 0:
-            step = min(chunk, pos)
+        while pos > start:
+            step = min(chunk, pos - start)
             pos -= step
             fh.seek(pos)
             parts = (fh.read(step) + rest).split(b"\n")

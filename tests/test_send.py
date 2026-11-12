@@ -1466,19 +1466,62 @@ class ResendTest(Base):
         self.assertEqual(self.stored(q.id).state, "sent")
         self.assertEqual(send.resend(self.cfg, "zzzz", now=NOW), "沒有派工 zzzz")
 
-    def test_resend_of_a_cancelled_paste_requeues_it_behind_the_line(self):
+    def test_resend_keeps_created_and_counts_the_queue_limit_from_the_requeue(self):
         d = self.submit(notify=True)
         self.advance(tmux_runner(), d.id)
         send.cancel(self.cfg, d.id, now=NOW)
-        later_one = self.submit(message="newer")
-        self.set_row("b", agent_status="busy")
-        got = send.resend(self.cfg, d.id, now=later(60))
-        self.assertEqual((got.state, got.created, got.notify), ("queued", send._iso(later(60)), True))
+        newer = self.submit(message="newer")
+        got = send.resend(self.cfg, d.id, now=later(3600))
+        self.assertEqual((got.state, got.created, got.notify), ("queued", d.created, True))
+        self.assertEqual(self.stored(d.id).extra, {"requeued_at": send._iso(later(3600))})
         conn = store.connect(self.cfg.state_dir)
         self.addCleanup(conn.close)
         self.assertEqual(conn.execute("SELECT archived FROM delivery_messages WHERE message=?", (d.id,)).fetchall()[0][0], 1)
         self.assertIsNone(deliveries.delivery_of(conn, d.id))
-        self.assertEqual([x.id for x in dispatch.load(self.cfg.state_dir) if x.state == "queued"], [later_one.id, d.id])
+        self.assertEqual([x.id for x in dispatch.load(self.cfg.state_dir) if x.state == "queued"], [d.id, newer.id])
+        s = self.stored(d.id)
+        s.reason = "對方的畫面看不懂"  # a reason with a queue limit
+        send._expire(self.cfg, s, later(3601))  # created an hour ago, requeued a second ago
+        self.assertEqual(s.state, "queued")
+        send._expire(self.cfg, s, later(3600 + send.QUEUE_LIMIT_S + 1))
+        self.assertEqual(s.state, "failed")
+
+    def append(self, sid, recs):
+        path = self.cfg.home / ".claude" / "projects" / "-proj" / f"{sid}.jsonl"
+        with path.open("a") as fh:
+            fh.write("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in recs))
+
+    def test_resent_paste_never_takes_the_old_reply(self):
+        d = self.submit()
+        self.advance(tmux_runner(), d.id)
+        self.transcript(SID_B, [user(d.text), assistant("OLD answer")])
+        self.assertEqual(self.advance(FakeRunner(strict=True), d.id, later(5)).reply, "OLD answer")
+        send.resend(self.cfg, d.id, now=later(10))
+        self.assertEqual(self.advance(tmux_runner(), d.id, later(11)).state, "sent")  # pasted again, same text
+        for at in (12, 40):  # the new paste is not in the transcript yet: the old one never counts
+            self.assertEqual(self.advance(FakeRunner(strict=True), d.id, later(at)).state, "sent")
+        self.append(SID_B, [user(d.text), assistant("NEW answer")])
+        got = self.advance(FakeRunner(strict=True), d.id, later(45))
+        self.assertEqual((got.state, got.reply), ("done", "NEW answer"))
+
+    def test_resent_codex_message_never_takes_the_old_reply(self):
+        d = self.submit(to="c")
+        run = FakeRunner(strict=True).on(["codex", "queue"], cp())
+        self.advance(run, d.id)
+        self.rollout(TID_C, [codex_item("t1", "UserMessage", d.text),
+                             codex_item("t1", "AgentMessage", "OLD", "final_answer"), codex_done("t1", "OLD")])
+        self.assertEqual(self.advance(FakeRunner(strict=True), d.id, later(5)).reply, "OLD")
+        send.resend(self.cfg, d.id, now=later(10))
+        run = FakeRunner(strict=True).on(["codex", "queue"], cp())
+        self.assertEqual(self.advance(run, d.id, later(11)).state, "sent")
+        self.assertEqual(self.advance(FakeRunner(strict=True), d.id, later(12)).state, "sent")
+        path = next((self.cfg.codex.home / "sessions").rglob(f"*{TID_C}.jsonl"))
+        with path.open("a") as fh:
+            fh.write("".join(json.dumps(r) + "\n" for r in (
+                codex_item("t2", "UserMessage", d.text), codex_item("t2", "AgentMessage", "NEW", "final_answer"),
+                codex_done("t2", "NEW"))))
+        got = self.advance(FakeRunner(strict=True), d.id, later(15))
+        self.assertEqual((got.state, got.reply), ("done", "NEW"))
 
     def test_cmd_resend(self):
         d = self.submit()
@@ -1747,6 +1790,23 @@ class BatchTest(BatchBase):
         self.assertEqual(notice, f"〔sampan：批次 {b.id} 完成：1 完成、1 失敗、1 跳過，用 dispatch_result 看〕")
         self.assertEqual(send.pending(self.cfg), [])
 
+    def test_resent_first_item_keeps_the_batch_and_its_notice(self):
+        b = self.sent()
+        a, c = b.items
+        send.cancel(self.cfg, a.id, now=later(1))
+        send.resend(self.cfg, a.id, now=later(2))
+        items = send.batch_items(self.cfg, b.id)
+        self.assertEqual([(d.id, d.batch_skipped) for d in items], [(a.id, 1), (c.id, 0)])  # dispatch_result's first
+        self.assertEqual(self.advance(tmux_runner(), a.id, later(3)).state, "sent")
+        self.transcript(SID_A, [user(self.stored(a.id).text), assistant("from a")])
+        self.transcript(SID_C2, [user(self.stored(c.id).text), assistant("from c")])
+        self.assertEqual(self.advance(FakeRunner(strict=True), c.id, later(5)).state, "done")
+        run = tmux_runner()
+        self.assertEqual(self.advance(run, a.id, later(6)).state, "done")
+        self.assertEqual(Path(tmux_writes(run)[0][-1]).read_text(),
+                         f"〔sampan：批次 {b.id} 完成：2 完成、0 失敗、1 跳過，用 dispatch_result 看〕")
+        self.assertEqual(send.pending(self.cfg), [])
+
     def test_batch_whose_last_item_is_cancelled_is_noticed_by_the_watcher(self):
         b = self.sent()
         a, c = b.items
@@ -1799,6 +1859,8 @@ class CmdSendBatchTest(BatchBase):
     def test_wait_prints_each_reply(self):
         def capture(args):
             for d in dispatch.load(self.cfg.state_dir):
+                if d.state != "sent":  # only what has been pasted is in a transcript
+                    continue
                 sid = SID_A if d.to_name == "a" else SID_C2
                 self.transcript(sid, [user(d.text), assistant(f"reply of {d.to_name}")])
             return cp()
