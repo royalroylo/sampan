@@ -5,6 +5,27 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Dispatches are kept in a sqlite database, `dispatches.db` in the state folder, instead of `dispatches.json`: one row per message, plus deliveries, reply parts, doorbells and heartbeats. `dispatches.json` is left as a stub (`{"version": 3, "dispatches": [], "moved_to": "dispatches.db"}`) that sampan 0.16 and older refuse to touch. The first 0.17 command migrates by itself under `dispatches.lock`, with a journal it can resume from (`migrate-0.17.json`) and a backup in `backup-0.17-<time>/`; it compares message by message and throws the database away on any difference.
+- The doorbell: when the target is a Claude session whose `sampan mcp serve` has a valid heartbeat (written at most every 30 seconds, valid for 2 minutes, same process, same conversation, version 0.17 or later), sampan types one line into its prompt instead of pasting the text. The agent takes everything with the new MCP tool `inbox_take` and answers each message with `reply`; a turn that ends with messages unanswered fills them in with the last text of that turn. Without a valid heartbeat, or when a doorbell goes unanswered for 10 minutes while the target is idle, the full text is pasted as before.
+- `sampan mcp install --allow-inbox` adds `inbox_take` and `reply` to `permissions.allow` in each Claude profile's `settings.json`, so a doorbell does not stop at a permission prompt (it asks on a terminal when the flag is not given; backup `settings.json.bak-sampan-<time>`; `uninstall` removes the entries). Codex tables for the two tools are written as `approve` while `[mcp] confirm` is on. `sampan doctor` says per profile whether taking mail needs an approval.
+- `sampan dispatches resend <id>` and the MCP tool `resend` put a failed, cancelled or done dispatch back in line with the same id, keeping its old reply parts and its place in line. Like `cancel`, the CLI is refused for an agent while `[mcp] confirm` is on and the MCP tool asks every time.
+- `sampan dispatches search [keyword] [--from] [--to] [--since] [--until] [--state] [--limit]` (literal keyword; dates in Taipei time; senders by name, alias or id), `sampan dispatches inbox <session>`, and `sampan dispatches --by-target` (queued and waiting counts with the heartbeat). `sampan dispatches show` prints the finer status, every reply part and every delivery.
+- A finer `status` on every dispatch (queued, rung, taken, partial, pasted, replied, unanswered, failed, cancelled); `state` keeps its five values. `dispatch_result` also returns `status`, `status_label`, `replies`, `deliveries`, `last_ring` and `merged_with`; its old fields are unchanged. New fixed reasons: 「已按門鈴，等對方取信（<碼>，<HH:MM>）」, 「對方沒有可用的 sampan MCP，改用貼全文」, 「門鈴沒人應，改用貼全文」, 「對方停在權限提示（可能是 inbox_take 沒允許）」, 「已取走，對方還在做」, 「已有回覆段落，對方還在做」, 「已取走，這一輪結束卻沒有回覆」, 「排在前面的派工還沒送完」.
+- `[dispatches] keep_days` (default 90): a finished dispatch older than this loses its text, reply and `extra`; its row and id stay.
+- `sampan doctor` reports a state folder on a Windows drive (`/mnt` under WSL; sampan refuses to send there), sessions with no valid heartbeat, a dispatch database or registry it cannot read, and a Codex tables list that lacks `resend`, `inbox_take` or `reply`.
+- After `sampan update`, after `U` on the screen, and once after the 0.16 to 0.17 migration, sampan says which sessions still run an old `sampan mcp serve` and need a restart, and that Codex needs `sampan mcp install` again.
+
+### Changed
+- Messages queued for one target, from any sender, are delivered together in time order, one delivery at a time. A pasted group starts with a header asking for each answer to begin with `〔回覆 <派工id>〕`; the reply is split at those line-start markers, and a message without a marker gets the whole reply. Direct sends (`raw`) keep their place and are never merged. Whoever advances one message moves the target's whole line.
+- Codex targets always get the full text (no doorbell in 0.17.0), and a second message to a Codex target now waits until the first is answered; before, it went into `codex queue` at once.
+- Cancelling a message that had already reached the target gives the reason 「寄件者已取消」 (was 「不再等回覆」); a reply that arrives after a cancel or resend is kept as history only.
+- Finished dispatches are no longer pruned after 7 days and capped at 200 rows; `keep_days` clears only the bodies.
+- `sampan migrate --revert` now writes the dispatches back into a `dispatches.json` that 0.16 reads, renames the database aside and leaves a mark; until `sampan migrate` is run again the commands that touch dispatches refuse with 「已降回 0.16 格式」 and the others work. A failed 0.17 migration stops only those commands (exit 2).
+
+### Removed
+- `sampan migrate --revert` no longer goes back to 0.14. To downgrade to 0.14, downgrade to 0.16 first and run `sampan migrate --revert` there.
+
 ## [0.16.1] - 2026-11-06
 
 ### Fixed

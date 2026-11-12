@@ -45,7 +45,7 @@ Tip: sampan is a long name to type, and on macOS `sam` plus Tab collides with `/
 
 - Config goes in `~/.config/sampan/`; the registry and history in `~/.local/state/sampan/`.
 - macOS: one launchd job runs `sampan save` every 5 minutes. It only saves.
-- The first run of 0.15 upgrades the registry and folders files to the new format, after a backup into `backup-0.15-<time>/` (`sampan migrate --revert` writes the 0.14 format back).
+- The first run of 0.15 upgrades the registry and folders files to the new format, after a backup into `backup-0.15-<time>/`; the first run of 0.17 moves the dispatches from `dispatches.json` into `dispatches.db`, after a backup into `backup-0.17-<time>/` (`sampan migrate --revert` writes them back in the format 0.16 reads; run it before downgrading to 0.16).
 - Claude's `settings.json` is not touched unless you run `sampan init --hook` (or accept repairing a hook installed earlier).
 - Only when you agree (answer y to `sampan mcp install`'s question 「讓 agent 取信和回覆不用每次按允許？」, or pass `--allow-inbox`) does it add two entries, `mcp__sampan__inbox_take` and `mcp__sampan__reply`, to `permissions.allow` in each Claude profile's `settings.json`, after a backup `settings.json.bak-sampan-<time>`, leaving everything else as it was; `sampan mcp uninstall` removes only those two.
 - It types into tmux panes only when you act: open, resume, stop, move or send (`sampan send` / `send-batch`, only into an empty prompt). A direct send (`--raw`) pastes one line starting with `/` and presses Enter, and no other key.

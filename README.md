@@ -44,7 +44,7 @@ sampan init
 
 - 設定放 `~/.config/sampan/`，登記表與歷史放 `~/.local/state/sampan/`。
 - macOS：新增一個 launchd 排程，每 5 分鐘跑 `sampan save`，只存檔。
-- 升到 0.15 的第一次執行會把登記表與資料夾檔升到新格式，先備份到 `backup-0.15-<時間>/`（`sampan migrate --revert` 可寫回 0.14 的格式）。
+- 升到 0.15 的第一次執行會把登記表與資料夾檔升到新格式，先備份到 `backup-0.15-<時間>/`；升到 0.17 的第一次執行會把派工從 `dispatches.json` 搬進 `dispatches.db`，先備份到 `backup-0.17-<時間>/`（`sampan migrate --revert` 把派工寫回 0.16 讀得懂的格式，降到 0.16 前跑）。
 - 不會動 Claude 的 `settings.json`，除非你自己跑 `sampan init --hook`（或同意修復以前裝的 hook）。
 - 只有你同意時（`sampan mcp install` 問「讓 agent 取信和回覆不用每次按允許？」答 y，或加 `--allow-inbox`），才會在各 Claude profile 的 `settings.json` 的 `permissions.allow` 加上 `mcp__sampan__inbox_take`、`mcp__sampan__reply` 兩項；改之前先備份成 `settings.json.bak-sampan-<時間>`，其他設定不動；`sampan mcp uninstall` 只移除這兩項。
 - 只有你動手（開、接回、停止、搬目錄、`sampan send`／`send-batch` 傳訊息）時，才會對 tmux 的 pane 打字；傳訊息只送進空的輸入框。直接送（`--raw`）只貼一行 `/` 開頭的指令再按 Enter，不替它按其他鍵。

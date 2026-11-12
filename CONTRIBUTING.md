@@ -25,6 +25,18 @@ needs a real tmux must use a private socket (`tmux -L <name>`) and be run by han
 at exit; use `tests.SHORT_TMP` (under `/tmp`) where a unix socket path must stay short. A run that leaves a test's
 temp folder in the system temp dir or `/tmp` fails at exit.
 
+## The message store and the 0.17 migration
+
+Dispatches live in `state_dir/dispatches.db` (`store.py` opens it; `dispatch.py` is the API the rest of the code uses).
+A plain open never creates the database (only `store.connect(create=True)`, which the migration uses), so a test that
+forgets to set one up fails loudly instead of starting with an empty store. All writes happen under `dispatches.lock`;
+to make two threads in one test contend like two processes, give each its own lock file descriptor (flock belongs to
+an open file description). Tests for the migration (`tests/test_migrate_017.py`) start from a 0.16-format
+`dispatches.json` and cover the backup, the `upgrade` then `revert` round trip, and a run cut short at each journal
+step that a second run finishes. The `-wal` and `-shm` files belong to the database, so compare or copy it only after
+the connection is closed. The doorbell, inbox and `--allow-inbox` code is tested like everything else: `FakeRunner(strict=True)`
+and temporary directories, never the real tmux or a real `settings.json`.
+
 ## Testing on Linux
 
 ```
