@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 from sampan import dispatch, store
 from sampan.dispatch import Dispatch, DispatchError
@@ -263,8 +264,9 @@ class PurgeTest(unittest.TestCase):
         self.assertEqual(conn.execute("SELECT text FROM messages WHERE id='a002'").fetchone()[0], "hi")
         self.assertEqual(conn.execute("SELECT purged FROM messages WHERE id IN ('a003','a005')").fetchall()[0][0], 0)
         # the id stays taken, the row is no longer listed
-        with dispatch.transaction(self.dir) as cur:
-            self.assertEqual(sorted(d.id for d in cur), ["a002", "a003", "a005"])
+        self.assertEqual(sorted(d.id for d in dispatch.load(self.dir)), ["a002", "a003", "a005"])
+        with dispatch.transaction(self.dir, ids=["a001", "a002"]) as cur:
+            self.assertEqual(sorted(d.id for d in cur), ["a002", "a003"])  # a purged one is never loaded
             self.assertIn("a001", cur.ids)
 
     def test_transaction_purges_at_most_once_an_hour(self):
@@ -274,11 +276,11 @@ class PurgeTest(unittest.TestCase):
         stamp = conn.execute("SELECT value FROM meta WHERE key='purged_at'").fetchone()[0]
         self.assertIsNotNone(stamp)
         self.assertEqual(conn.execute("SELECT purged FROM messages").fetchone()[0], 0)  # first run came before the row existed
-        with dispatch.transaction(self.dir) as cur:
+        with dispatch.transaction(self.dir, ids=["a001"]) as cur:
             self.assertEqual(len(cur), 1)  # an hour has not passed
         conn.execute("UPDATE meta SET value=?", ((datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(),))
         conn.commit()
-        with dispatch.transaction(self.dir) as cur:
+        with dispatch.transaction(self.dir, ids=["a001"]) as cur:
             self.assertEqual(cur, [])
         self.assertEqual(conn.execute("SELECT purged FROM messages").fetchone()[0], 1)
 
@@ -294,6 +296,99 @@ class PurgeTest(unittest.TestCase):
             self.assertEqual(cur, [])
         self.assertFalse(dispatch.outbox_path(self.dir, "a001").exists())
         self.assertFalse(dispatch.outbox_path(self.dir, "a001-notice").exists())
+
+
+class BoundedLoadTest(unittest.TestCase):
+    """A transaction (and the watchers' reads) load only the live messages, plus the ones the caller names and their
+    batch mates, never every finished one; a row that was not loaded is never written."""
+
+    FINISHED_N = 60
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.dir = Path(self._tmp.name) / "state"
+        old = [mk(f"f{n:03x}", "done", created=ago(2), done_at=ago(1), reply="r") for n in range(self.FINISHED_N)]
+        live = [mk("aq01", "queued"), mk("as01", "sent"),
+                mk("an01", "done", done_at=ago(0), notify=True),  # its notice is still owed
+                mk("ac01", "cancelled", done_at=ago(0), notify=True),  # a cancelled one never owes a notice
+                mk("ab01", "done", done_at=ago(0), batch="b0001", notify=True, notified=True),
+                mk("ab02", "sent", batch="b0001"),  # live: its finished batch mate ab01 comes with it
+                mk("ax01", "done", done_at=ago(0), batch="b0002")]  # a finished batch: only when named
+        with dispatch.transaction(self.dir) as cur:
+            cur.extend(old + live)
+        self.live = {"aq01", "as01", "an01", "ab01", "ab02"}
+
+    def counted(self):
+        """Patch the row decoder to count how many message rows are read; the list it appends to."""
+        seen = []
+        real = dispatch._from_row
+
+        def count(row):
+            seen.append(row["id"])
+            return real(row)
+        patcher = mock.patch.object(dispatch, "_from_row", count)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return seen
+
+    def table(self):
+        conn = store.connect(self.dir)
+        try:
+            return {r["id"]: tuple(r) for r in conn.execute("SELECT * FROM messages")}
+        finally:
+            conn.close()
+
+    def test_transaction_loads_only_live_rows_and_knows_every_id(self):
+        seen = self.counted()
+        with dispatch.transaction(self.dir) as cur:
+            self.assertEqual({d.id for d in cur}, self.live)
+            self.assertEqual(len(cur.ids), self.FINISHED_N + 7)  # new ids still avoid unloaded ones
+        self.assertEqual(sorted(seen), sorted(self.live))
+
+    def test_named_ids_and_their_batch_mates_are_loaded(self):
+        seen = self.counted()
+        with dispatch.transaction(self.dir, ids=["f001", "b0002", "ac01"]) as cur:
+            self.assertEqual({d.id for d in cur}, self.live | {"f001", "ax01", "ac01"})
+        self.assertEqual(len(seen), len(self.live) + 3)
+
+    def test_need_loads_more_once(self):
+        with dispatch.transaction(self.dir) as cur:
+            self.assertEqual([d.id for d in cur.need(["f002", "aq01"])], ["aq01", "f002"])
+            cur.need(["f002"])
+            self.assertEqual(sum(d.id == "f002" for d in cur), 1)
+            cur[-1].reason = "changed"
+        self.assertEqual(next(d for d in dispatch.load(self.dir) if d.id == "f002").reason, "changed")
+
+    def test_load_with_ids_is_bounded_and_without_is_everything(self):
+        seen = self.counted()
+        self.assertEqual({d.id for d in dispatch.load(self.dir, ids=())}, self.live)
+        self.assertEqual(len(seen), len(self.live))
+        self.assertEqual(len(dispatch.load(self.dir)), self.FINISHED_N + 7)
+
+    def test_send_pending_reads_only_live_rows(self):
+        from sampan import send
+        seen = self.counted()
+        cfg = mock.Mock(state_dir=self.dir)
+        self.assertEqual(sorted(send.pending(cfg)), ["ab02", "an01", "aq01", "as01"])
+        self.assertEqual(len(seen), len(self.live))
+
+    def test_flush_never_touches_unloaded_rows(self):
+        before = self.table()
+        with dispatch.transaction(self.dir) as cur:
+            for d in cur:
+                d.reason = "touched"
+        after = self.table()
+        untouched = set(before) - self.live
+        self.assertEqual({i: after[i] for i in untouched}, {i: before[i] for i in untouched})
+        self.assertTrue(all(after[i] != before[i] for i in self.live))
+
+    def test_a_new_row_with_an_unloaded_id_fails_instead_of_overwriting(self):
+        before = self.table()
+        with self.assertRaises(DispatchError):
+            with dispatch.transaction(self.dir) as cur:
+                cur.append(mk("f000", "queued", reason="overwrite"))
+        self.assertEqual(self.table(), before)
 
 
 class IdAndOutboxTest(unittest.TestCase):

@@ -55,6 +55,9 @@ def take(cfg, caller, *, rows, now):
             ring = doorbell.ringing(conn, caller.id)
             if ring is not None:
                 conn.execute("UPDATE rings SET result=?, delivery=? WHERE id=?", (doorbell.TAKEN, receipt, ring["id"]))
+        items.need(r["id"] for r in conn.execute(  # an unanswered one is finished: not loaded by the transaction
+            f"SELECT id FROM messages WHERE purged=0 AND to_id=? AND status IN ({', '.join('?' * len(OPEN))})",
+            (caller.id, *OPEN)))
         old = [x for x in items if x.to_id == caller.id and x.status in OPEN and not any(x is y for y in new)
                and _still_linked(conn, x)]
         text = _take_text(receipt, new, 0 if receipt else len(new), active, old)
@@ -112,7 +115,8 @@ def reply(cfg, caller, dispatch_id, text, receipt=None, *, now):
         raise InboxError(TOO_LONG)
     if caller.name is None or not caller.id:
         raise InboxError(NOT_YOURS)
-    with dispatch.transaction(cfg.state_dir, keep_days=cfg.keep_days) as items, dispatch._sqlite_errors(cfg.state_dir):
+    with dispatch.transaction(cfg.state_dir, keep_days=cfg.keep_days, ids=[dispatch_id]) as items, \
+            dispatch._sqlite_errors(cfg.state_dir):
         conn = items.conn
         d = next((x for x in items if x.id == dispatch_id), None)
         if d is None or d.to_id != caller.id:

@@ -2,6 +2,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from sampan import dispatch
 from sampan.dispatch import Dispatch
@@ -91,6 +92,22 @@ class WatcherTest(unittest.TestCase):
                             advance_fn=lambda cfg, run, did, **k: seen.append(run(["echo", "x"]) and run(["y"], stdin="in")))
         w.poll_once()
         self.assertEqual([c["stdin"] for c in r.calls], [subprocess.DEVNULL, "in"])  # an explicit stdin is kept
+
+    def test_default_reads_only_live_dispatches(self):
+        with dispatch.transaction(self.cfg.state_dir) as cur:
+            cur.extend([mk(f"f{n:03x}", "done", done_at=CREATED) for n in range(40)] + [mk("aq01"), mk("as01", "sent")])
+        seen = []
+        real = dispatch._from_row
+
+        def count(r):
+            seen.append(r["id"])
+            return real(r)
+        w = DispatchWatcher(self.cfg, FakeRunner(strict=True), advance_fn=lambda *a, **k: None)
+        with mock.patch.object(dispatch, "_from_row", count):
+            w.poll_once()  # read, pending, read again
+        self.assertEqual(sorted(d.id for d in w.items), ["aq01", "as01"])
+        self.assertEqual(sorted(set(seen)), ["aq01", "as01"])
+        self.assertEqual(len(seen), 6)
 
     def test_stop_before_start_is_harmless_and_make_watcher_builds_one(self):
         w = make_dispatch_watcher(self.cfg, FakeRunner(strict=True))

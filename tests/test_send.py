@@ -445,7 +445,7 @@ class AdvanceClaudeTest(Base):
         d = self.submit()
         for state in ("done", "failed", "cancelled"):
             with self.subTest(state):
-                with dispatch.transaction(self.cfg.state_dir) as items:
+                with dispatch.transaction(self.cfg.state_dir, ids=[d.id]) as items:
                     items[0].state = state
                 self.status_calls = 0
                 run = FakeRunner(strict=True)

@@ -1171,6 +1171,27 @@ class WatchTest(Base):
         states = {d.id: d.state for d in self.dispatches()}
         self.assertEqual((states[mine.id], states[other.id]), ("sent", "queued"))
 
+    def test_watch_once_reads_only_live_dispatches(self):
+        old = [dispatch.Dispatch(f"f{n:03x}", "a", "", "claude", "b", "claude", "alice", "hi", "done",
+                                 NOW.isoformat(), done_at=NOW.isoformat(), from_id="a") for n in range(40)]
+        with dispatch.transaction(self.cfg.state_dir) as cur:
+            cur.extend(old)
+        mine = send.submit(self.cfg, FakeRunner(strict=True), CALLER_A, "b", "hi", notify=False, now=NOW,
+                           status_fn=self.status_fn)
+        server = mcp_server.Server(self.cfg, tmux_runner(), io.StringIO(), io.StringIO(), caller=CALLER_A,
+                                   sleep=lambda _s: None, clock=lambda: 0.0, status_fn=self.status_fn,
+                                   now_fn=lambda: NOW)
+        seen = []
+        real = dispatch._from_row
+
+        def count(r):
+            seen.append(r["id"])
+            return real(r)
+        with mock.patch.object(dispatch, "_from_row", count):
+            server.watch_once()
+        self.assertEqual(set(seen), {mine.id})  # the watcher's read and the advance's transaction: never the 40 done
+        self.assertEqual({d.id: d.state for d in self.dispatches()}[mine.id], "sent")
+
     def test_watcher_thread_runs_while_serving(self):
         d = send.submit(self.cfg, FakeRunner(strict=True), CALLER_A, "b", "hi", notify=False, now=NOW,
                         status_fn=self.status_fn)

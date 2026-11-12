@@ -410,7 +410,8 @@ class Server:
         caller = self._refresh_caller()
         batch = send.is_batch_id(did)
         try:
-            d = next((x for x in dispatch.load(self.cfg.state_dir) if (x.batch if batch else x.id) == did), None)
+            d = next((x for x in dispatch.load(self.cfg.state_dir, ids=[did]) if (x.batch if batch else x.id) == did),
+                     None)
         except dispatch.DispatchError as e:
             raise ToolError(str(e)) from e
         if d is None or not (did in self.mine or send.from_session(d, caller.name, caller.id)):
@@ -740,8 +741,8 @@ class Server:
         """Advance this caller's pending dispatches (and the ones this server created) once."""
         self.beat()
         try:
-            owed = set(send.pending(self.cfg))
-            items = dispatch.load(self.cfg.state_dir)
+            items = dispatch.load(self.cfg.state_dir, ids=())  # the live ones only: every 3 s in every server
+            owed = set(send.pending(self.cfg, items))
         except (dispatch.DispatchError, OSError) as e:
             _log(str(e))
             return

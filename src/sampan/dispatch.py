@@ -122,7 +122,8 @@ def _from_row(row):
 class Items(list):
     """The dispatches of one transaction, plus what it knows: `conn` is the open sqlite connection (inside the lock;
     what a caller writes through it commits or rolls back with the dispatches) and `ids` every message id of the table,
-    purged ones included."""
+    purged and unloaded ones included. A transaction loads only the live messages (see _read); a row it did not load
+    is never written."""
 
     def __init__(self, conn=None, rows=(), taken=()):
         super().__init__(rows)
@@ -134,18 +135,32 @@ class Items(list):
     def ids(self):
         return self.taken | {d.id for d in self}
 
+    def need(self, ids):
+        """Load the unpurged messages of ids (message or batch ids) that this transaction has not loaded yet, with
+        their batch mates, at the end of the list. The dispatches of ids that are loaded now."""
+        ids = set(ids)
+        have = {d.id for d in self}
+        more = [d for d in _query(self.conn, *_named(ids)) if d.id not in have]
+        self.extend(more)
+        self.snapshot.update({d.id: (_row(d), d.state, d.status) for d in more})
+        return [d for d in self if d.id in ids or d.batch in ids]
+
     def flush(self):
-        """Upsert every dispatch that is new or changed since it was loaded (or last flushed); no commit."""
+        """Write every dispatch that is new or changed since it was loaded (or last flushed); no commit. Only loaded
+        rows are updated; a new one is inserted, and one whose id is already in the table (a row this transaction did
+        not load) fails the transaction instead of overwriting it."""
         names = ", ".join(COLUMNS + ("text_len", "reply_len"))
-        sets = ", ".join(f"{c}=excluded.{c}" for c in COLUMNS[1:] + ("text_len", "reply_len"))
-        sql = (f"INSERT INTO messages ({names}) VALUES ({', '.join('?' * (len(COLUMNS) + 2))}) "
-               f"ON CONFLICT(id) DO UPDATE SET {sets}")
+        insert = f"INSERT INTO messages ({names}) VALUES ({', '.join('?' * (len(COLUMNS) + 2))})"
+        update = f"UPDATE messages SET {', '.join(f'{c}=?' for c in COLUMNS[1:] + ('text_len', 'reply_len'))} WHERE id=?"
         for d in self:
             old = self.snapshot.get(d.id)
             row = _row(d, old[1], old[2]) if old else _row(d)
             if old is not None and old[0] == row:
                 continue
-            self.conn.execute(sql, row)
+            if old is None:
+                self.conn.execute(insert, row)
+            else:
+                self.conn.execute(update, row[1:] + row[:1])
             self.snapshot[d.id] = (row, d.state, row[STATUS_AT])
 
 
@@ -187,21 +202,49 @@ def _open(state_dir, *, fresh_ok):
         raise DispatchError(str(e)) from e
 
 
-def _read(conn):
-    """The unpurged messages by created, and every message id."""
-    items = [_from_row(r) for r in conn.execute("SELECT * FROM messages WHERE purged=0 ORDER BY created, rowid")]
+# a message still moving (queued, sent) or whose caller is still owed its notice (see send._owes_notice: a plain one
+# done or failed; a batch item, whose batch's first item owes the one batch notice)
+LIVE = ("(state IN ('queued','sent') OR (notify=1 AND notified=0 AND (batch IS NOT NULL OR state IN ('done','failed'))))")
+
+
+def _named(ids):
+    """The SQL condition for the messages named in ids (message or batch ids), and its arguments."""
+    ids = sorted(ids)
+    if not ids:
+        return "0", ()
+    marks = ", ".join("?" * len(ids))
+    return f"(id IN ({marks}) OR batch IN ({marks}))", tuple(ids) * 2
+
+
+def _query(conn, where, args):
+    """The unpurged messages matching where, plus every unpurged batch mate of them, by created."""
+    sql = (f"SELECT * FROM messages WHERE purged=0 AND ({where} OR batch IN "
+           f"(SELECT batch FROM messages WHERE batch IS NOT NULL AND {where})) ORDER BY created, rowid")
+    items = [_from_row(r) for r in conn.execute(sql, args * 2)]
     for d in items:
         _check(d)
+    return items
+
+
+def _read(conn, ids=None):
+    """The unpurged messages by created, and every message id (purged ones included). ids None: every message;
+    else only the live ones (LIVE), the ones named in ids (message or batch ids), and the batch mates of those."""
+    if ids is None:
+        items = _query(conn, "1", ())
+    else:
+        named, args = _named(ids)
+        items = _query(conn, f"({LIVE} OR {named})", args)
     return items, {r["id"] for r in conn.execute("SELECT id FROM messages")}
 
 
-def load(state_dir):
-    """Every message whose text is still kept, by created. [] when nothing was ever stored."""
+def load(state_dir, ids=None):
+    """The messages whose text is still kept, by created: every one (ids None), or only the live ones plus the ones
+    named in ids (see _read). [] when nothing was ever stored."""
     conn = _open(state_dir, fresh_ok=False)
     if conn is None:
         return []
     try:
-        return _read(conn)[0]
+        return _read(conn, ids)[0]
     except sqlite3.Error as e:
         raise DispatchError(f"{Path(state_dir) / store.DB_FILE} 讀取失敗（{e}）。不會覆蓋它。") from e
     finally:
@@ -263,10 +306,11 @@ def _purge_if_due(conn, state_dir, keep_days):
 
 
 @contextmanager
-def transaction(state_dir, *, wait_s=None, keep_days=KEEP_DAYS):
+def transaction(state_dir, *, wait_s=None, keep_days=KEEP_DAYS, ids=()):
     """Hold the lock across load, caller changes and write-back; yields the mutable list (an `Items`, with the open
-    connection as .conn). Changed and new dispatches are upserted on a clean exit; one removed from the list is not
-    deleted. An exception rolls back and writes nothing (but for what a checkpoint committed).
+    connection as .conn). It holds the live messages (queued, sent, notice owed), the ones named in ids (message or
+    batch ids: one the caller looks up, finished or not) and their batch mates; Items.need loads more. Changed and new
+    dispatches are written on a clean exit; one removed from the list is not deleted. An exception rolls back and writes nothing (but for what a checkpoint committed).
     wait_s None blocks until the lock is free; a number tries for at most that many seconds, then raises DispatchError
     (for callers that must not stall, like the curses ui). At most once an hour, finished messages older than keep_days
     days lose their bodies (purge)."""
@@ -290,7 +334,7 @@ def transaction(state_dir, *, wait_s=None, keep_days=KEEP_DAYS):
             with _sqlite_errors(state_dir):
                 conn = _open(state_dir, fresh_ok=True)
                 _purge_if_due(conn, state_dir, keep_days)
-                rows, taken = _read(conn)
+                rows, taken = _read(conn, ids)
             items = Items(conn, rows, taken)
             yield items  # whatever the caller's block raises passes through as itself
             with _sqlite_errors(state_dir):

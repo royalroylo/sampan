@@ -74,6 +74,11 @@ class DispatchPicker:
         return None
 
 
+def load_live(state_dir):
+    """The messages the summary line counts: the live ones only (dispatch.load with ids), never every message."""
+    return dispatch.load(state_dir, ids=())
+
+
 def _no_tty_stdin(run):
     """A child that inherits the terminal's stdin swallows the keystrokes meant for curses (the v0.10.0 lesson)."""
     return no_stdin(run)
@@ -82,9 +87,9 @@ def _no_tty_stdin(run):
 class DispatchWatcher:
     """poll_once advances every pending dispatch once, synchronously; start() does it every `interval` seconds on a
     daemon thread (any exception is swallowed: the ui must never notice a broken dispatch file). `items` is the last read
-    of dispatches.json (before and after a round), what the summary line counts. `cfg` may be replaced while running."""
+    of the live dispatches (before and after a round), what the summary line counts. `cfg` may be replaced while running."""
 
-    def __init__(self, cfg, run, *, advance_fn=send.advance, pending_fn=send.pending, load_fn=dispatch.load,
+    def __init__(self, cfg, run, *, advance_fn=send.advance, pending_fn=send.pending, load_fn=load_live,
                  sleep=time.sleep, interval=INTERVAL_S):
         self.cfg, self.run = cfg, _no_tty_stdin(run)
         self.advance_fn, self.pending_fn, self.load_fn, self.sleep, self.interval = (

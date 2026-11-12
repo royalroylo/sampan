@@ -337,7 +337,9 @@ def is_batch_id(text):
 
 
 def _new_batch_id(items):
-    return "b" + dispatch.new_id({d.batch[1:] for d in items if d.batch})
+    """A batch id no message of the table has (purged and unloaded ones included)."""
+    used = {r[0][1:] for r in items.conn.execute("SELECT DISTINCT batch FROM messages WHERE batch IS NOT NULL")}
+    return "b" + dispatch.new_id(used)
 
 
 def _skip_reason(caller, name, row, raw):
@@ -404,7 +406,7 @@ def submit_batch(cfg, run, caller, names, message, *, raw, notify, now, snapshot
 
 def batch_items(cfg, bid):
     """The dispatches of batch bid, in the order they were created (the first one carries batch_skipped)."""
-    return [d for d in dispatch.load(cfg.state_dir) if d.batch == bid]
+    return [d for d in dispatch.load(cfg.state_dir, ids=[bid]) if d.batch == bid]
 
 
 def _group(items, bid):
@@ -435,7 +437,7 @@ def submit_new(cfg, caller, to, to_agent, to_profile, message, *, notify, now):
 def abort_new(cfg, did, reason, *, now):
     """`sampan new --message` could not start the session: mark its dispatch failed so it is not left `sent`."""
     try:
-        with dispatch.transaction(cfg.state_dir, keep_days=cfg.keep_days) as items:
+        with dispatch.transaction(cfg.state_dir, keep_days=cfg.keep_days, ids=[did]) as items:
             d = next((x for x in items if x.id == did), None)
             if d is not None and d.state == "sent":
                 _finish(d, "failed", now, reason)
@@ -468,7 +470,7 @@ def advance(cfg, run, did, *, sleep, snapshot_fn=None, status_fn=None, now=None,
     when this advance finishes the batch.
     Raises DispatchError for an unknown id or an unreadable dispatches.json, RegistryError for a bad registry."""
     now = now or _utcnow()
-    with dispatch.transaction(cfg.state_dir, keep_days=cfg.keep_days) as items:
+    with dispatch.transaction(cfg.state_dir, keep_days=cfg.keep_days, ids=[did]) as items:
         d = next((x for x in items if x.id == did), None)
         if d is None:
             raise dispatch.DispatchError(f"沒有派工 {did}")
@@ -1089,7 +1091,7 @@ def set_notify(cfg, did, on):
     it waits, on again when it gives up; off once the caller has read the reply). Never for one already notified.
     did may be a batch id: every item of the batch."""
     try:
-        with dispatch.transaction(cfg.state_dir, keep_days=cfg.keep_days) as items:
+        with dispatch.transaction(cfg.state_dir, keep_days=cfg.keep_days, ids=[did]) as items:
             for d in items:
                 if (d.id == did or d.batch == did) and not d.notified and d.from_kind == "session":
                     d.notify = bool(on)
@@ -1097,9 +1099,10 @@ def set_notify(cfg, did, on):
         pass
 
 
-def pending(cfg):
-    """Ids a watcher should keep advancing: queued, sent, and finished ones whose notice is still owed."""
-    items = dispatch.load(cfg.state_dir)
+def pending(cfg, items=None):
+    """Ids a watcher should keep advancing: queued, sent, and finished ones whose notice is still owed. items: the
+    live messages already read (dispatch.load with ids), else they are read here (only those, never every message)."""
+    items = dispatch.load(cfg.state_dir, ids=()) if items is None else items
     return [d.id for d in items if d.state in ("queued", "sent") or _owes_notice(d, items)]
 
 
@@ -1117,7 +1120,7 @@ def cancel(cfg, did, *, now=None, wait_s=None):
     it after this is kept as late history. The cancelled Dispatch, or why not (str).
     wait_s: give up on a busy lock after that many seconds (the ui, which must not stall behind a delivery); None waits."""
     try:
-        with dispatch.transaction(cfg.state_dir, wait_s=wait_s, keep_days=cfg.keep_days) as items:
+        with dispatch.transaction(cfg.state_dir, wait_s=wait_s, keep_days=cfg.keep_days, ids=[did]) as items:
             d = next((x for x in items if x.id == did), None)
             if d is None:
                 return f"沒有派工 {did}"
@@ -1176,7 +1179,7 @@ def resend(cfg, did, *, now=None, notify=None):
     given is owed again). The queued Dispatch, or why not (str)."""
     now = now or _utcnow()
     try:
-        with dispatch.transaction(cfg.state_dir, keep_days=cfg.keep_days) as items:
+        with dispatch.transaction(cfg.state_dir, keep_days=cfg.keep_days, ids=[did]) as items:
             d = next((x for x in items if x.id == did), None)
             if d is None:
                 return f"沒有派工 {did}"
@@ -1609,7 +1612,7 @@ def cmd_dispatches(cfg, out, *, all_, by_target=False, now_fn=_utcnow, alive=os.
     if by_target:
         return _by_target(cfg, out, now_fn(), alive, start_of)
     try:
-        items = dispatch.load(cfg.state_dir)
+        items = dispatch.load(cfg.state_dir, None if all_ else ())  # without --all only the live ones are read
     except dispatch.DispatchError as e:
         out(f"❌ {e}")
         return 2
