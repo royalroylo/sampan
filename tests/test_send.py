@@ -990,7 +990,7 @@ class PendingCancelTest(Base):
         lines = []
         self.assertEqual(send.cmd_cancel(self.cfg, lines.append, d.id), 0)
         self.assertIn(f"不再等派工 {d.id} 的回覆", lines[-1])
-        self.assertEqual((self.stored(d.id).state, self.stored(d.id).reason), ("cancelled", "不再等回覆"))
+        self.assertEqual((self.stored(d.id).state, self.stored(d.id).reason), ("cancelled", "寄件者已取消"))
         self.assertNotIn(d.id, send.pending(self.cfg))
         self.assertIn("不再等回覆", (self.cfg.state_dir / "actions.log").read_text())
         self.assertEqual(send.cmd_cancel(self.cfg, lines.append, d.id), 2)  # finished now
@@ -1451,6 +1451,47 @@ class CopyModeTest(Base):
         self.assertEqual((d.state, d.reason), ("queued", "對方畫面在捲動模式（tmux copy mode）"))
         self.assertEqual(tmux_writes(run), [])
         self.assertEqual(self.advance(tmux_runner(), d.id).state, "sent")
+
+
+class ResendTest(Base):
+    def test_resend_refused_for_queued_or_sent(self):
+        self.set_row("b", agent_status="busy")
+        q = self.submit()
+        self.assertEqual(send.resend(self.cfg, q.id, now=NOW), f"派工 {q.id} 是「排隊中」，只能重送失敗、已取消或已回覆的")
+        self.set_row("b", agent_status="idle")
+        self.advance(tmux_runner(), q.id)
+        self.assertEqual(self.stored(q.id).state, "sent")
+        self.assertEqual(send.resend(self.cfg, q.id, now=NOW),
+                         f"派工 {q.id} 是「已送出、等回覆」，只能重送失敗、已取消或已回覆的")
+        self.assertEqual(self.stored(q.id).state, "sent")
+        self.assertEqual(send.resend(self.cfg, "zzzz", now=NOW), "沒有派工 zzzz")
+
+    def test_resend_of_a_cancelled_paste_requeues_it_behind_the_line(self):
+        d = self.submit(notify=True)
+        self.advance(tmux_runner(), d.id)
+        send.cancel(self.cfg, d.id, now=NOW)
+        later_one = self.submit(message="newer")
+        self.set_row("b", agent_status="busy")
+        got = send.resend(self.cfg, d.id, now=later(60))
+        self.assertEqual((got.state, got.created, got.notify), ("queued", send._iso(later(60)), True))
+        conn = store.connect(self.cfg.state_dir)
+        self.addCleanup(conn.close)
+        self.assertEqual(conn.execute("SELECT archived FROM delivery_messages WHERE message=?", (d.id,)).fetchall()[0][0], 1)
+        self.assertIsNone(deliveries.delivery_of(conn, d.id))
+        self.assertEqual([x.id for x in dispatch.load(self.cfg.state_dir) if x.state == "queued"], [later_one.id, d.id])
+
+    def test_cmd_resend(self):
+        d = self.submit()
+        send.cancel(self.cfg, d.id, now=NOW)
+        self.set_row("b", agent_status="busy")
+        lines = []
+        rc = send.cmd_resend(self.cfg, FakeRunner(strict=True), lines.append, d.id, status_fn=self.status_fn,
+                             now_fn=lambda: later(5))
+        self.assertEqual(rc, 0)
+        self.assertEqual(lines, [f"已重送派工 {d.id}：排隊中（對方正在忙）"])
+        self.assertEqual(send.cmd_resend(self.cfg, FakeRunner(strict=True), lines.append, d.id,
+                                         status_fn=self.status_fn, now_fn=lambda: later(6)), 2)
+        self.assertTrue(lines[-1].startswith("❌ "))
 
 
 class CmdShowTest(Base):

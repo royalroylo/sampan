@@ -46,7 +46,8 @@ REASON_SKIPPED = "對方沒回這則就換了下一則"
 REASON_NO_TEXT_YET = "對方閒著，但還沒看到回覆文字"
 REASON_NO_TEXT = "對方這輪結束了，但沒有回覆文字"
 REASON_ABORTED = "對方這輪被中斷了"
-REASON_STOP_WATCHING = "不再等回覆"
+REASON_STOP_WATCHING = "不再等回覆"  # what a 0.16 cancel of a sent dispatch wrote (and actions.log still says)
+REASON_CANCELLED = "寄件者已取消"  # a cancelled message that had reached the target (taken, partial, pasted)
 REASON_RAN = "指令已執行（沒有文字回覆）"  # a direct send done without reply text: its reply
 REASON_NEW_THREAD = "對方換成新對話（{sid8}）"  # a direct send (/clear…) after which the target's conversation id changed
 REASON_MENU = "指令打開了選單，請自己到那個 session 處理"
@@ -74,6 +75,12 @@ def _log(cfg, label, line):
 STATE_LABELS = {"queued": "排隊中", "sent": "已送出、等回覆", "done": "已回覆", "failed": "失敗", "cancelled": "已取消"}
 STATUS_LABELS = {"queued": "排隊中", "rung": "已按門鈴", "taken": "已取走", "partial": "已有回覆段落", "pasted": "已貼全文",
                  "replied": "已回覆", "unanswered": "已取走沒回覆", "failed": "失敗", "cancelled": "已取消"}
+HOW_LABELS = {"tool": "工具回覆", "marker": "標記分段", "whole": "整段", "fill": "整段補給"}
+KIND_LABELS = {"inbox": "取信", "paste": "貼全文", "raw": "直接送"}
+RING_LABELS = {"ringing": "等對方取信", "taken": "已取信", "no_answer": "沒人應", "paste_failed": "貼不進去",
+               "superseded": "已取代"}
+RESENDABLE = ("failed", "cancelled", "done")
+REPLY_PREVIEW = 2_000  # dispatch_result: the text of each reply part, up to this many characters
 LOG_PREVIEW = 100
 
 
@@ -1080,8 +1087,10 @@ def cancel_refusal(d):
 
 
 def cancel(cfg, did, *, now=None, wait_s=None):
-    """Cancel a queued dispatch (it is never sent), or stop waiting for the reply of a sent one (the message is
-    already with the target; reason 「不再等回覆」, no notice). The cancelled Dispatch, or why not (str).
+    """Cancel a queued dispatch (it is never sent; a rung one leaves its ring, so a take never hands it over), or stop
+    waiting for the reply of a sent one (taken, partial, pasted: the message is already with the target; its link to
+    the delivery is archived, the others of that delivery go on; reason 「寄件者已取消」, no notice). A reply given to
+    it after this is kept as late history. The cancelled Dispatch, or why not (str).
     wait_s: give up on a busy lock after that many seconds (the ui, which must not stall behind a delivery); None waits."""
     try:
         with dispatch.transaction(cfg.state_dir, wait_s=wait_s, keep_days=cfg.keep_days) as items:
@@ -1091,11 +1100,14 @@ def cancel(cfg, did, *, now=None, wait_s=None):
             refusal = cancel_refusal(d)
             if refusal:
                 return refusal
-            was = d.state
-            _finish(d, "cancelled", now or _utcnow(), "已取消" if was == "queued" else REASON_STOP_WATCHING)
-            if was == "sent":
-                with dispatch._sqlite_errors(cfg.state_dir):
-                    _leave_delivery(items, d, now or _utcnow())
+            was, rung = d.state, d.status == "rung"
+            _finish(d, "cancelled", now or _utcnow(), "已取消" if was == "queued" else REASON_CANCELLED)
+            d.status = "cancelled"
+            with dispatch._sqlite_errors(cfg.state_dir):
+                if rung:
+                    doorbell.drop_from_ring(items.conn, d.to_id or d.to_name, d.id)
+                if was == "sent":
+                    _leave_deliveries(items, d, now or _utcnow())
             result = replace(d)
     except (dispatch.DispatchError, OSError) as e:
         return str(e)
@@ -1104,23 +1116,97 @@ def cancel(cfg, did, *, now=None, wait_s=None):
     return result
 
 
-def _leave_delivery(items, d, now):
-    """d no longer waits for its delivery: its link is archived (the others of it go on), and a delivery nobody waits
-    for any more ends."""
-    delivery = deliveries.delivery_of(items.conn, d.id)
-    if delivery is None or delivery["state"] != deliveries.ACTIVE:
-        return
-    deliveries.archive_member(items.conn, delivery["id"], d.id)
-    ids = set(deliveries.members(items.conn, delivery["id"]))
-    if not any(x.id in ids and x.state == "sent" for x in items):
-        deliveries.end_delivery(items.conn, delivery["id"], now)
+def _leave_deliveries(items, d, now):
+    """d no longer waits for any delivery it was in (cancelled or resent): those links are archived (the others of
+    each go on), and an active delivery nobody waits for any more ends, so the target's line moves."""
+    conn = items.conn
+    for r in conn.execute("SELECT delivery FROM delivery_messages WHERE message=? AND archived=0", (d.id,)).fetchall():
+        deliveries.archive_member(conn, r["delivery"], d.id)
+        delivery = conn.execute("SELECT state FROM deliveries WHERE id=?", (r["delivery"],)).fetchone()
+        if delivery is None or delivery["state"] != deliveries.ACTIVE:
+            continue
+        ids = set(deliveries.members(conn, r["delivery"]))
+        if not any(x.id in ids and x.state == "sent" for x in items):
+            deliveries.end_delivery(conn, r["delivery"], now)
 
 
 def cancel_done_text(d):
     """What to tell the user after cancel returned d."""
-    if d.reason == REASON_STOP_WATCHING:
+    if d.reason in (REASON_CANCELLED, REASON_STOP_WATCHING):
         return f"不再等派工 {d.id} 的回覆（訊息已送到 {d.to_name}）"
     return f"已取消派工 {d.id}"
+
+
+def resend_refusal(d):
+    """Why dispatch d cannot be resent, or None (failed, cancelled, or done and to be asked again)."""
+    if d.state in RESENDABLE:
+        return None
+    return f"派工 {d.id} 是「{STATE_LABELS[d.state]}」，只能重送失敗、已取消或已回覆的"
+
+
+def resend(cfg, did, *, now=None, notify=None):
+    """Put a failed, cancelled or done dispatch back in line, as one transaction: its links to the deliveries it was
+    in are archived (a reply to one of those is late history and never finishes it), and it is queued again with
+    created = now (it goes behind what is queued already), no reason, sent / done times or cached reply. It keeps its
+    id and every reply part it got. notify: None keeps whether its sender is told when it finishes (a notice already
+    given is owed again). The queued Dispatch, or why not (str)."""
+    now = now or _utcnow()
+    try:
+        with dispatch.transaction(cfg.state_dir, keep_days=cfg.keep_days) as items:
+            d = next((x for x in items if x.id == did), None)
+            if d is None:
+                return f"沒有派工 {did}"
+            refusal = resend_refusal(d)
+            if refusal:
+                return refusal
+            with dispatch._sqlite_errors(cfg.state_dir):
+                _leave_deliveries(items, d, now)
+            d.state, d.status, d.created = "queued", "queued", _iso(now)
+            d.reason, d.sent_at, d.done_at, d.reply = "", None, None, None
+            d.startup = False  # its session is up by now: an ordinary message
+            if notify is not None:
+                d.notify = bool(notify and d.from_kind == "session")
+            d.notified = False
+            result = replace(d)
+    except (dispatch.DispatchError, OSError) as e:
+        return str(e)
+    _log(cfg, "send", f"派工 {did}：重送（給 {result.to_name}）")
+    return result
+
+
+def cmd_resend(cfg, run, out, did, *, sleep=time.sleep, snapshot_fn=None, status_fn=None, now_fn=_utcnow):
+    """`sampan dispatches resend <id>`: queue it again and try once (a watcher moves it on, as any queued one)."""
+    r = resend(cfg, did, now=now_fn())
+    if isinstance(r, str):
+        out(f"❌ {r}")
+        return 2
+    try:
+        d = advance(cfg, run, did, sleep=sleep, snapshot_fn=snapshot_fn, status_fn=status_fn, now=now_fn())
+    except (dispatch.DispatchError, RegistryError) as e:
+        out(f"❌ {e}")
+        return 2
+    out(f"已重送派工 {did}：{STATE_LABELS[d.state]}" + (f"（{d.reason}）" if d.reason else ""))
+    return 0
+
+
+def status_of(d):
+    """d's fine status (spec §6), also when it is left to be derived from its state."""
+    return d.status or dispatch.STATUS_OF_STATE.get(d.state, d.state)
+
+
+def history(cfg, did):
+    """What a dispatch went through, read from dispatches.db (no lock: read only): its reply parts (deliveries.parts),
+    the deliveries it was in (deliveries.history) and its last ring (or None)."""
+    conn = dispatch._open(cfg.state_dir, fresh_ok=False)
+    if conn is None:
+        return {"parts": [], "deliveries": [], "ring": None}
+    try:
+        with dispatch._sqlite_errors(cfg.state_dir):
+            ring = doorbell.last_ring_of(conn, did)
+            return {"parts": deliveries.parts(conn, did), "deliveries": deliveries.history(conn, did),
+                    "ring": {"code": ring["id"], "at": ring["at"], "result": ring["result"]} if ring else None}
+    finally:
+        conn.close()
 
 
 def cmd_cancel(cfg, out, did):
@@ -1246,16 +1332,46 @@ def cmd_show(cfg, run, out, did, *, wait=0, sleep=time.sleep, clock=time.monoton
     except KeyboardInterrupt:
         out(f"\n不等了，派工 {did} 照樣留著")
         return 130
-    out(f"派工 {d.id}：{STATE_LABELS[d.state]}")
+    try:
+        h = history(cfg, d.id)
+    except dispatch.DispatchError as e:
+        out(f"❌ {e}")
+        return 2
+    label, fine = STATE_LABELS[d.state], STATUS_LABELS.get(status_of(d), status_of(d))
+    out(f"派工 {d.id}：{label}" + (f"（{fine}）" if fine != label else ""))
     out(f"從 {_who(d)} 給 {d.to_name}（{d.to_agent}），建立 {fmt_local(parse_iso(d.created))}")
     if d.reason:
         out(f"說明：{d.reason}")
+    _show_history(out, d, h)
     if d.state == "done":
         out("──── 回覆 ────")
         out(d.reply or "")
     if d.state in ("failed", "cancelled"):
         return 1
     return 124 if wait > 0 and d.state not in dispatch.FINISHED else 0
+
+
+def _show_history(out, d, h):
+    """The reply parts, deliveries and last ring of d for `dispatches show`. The text of the part printed below as the
+    reply (done: the latest) is not repeated."""
+    if h["parts"]:
+        out("回覆段落：")
+        for p in h["parts"]:
+            flags = "、".join(f for f, on in (("最新", p["latest"]), ("遲到", p["late"])) if on)
+            out(f"  {p['id']} {HOW_LABELS.get(p['how'], p['how'])}，{fmt_local(parse_iso(p['at']))}"
+                + (f"（{flags}）" if flags else ""))
+            if p["text"] is None:
+                out("（已清除）")
+            elif not (d.state == "done" and p["latest"] and p["text"] == d.reply):
+                out(p["text"])
+    if h["deliveries"]:
+        out("送達：")
+        for x in h["deliveries"]:
+            out(f"  {x['id']} {KIND_LABELS.get(x['kind'], x['kind'])}，{fmt_local(parse_iso(x['created']))}"
+                + (f"，一起送的：{'、'.join(x['with'])}" if x["with"] else "") + ("（已封存）" if x["archived"] else ""))
+    if h["ring"]:
+        r = h["ring"]
+        out(f"門鈴 {r['code']}：{fmt_local(parse_iso(r['at']))}，{RING_LABELS.get(r['result'], r['result'])}")
 
 
 def _ljust(text, width):

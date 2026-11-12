@@ -60,13 +60,23 @@ def members(conn, delivery_id, *, archived=False):
     return [r["message"] for r in conn.execute(sql + " ORDER BY position", (delivery_id,))]
 
 
+def history(conn, message):
+    """Every delivery message was part of, oldest first: id, kind, created, with (the other messages of it, cancelled
+    ones included) and archived (message no longer waits for it: cancelled or resent)."""
+    rows = conn.execute("SELECT d.id, d.kind, d.created, d.archived, dm.archived AS link_archived FROM deliveries d "
+                        "JOIN delivery_messages dm ON dm.delivery=d.id WHERE dm.message=? ORDER BY d.rowid", (message,))
+    return [{"id": r["id"], "kind": r["kind"], "created": r["created"],
+             "with": [m for m in members(conn, r["id"], archived=True) if m != message],
+             "archived": bool(r["archived"] or r["link_archived"])} for r in rows.fetchall()]
+
+
 def end_delivery(conn, delivery_id, now):
     conn.execute("UPDATE deliveries SET state=?, ended_at=? WHERE id=? AND state=?",
                  (ENDED, _iso(now), delivery_id, ACTIVE))
 
 
 def archive_member(conn, delivery_id, message):
-    """message no longer waits for this delivery (cancelled); the others of it are not affected."""
+    """message no longer waits for this delivery (cancelled or resent); the others of it are not affected."""
     conn.execute("UPDATE delivery_messages SET archived=1 WHERE delivery=? AND message=?", (delivery_id, message))
 
 

@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
-from sampan import codex_approval, dispatch, doorbell, folders, mcp_server, send
+from sampan import codex_approval, deliveries, dispatch, doorbell, folders, inbox, mcp_server, send, store
 from sampan.registry import Row, write_rows
 from sampan.send import Caller
 from sampan.status import State
@@ -145,12 +145,12 @@ class ProtocolTest(Base):
                 self.assertEqual(r["capabilities"], {"tools": {}})
                 self.assertEqual(r["serverInfo"]["name"], "sampan")
 
-    def test_tools_list_has_nine_tools_with_schemas(self):
+    def test_tools_list_has_ten_tools_with_schemas(self):
         c = self.serve(Client([init(1), json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n",
                                req(2, "tools/list")]))
         tools = {t["name"]: t for t in c.response(2)["result"]["tools"]}
         self.assertEqual(set(tools), {"list_sessions", "send", "new_session", "dispatch_result", "cancel_dispatch",
-                                      "folder_move", "send_batch", "inbox_take", "reply"})
+                                      "folder_move", "send_batch", "inbox_take", "reply", "resend"})
         for t in tools.values():
             self.assertEqual(t["inputSchema"]["type"], "object")
             self.assertTrue(t["description"])
@@ -272,6 +272,75 @@ class InboxToolTest(Base):
         self.assertEqual(tool_text(c.response(2)), "這則不是寄給你的")
 
 
+class ResendAndResultTest(Base):
+    ID_A, ID_B = InboxToolTest.ID_A, InboxToolTest.ID_B
+
+    def setUp(self):
+        super().setUp()
+        self.rows["a"] = status_row("a", sid="sa", pane="%1", id=self.ID_A)
+        self.rows["b"] = status_row("b", sid="sb", pane="%2", id=self.ID_B)
+
+    def caller(self, name):
+        return Caller(name, "alice", "claude", "%1" if name == "a" else "%2", id=self.ID_A if name == "a" else self.ID_B)
+
+    def test_dispatch_result_keeps_old_fields_and_adds_new(self):
+        a = self.caller("a")
+        d1, d2 = [send.submit(self.cfg, FakeRunner(strict=True), a, "b", m, notify=False, now=NOW,
+                              status_fn=self.status_fn) for m in ("one", "two")]
+        q = send.submit(self.cfg, FakeRunner(strict=True), a, "c", "to codex", notify=False, now=NOW,
+                        status_fn=self.status_fn)
+        receipt = inbox.take(self.cfg, self.caller("b"), rows=list(self.rows.values()), now=NOW).split("；")[0][3:]
+        long = "x" * 2500
+        inbox.reply(self.cfg, self.caller("b"), d1.id, long, receipt, now=NOW)
+        with dispatch.transaction(self.cfg.state_dir) as items:
+            code = store.new_ring_id(items.conn)
+            items.conn.execute("INSERT INTO rings (id, to_id, conversation, messages, at, result, delivery) "
+                               "VALUES (?, ?, ?, ?, ?, ?, ?)", (code, self.ID_B, "sb", json.dumps([d1.id, d2.id]),
+                                                                NOW.isoformat(timespec="seconds"), "taken", receipt))
+            created = items.conn.execute("SELECT created FROM deliveries WHERE id=?", (receipt,)).fetchone()[0]
+            [part] = deliveries.parts(items.conn, d1.id)
+        self.rows["c"] = dataclasses.replace(self.rows["c"], state=State.STOPPED)  # q stays queued
+        c = self.serve(Client([init(1), call(2, "dispatch_result", {"id": d1.id}),
+                               call(3, "dispatch_result", {"id": q.id})]), caller=a)
+        body = tool_json(c.response(2))
+        self.assertEqual({k: body[k] for k in ("dispatch", "state", "label", "to", "reply", "reason")},
+                         {"dispatch": d1.id, "state": "sent", "label": "已送出、等回覆", "to": "b", "reply": long,
+                          "reason": "已有回覆段落，對方還在做"})
+        self.assertEqual((body["status"], body["status_label"]), ("partial", "已有回覆段落"))
+        self.assertEqual(body["replies"], [{"id": part["id"], "how": "tool", "how_label": "工具回覆", "at": part["at"],
+                                            "latest": True, "late": False, "text": "x" * 2000}])
+        self.assertEqual(body["deliveries"], [{"id": receipt, "kind": "inbox", "created": created, "with": [d2.id],
+                                               "archived": False}])
+        self.assertEqual(body["last_ring"], {"code": code, "at": NOW.isoformat(timespec="seconds"), "result": "taken"})
+        self.assertEqual(body["merged_with"], [d2.id])
+        body = tool_json(c.response(3))
+        self.assertEqual((body["state"], body["reply"], body["status"], body["status_label"]),
+                         ("queued", None, "queued", "排隊中"))
+        self.assertEqual((body["replies"], body["deliveries"], body["last_ring"], body["merged_with"]), ([], [], None, []))
+
+    def test_resend_tool_needs_approval(self):
+        self.assertIn("resend", mcp_server.ACTING_TOOLS)
+        tools = {t["name"]: t for t in mcp_server.tools_list(True)}
+        self.assertEqual(tools["resend"]["_meta"], {"anthropic/requiresUserInteraction": True})
+        self.assertEqual(tools["resend"]["inputSchema"]["required"], ["dispatch_id"])
+        self.assertNotIn("_meta", {t["name"]: t for t in mcp_server.tools_list(False)}["resend"])
+        a = self.caller("a")
+        self.rows["b"] = dataclasses.replace(self.rows["b"], agent_status="busy")
+        d = send.submit(self.cfg, FakeRunner(strict=True), a, "b", "one", notify=False, now=NOW, status_fn=self.status_fn)
+        c = self.serve(Client([init(1, client="other-client"), call(2, "resend", {"dispatch_id": d.id})]), caller=a)
+        self.assertEqual(tool_text(c.response(2)), mcp_server.NOT_ASKING)
+        c = self.serve(Client([init(1), call(2, "resend", {"dispatch_id": d.id}),
+                               call(3, "resend", {"dispatch_id": "ffff"})]), caller=a)
+        self.assertTrue(c.response(2)["result"]["isError"])
+        self.assertEqual(tool_text(c.response(2)), f"派工 {d.id} 是「排隊中」，只能重送失敗、已取消或已回覆的")
+        self.assertIn("沒有派工 ffff", tool_text(c.response(3)))
+        send.cancel(self.cfg, d.id, now=NOW)
+        c = self.serve(Client([init(1), call(2, "resend", {"dispatch_id": d.id})]), caller=a)
+        self.assertEqual(tool_json(c.response(2)), {"dispatch": d.id, "state": "queued", "reason": "對方正在忙"})
+        s = self.dispatches()[0]
+        self.assertEqual((s.state, s.notify, s.notified), ("queued", True, False))  # the sender is told when it is done
+
+
 class ParentAgentTest(Base):
     """With confirm on, only a server started by an agent (claude / codex as its direct parent) may act: a shell piping
     JSON-RPC into `sampan mcp serve` and claiming clientInfo claude-code is refused."""
@@ -338,7 +407,8 @@ class ParentAgentTest(Base):
 
 
 class FailClosedTest(Base):
-    ACTING = {"send": {"session": "b", "message": "hi"}, "cancel_dispatch": {"id": "ffff"}}
+    ACTING = {"send": {"session": "b", "message": "hi"}, "cancel_dispatch": {"id": "ffff"},
+              "resend": {"dispatch_id": "ffff"}}
 
     def new_args(self):
         d = Path(self._tmp.name) / "w"
@@ -543,7 +613,7 @@ class ActingToolTest(Base):
                         status_fn=self.status_fn)
         send.advance(self.cfg, tmux_runner(), d.id, sleep=lambda _s: None, status_fn=self.status_fn, now=NOW)
         c = self.serve(Client([init(1), call(2, "cancel_dispatch", {"id": d.id})], last_id=2))
-        self.assertEqual(tool_json(c.response(2)), {"dispatch": d.id, "state": "cancelled", "reason": "不再等回覆"})
+        self.assertEqual(tool_json(c.response(2)), {"dispatch": d.id, "state": "cancelled", "reason": "寄件者已取消"})
         self.assertNotIn(d.id, send.pending(self.cfg))
 
     def test_cancel_unknown_is_refused(self):

@@ -31,7 +31,7 @@ BEAT_S = 30  # the heartbeat is written at most this often (it must stay well un
 WATCH_S = 3
 WAIT_MAX_S = 60  # a tool call may not block longer than this (MCP clients time tool calls out themselves)
 INTERACTION_META = "anthropic/requiresUserInteraction"
-ACTING_TOOLS = ("send", "send_batch", "new_session", "cancel_dispatch", "folder_move")
+ACTING_TOOLS = ("send", "send_batch", "new_session", "cancel_dispatch", "folder_move", "resend")
 # clientInfo.name of the clients known to ask the user for a tool marked INTERACTION_META (checked 2026-10-27:
 # Claude Code 2.1.287 sends "claude-code", Codex 0.164.0 sends "codex-mcp-client")
 ASKING_CLIENTS = {"claude-code", "codex-mcp-client"}  # Codex: only with approval_mode = "prompt" (codex_approval)
@@ -98,8 +98,9 @@ TOOLS = [
          "folder": _str("目的資料夾路徑，例如 客戶/甲；\"/\" 是最上層")},
          "required": ["sessions", "folder"]}},
     {"name": "dispatch_result",
-     "description": "看一筆派工的狀態（queued／sent／done／failed／cancelled）、回覆與原因；wait 秒數內（最多 60）等它做完。"
-                    "id 給批次編號（b 開頭、5 碼）時看整批。唯讀。",
+     "description": "看一筆派工的狀態（queued／sent／done／failed／cancelled）、回覆（最新那段）與原因；wait 秒數內（最多 60）等它做完。"
+                    "也列細分狀態（status）、每段回覆（replies）、每次送達（deliveries）、最後一次門鈴（last_ring）、"
+                    "和哪些派工一起送（merged_with）。id 給批次編號（b 開頭、5 碼）時看整批。唯讀。",
      "inputSchema": {"type": "object", "properties": {
          "id": _str("派工編號，或 send_batch 的批次編號"),
          "wait": {"type": "integer", "description": "最多等幾秒（0–60）", "minimum": 0, "maximum": WAIT_MAX_S,
@@ -108,6 +109,10 @@ TOOLS = [
     {"name": "cancel_dispatch",
      "description": "取消一筆還沒送出的（排隊中）派工；已送出、等回覆的，改成不再等它的回覆（訊息已在對方那裡，收不回）。",
      "inputSchema": {"type": "object", "properties": {"id": _str("派工編號")}, "required": ["id"]}},
+    {"name": "resend",
+     "description": "重送一筆失敗、已取消或已回覆的派工（同一個編號，重新排隊、照常送出）。舊的送達封存、舊的回覆段落留著；"
+                    "對方對舊送達的遲到回覆只記成歷史，不算這次的回覆。",
+     "inputSchema": {"type": "object", "properties": {"dispatch_id": _str("派工編號")}, "required": ["dispatch_id"]}},
     {"name": "inbox_take",
      "description": "收到 sampan 門鈴時呼叫：一次取走寄給你的所有新訊息（純文字，依時間順序，附收據編號），也列出之前取走、"
                     "還沒回的。全部看完再動手；每則做完用 reply 回一次，那是最終回覆，做完再回，不要用來報進度。",
@@ -625,6 +630,19 @@ class Server:
         d = self._wait(did, wait)
         out = {"dispatch": d.id, "state": d.state, "label": send.STATE_LABELS[d.state], "to": d.to_name,
                "reply": d.reply, "reason": d.reason}
+        try:
+            h = send.history(self.cfg, d.id)
+        except dispatch.DispatchError as e:
+            raise ToolError(str(e)) from e
+        status = send.status_of(d)
+        out["status"], out["status_label"] = status, send.STATUS_LABELS.get(status, status)
+        out["replies"] = [{"id": p["id"], "how": p["how"], "how_label": send.HOW_LABELS.get(p["how"], p["how"]),
+                           "at": p["at"], "latest": p["latest"], "late": p["late"],
+                           "text": p["text"][:send.REPLY_PREVIEW] if p["text"] is not None else None}
+                          for p in h["parts"]]
+        out["deliveries"] = h["deliveries"]
+        out["last_ring"] = h["ring"]
+        out["merged_with"] = h["deliveries"][-1]["with"] if h["deliveries"] else []
         return out
 
     def tool_cancel_dispatch(self, args):
@@ -639,8 +657,28 @@ class Server:
         if isinstance(r, str):
             raise ToolError(r)
         out = {"dispatch": did, "state": r.state}
-        if r.reason == send.REASON_STOP_WATCHING:
+        if r.reason == send.REASON_CANCELLED:
             out["reason"] = r.reason
+        return out
+
+    def tool_resend(self, args):
+        did = _arg_str(args, "dispatch_id")
+        if send.is_batch_id(did):
+            raise ToolError(f"{did} 是批次編號：請用 dispatch_result 看各筆的派工編號，逐筆重送")
+        d = self._own(did)
+        refusal = send.resend_refusal(d)
+        if refusal:
+            raise ToolError(refusal)
+        r = send.resend(self.cfg, did, now=self.now_fn(), notify=self.caller.name is not None)  # _own looked it up
+        if isinstance(r, str):
+            raise ToolError(r)
+        self.mine.add(did)
+        d = self._wait(did, 0)
+        out = {"dispatch": d.id, "state": d.state}
+        if d.state == "done":
+            out["reply"] = d.reply or ""
+        elif d.reason:
+            out["reason"] = d.reason
         return out
 
     def tool_inbox_take(self, args):

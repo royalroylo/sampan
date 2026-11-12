@@ -98,6 +98,23 @@ def ringing(conn, to_id):
                         (to_id, RINGING)).fetchone()
 
 
+def last_ring_of(conn, message):
+    """The newest ring message was in (a cancelled one was taken out of its ring), or None."""
+    return conn.execute("SELECT * FROM rings WHERE messages LIKE ? ORDER BY rowid DESC LIMIT 1",
+                        (f'%"{message}"%',)).fetchone()
+
+
+def drop_from_ring(conn, to_id, message):
+    """message (cancelled while rung) is no longer in to_id's ringing ring, so a take never hands it over; a ring
+    left with nothing in it is superseded."""
+    ring = ringing(conn, to_id)
+    if ring is None or message not in _ids(ring):
+        return
+    left = [i for i in _ids(ring) if i != message]
+    conn.execute("UPDATE rings SET messages=?, result=? WHERE id=?",
+                 (json.dumps(left), RINGING if left else SUPERSEDED, ring["id"]))
+
+
 def _ids(ring):
     try:
         return json.loads(ring["messages"] or "[]")

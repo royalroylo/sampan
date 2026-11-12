@@ -413,5 +413,139 @@ class TurnEndTest(InboxBase):
         self.assertEqual((self.stored(a1.id).state, got.status), ("done", "rung"))
 
 
+
+class CancelResendTest(InboxBase):
+    def link_archived(self, delivery, message):
+        return self.conn().execute("SELECT archived FROM delivery_messages WHERE delivery=? AND message=?",
+                                   (delivery, message)).fetchone()[0]
+
+    def status(self, did):
+        return self.conn().execute("SELECT status FROM messages WHERE id=?", (did,)).fetchone()[0]
+
+    def test_cancel_after_take_then_late_reply_is_history(self):  # Review Focus 5
+        a1, a2 = self.send_at(0, "one"), self.send_at(1, "two")
+        did = self.taken(a1, a2)
+        got = send.cancel(self.cfg, a1.id, now=later(7))
+        self.assertEqual((got.state, got.status, got.reason), ("cancelled", "cancelled", "寄件者已取消"))
+        self.assertEqual(self.status(a1.id), "cancelled")
+        self.assertEqual(self.link_archived(did, a1.id), 1)
+        s = self.stored(a2.id)  # the other message of the same delivery goes on
+        self.assertEqual((s.state, s.status), ("sent", "taken"))
+        self.assertEqual(deliveries.active_delivery(self.conn(), ID_B)["id"], did)
+        self.assertEqual(deliveries.members(self.conn(), did), [a2.id])
+        self.assertEqual(self.reply(a1.id, "late answer", did, at=8), inbox.LATE)
+        self.assertTrue(self.reply(a2.id, "answer two", did, at=9).startswith("已記下"))
+        self.append([ts.assistant("done")])
+        run = runner()
+        self.ended(run, a2.id, 30)
+        s1, s2 = self.stored(a1.id), self.stored(a2.id)
+        self.assertEqual((s1.state, s1.reply, s1.notified), ("cancelled", None, False))
+        self.assertEqual((s2.state, s2.reply), ("done", "answer two"))
+        self.assertEqual(self.parts(a1.id), [("tool", "late answer", True)])
+        notices = self.notices(run, "%1")
+        self.assertTrue(notices)
+        self.assertFalse(any(a1.id in n for n in notices))
+
+    def test_cancel_of_the_last_member_ends_the_delivery(self):
+        a1 = self.send_at(0, "one")
+        did = self.taken(a1)
+        send.cancel(self.cfg, a1.id, now=later(7))
+        self.assertIsNone(deliveries.active_delivery(self.conn(), ID_B))
+        row = self.conn().execute("SELECT state FROM deliveries WHERE id=?", (did,)).fetchone()
+        self.assertEqual(row["state"], "ended")
+        a2 = self.send_at(10, "two")
+        self.assertEqual(self.advance(runner(), a2.id, later(11)).status, "rung")  # the target's line moves
+
+    def test_cancel_while_rung_removes_it_from_the_ring(self):
+        a1, a2 = self.send_at(0, "one"), self.send_at(1, "two")
+        ring = self.rung(a1, a2)
+        got = send.cancel(self.cfg, a1.id, now=later(4))
+        self.assertEqual((got.state, got.status, got.reason), ("cancelled", "cancelled", "已取消"))
+        r = self.rings()[0]
+        self.assertEqual((r["id"], json.loads(r["messages"]), r["result"]), (ring["id"], [a2.id], "ringing"))
+        text = self.take()
+        self.assertNotIn(a1.id, text)
+        self.assertIn(a2.id, text)
+        self.assertEqual(deliveries.members(self.conn(), receipt_of(text)), [a2.id])
+
+    def test_cancelling_every_rung_message_ends_the_ring(self):
+        a1 = self.send_at(0, "one")
+        self.rung(a1)
+        send.cancel(self.cfg, a1.id, now=later(4))
+        r = self.rings()[0]
+        self.assertEqual((json.loads(r["messages"]), r["result"]), ([], "superseded"))
+        self.assertTrue(self.take().startswith("沒有新訊息"))
+
+    def test_resend_archives_and_requeues_keeping_old_parts(self):
+        a1 = self.send_at(0, "one")
+        old = self.taken(a1)
+        self.reply(a1.id, "first answer", old)
+        self.append([ts.assistant("done")])
+        self.ended(runner(), a1.id, 30)
+        self.assertEqual(self.stored(a1.id).state, "done")
+        got = send.resend(self.cfg, a1.id, now=later(60))
+        self.assertEqual((got.state, got.status, got.reason, got.sent_at, got.done_at, got.reply, got.notified),
+                         ("queued", "queued", "", None, None, None, False))
+        s = self.stored(a1.id)
+        self.assertEqual((s.state, s.reason, s.sent_at, s.done_at, s.reply), ("queued", "", None, None, None))
+        self.assertEqual(self.status(a1.id), "queued")
+        self.assertEqual(self.link_archived(old, a1.id), 1)
+        self.assertEqual(self.parts(a1.id), [("tool", "first answer", False)])  # history stays
+        self.assertIn(f"派工 {a1.id}：重送", self.log())
+        # a late reply to the old delivery is history, and does not complete the resent message
+        self.assertEqual(self.reply(a1.id, "old again", old, at=61), inbox.LATE)
+        self.assertEqual(self.stored(a1.id).state, "queued")
+        # it goes out again as a new delivery
+        ring = self.ring(a1, at=62)
+        self.assertEqual(json.loads(ring["messages"]), [a1.id])
+        line = dispatch.outbox_path(self.cfg.state_dir, f"ring-{ring['id']}").read_text()
+        self.transcript(SID_B, [ts.user(line)])
+        new = receipt_of(self.take(at=63))
+        self.assertNotEqual(new, old)
+        self.assertEqual(self.reply(a1.id, "second answer", new, at=64), f"已記下，派工 {a1.id} 的回覆（第 1 段）")
+        self.assertEqual(self.parts(a1.id), [("tool", "first answer", False), ("tool", "old again", True),
+                                             ("tool", "second answer", False)])
+        self.assertEqual(deliveries.latest_part(self.conn(), a1.id)["text"], "second answer")
+
+    def test_resend_of_a_cancelled_taken_message(self):
+        a1 = self.send_at(0, "one")
+        did = self.taken(a1)
+        send.cancel(self.cfg, a1.id, now=later(7))
+        got = send.resend(self.cfg, a1.id, now=later(8))
+        self.assertEqual((got.state, got.status), ("queued", "queued"))
+        self.assertEqual(self.reply(a1.id, "for the old one", did, at=9), inbox.LATE)
+        self.assertEqual(self.stored(a1.id).state, "queued")
+
+    def test_show_prints_parts_deliveries_and_the_last_ring(self):
+        a1, a2 = self.send_at(0, "one"), self.send_at(1, "two")
+        did = self.taken(a1, a2)
+        self.reply(a1.id, "answer one", did)
+        self.reply(a1.id, "answer one, better", did, at=7)
+        self.append([ts.assistant("done")])
+        self.ended(runner(), a1.id, 30)
+        code = self.rings()[0]["id"]
+        lines = []
+        self.assertEqual(send.cmd_show(self.cfg, FakeRunner(strict=True), lines.append, a1.id,
+                                       status_fn=self.status_fn, now_fn=lambda: later(40)), 0)
+        [p1, p2] = deliveries.parts(self.conn(), a1.id)
+        self.assertEqual(lines[0], f"派工 {a1.id}：已回覆")
+        self.assertIn("回覆段落：", lines)
+        self.assertIn(f"  {p1['id']} 工具回覆，{fmt_local(later(6))}", lines)
+        self.assertIn("answer one", lines)
+        self.assertIn(f"  {p2['id']} 工具回覆，{fmt_local(later(7))}（最新）", lines)
+        self.assertIn("送達：", lines)
+        self.assertIn(f"  {did} 取信，{fmt_local(later(5))}，一起送的：{a2.id}", lines)
+        self.assertIn(f"門鈴 {code}：{fmt_local(later(3))}，已取信", lines)
+        self.assertEqual(lines[-2:], ["──── 回覆 ────", "answer one, better"])
+        self.assertEqual(lines.count("answer one, better"), 1)  # the latest part is the reply, printed once
+        send.cancel(self.cfg, a2.id, now=later(41))  # a2 is done: nothing to cancel
+        send.resend(self.cfg, a2.id, now=later(42))
+        self.set_row("b", agent_status="busy")  # it stays queued: show presses no key
+        lines.clear()
+        send.cmd_show(self.cfg, FakeRunner(strict=True), lines.append, a2.id, status_fn=self.status_fn,
+                      now_fn=lambda: later(42))
+        self.assertIn(f"  {did} 取信，{fmt_local(later(5))}，一起送的：{a1.id}（已封存）", lines)
+
+
 if __name__ == "__main__":
     unittest.main()

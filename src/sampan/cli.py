@@ -96,9 +96,11 @@ def build_parser():
                     help="直接送：不加轉送標頭，讓對方的 Claude 當作指令執行（例如 /compact）；只限 Claude，一行、以 / 開頭")
     mh = sub.add_parser("machine", help="這台機器的 id 與名稱（--name 改名；id 不變）")
     mh.add_argument("--name", help="新的機器名稱")
-    ds = sub.add_parser("dispatches", usage="sampan dispatches [--all] | sampan dispatches show <編號> [--wait 秒] | sampan dispatches cancel <編號>",
-                        help="列派工（預設只列排隊中與等回覆的）；show <編號> 看狀態與完整回覆；cancel <編號> 取消排隊中的、或不再等已送出的")
-    ds.add_argument("action", nargs="?", choices=["cancel", "show"], help=argparse.SUPPRESS)
+    ds = sub.add_parser("dispatches", usage="sampan dispatches [--all] | sampan dispatches show <編號> [--wait 秒] | "
+                                            "sampan dispatches cancel <編號> | sampan dispatches resend <編號>",
+                        help="列派工（預設只列排隊中與等回覆的）；show <編號> 看狀態、每段回覆與每次送達；cancel <編號> 取消排隊中的、"
+                             "或不再等已送出的；resend <編號> 重送失敗、已取消或已回覆的")
+    ds.add_argument("action", nargs="?", choices=["cancel", "show", "resend"], help=argparse.SUPPRESS)
     ds.add_argument("id", nargs="?", help=argparse.SUPPRESS)
     ds.add_argument("--all", action="store_true", help="也列已完成、失敗、取消的")
     ds.add_argument("--wait", type=int, default=None, metavar="秒", help="show：最多等幾秒等它做完（逾時結束碼 124）")
@@ -552,11 +554,11 @@ def _dispatch(cfg, args):
         return cmd_send_batch(cfg, run, out, names, message, raw=args.raw, wait=args.wait, timeout=args.timeout,
                               caller=caller)
     if cmd == "dispatches":
-        from .send import cmd_cancel, cmd_dispatches, cmd_show
+        from .send import cmd_cancel, cmd_dispatches, cmd_resend, cmd_show
         if args.wait is not None and args.action != "show":
             out("❌ --wait 只能跟 show 一起用：sampan dispatches show <編號> --wait 秒")
             return 2
-        if args.action in ("cancel", "show"):
+        if args.action in ("cancel", "show", "resend"):
             if not args.id:
                 out(f"❌ 用法：sampan dispatches {args.action} <編號>")
                 return 2
@@ -565,6 +567,8 @@ def _dispatch(cfg, args):
             from .send import command_caller
             if _agent_refused(cfg, command_caller(cfg, run, os.getpid()) if cfg.mcp_confirm else None, out):
                 return 2
+            if args.action == "resend":
+                return cmd_resend(cfg, run, out, args.id)
             return cmd_cancel(cfg, out, args.id)
         return cmd_dispatches(cfg, out, all_=args.all)
     if cmd == "folder":

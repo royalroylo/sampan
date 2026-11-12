@@ -711,6 +711,20 @@ class AgentRefusedTest(unittest.TestCase):
         self.assertEqual((rc, cc.call_count), (2, 0))
         self.assertIn(AGENT_REFUSED, text)
 
+    def test_agent_resend_refused_when_confirm_on(self):
+        from sampan.send import AGENT_REFUSED
+        with mock.patch("sampan.send.cmd_resend") as cr:
+            rc, text, _ = self.run_cli(["dispatches", "resend", "ab12"], self.SESSION)
+        self.assertEqual((rc, cr.call_count), (2, 0))
+        self.assertIn(AGENT_REFUSED, text)
+        with mock.patch("sampan.send.cmd_resend", return_value=0) as cr:
+            self.assertEqual(self.run_cli(["dispatches", "resend", "ab12"], TERMINAL)[0], 0)
+        self.assertEqual(cr.call_args.args[3], "ab12")
+        self.set_confirm(False)
+        with mock.patch("sampan.send.cmd_resend", return_value=0) as cr:
+            self.assertEqual(self.run_cli(["dispatches", "resend", "ab12"], self.SESSION)[0], 0)
+        self.assertEqual(cr.call_count, 1)
+
     def test_send_batch_refused_for_agent_when_confirm_on(self):
         from sampan.send import AGENT_REFUSED
         with mock.patch("sampan.send.cmd_send_batch") as cs:
