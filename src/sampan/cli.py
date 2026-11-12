@@ -125,10 +125,11 @@ def build_parser():
     sy.add_argument("--prune", action="store_true",
                     help="也移除清單外的 plugin／marketplace 與 local scope 的重複安裝（先用 --dry-run 看）")
     sub.add_parser("doctor", help="檢查已知的設定問題")
-    mg = sub.add_parser("migrate", help="把資料升到 0.15 的格式（平常第一次執行任何指令就會自動做，先備份、做完比對）")
+    mg = sub.add_parser("migrate", help="把資料升到新格式：登記表與資料夾（0.15）、派工搬進資料庫（0.17）；平常第一次執行任何指令就會自動做，先備份、做完比對。降版後再跑會移除降版標記、重新升級")
     mgx = mg.add_mutually_exclusive_group()
     mgx.add_argument("--dry-run", action="store_true", help="在複本上試做，印前後差異與會產生幾個 id；原檔不動")
-    mgx.add_argument("--revert", action="store_true", help="寫回 0.14 讀得懂的格式（先備份）；降版前跑")
+    mgx.add_argument("--revert", action="store_true",
+                     help="把派工寫回 0.16 讀得懂的 dispatches.json（資料庫改名保留）並加上降版標記；降版到 0.16 前跑")
     it = sub.add_parser("init", help="偵測 profile、產生設定檔（已有設定時只提議新增的項目）、hook 與自動存檔排程")
     it.add_argument("--no-launchd", action="store_true", help="不安裝自動存檔排程")
     it.add_argument("--yes", action="store_true", help="所有問題都用預設值，不讀 stdin（沒有終端機時用）")
@@ -459,9 +460,12 @@ def _dispatch(cfg, args):
         from .migrate import cmd_migrate
         return cmd_migrate(cfg, out, dry_run=args.dry_run, revert=args.revert)
     if cmd != "doctor":
-        # every command that reads or writes state sees the 0.15 format; a failed migration stops it (files as they were)
+        # every command that reads or writes state sees the new formats; a failed migration stops it (files as they
+        # were). Dispatches (0.17) stop only the commands that use them: save, status, ui… go on after a revert.
         from . import migrate
-        rc = migrate.ensure(cfg, _err if cmd == "mcp" and args.action == "serve" else out)
+        serve = cmd == "mcp" and args.action == "serve"
+        touches = serve or cmd in ("send", "send-batch", "dispatches") or (cmd == "new" and args.message is not None)
+        rc = migrate.ensure(cfg, _err if serve else out, touches_dispatches=touches)
         if rc:
             return rc
     if cmd == "ui":

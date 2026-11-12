@@ -8,8 +8,13 @@ the backup to the restore happens under the registry lock. A run cut short (regi
 version 1) only does the folders step, so ids never change twice. folders.json is display-only: one that cannot be read
 is kept as it is (a warning, the registry still migrates) and migrated by a later run once it reads again.
 
-`cmd_migrate` is `sampan migrate`: the same step by hand, `--dry-run` (a rehearsal on copies, nothing written) and
-`--revert` (registry version 2 and folders version 1 again, for a downgrade to 0.14; the ids are dropped).
+Then `ensure` runs the 0.17 step (migrate_017.py): dispatches.json into dispatches.db. Its revert mark keeps it from
+running again; while the mark is there only the commands that use dispatches stop.
+
+`cmd_migrate` is `sampan migrate`: both steps by hand (also after a revert: the mark is removed first), `--dry-run` (a
+rehearsal on copies, nothing written) and `--revert` (dispatches back into a dispatches.json 0.16 reads, for a downgrade
+to 0.16; see migrate_017.revert). `_revert` (registry version 2 and folders version 1 again, for 0.14) is 0.16's
+`--revert`: to go further back, revert to 0.16 first and run it there.
 """
 import json
 import os
@@ -229,9 +234,38 @@ def _upgrade(cfg, *, machine, now, backup=True):
     return 0, [], bk, broken
 
 
-def ensure(cfg, out, *, now=None):
-    """Migrate the state when needed (see the module docstring). 0 = nothing to do or done (folders.json may have been
-    kept as it was, with a warning); 2 = not done, files as they were (the reason is printed)."""
+def ensure(cfg, out, *, now=None, touches_dispatches=False):
+    """Migrate the state when needed (see the module docstring): the 0.15 step, then the 0.17 one. 0 = nothing to do or
+    done (folders.json may have been kept as it was, with a warning); 2 = not done, files as they were (the reason is
+    printed). touches_dispatches: the command reads or writes dispatches; only such a command stops (2) when the
+    dispatches are not migrated (failed, or reverted to 0.16), the others go on."""
+    rc = _ensure_015(cfg, out, now=now)
+    if rc:
+        return rc
+    return _ensure_017(cfg, out, now=now, touches_dispatches=touches_dispatches)
+
+
+def _ensure_017(cfg, out, *, now, touches_dispatches):
+    from . import migrate_017
+    if migrate_017.reverted(cfg):
+        if touches_dispatches:
+            out(migrate_017.REVERTED_NOTE)
+            return 2
+        return 0
+    if not migrate_017.needed(cfg):
+        return 0
+    try:
+        lines = migrate_017.upgrade(cfg, now=now or datetime.now())
+    except Exception as e:
+        why = str(e) if isinstance(e, migrate_017.MigrateError) else f"{type(e).__name__}: {e}"
+        out(f"❌ 派工資料沒有升級到 0.17（dispatches.json 沒動）：{why}")
+        return 2 if touches_dispatches else 0
+    for line in lines:
+        out(line)
+    return 0
+
+
+def _ensure_015(cfg, out, *, now=None):
     if not needed(cfg):
         return 0
     try:
@@ -250,8 +284,9 @@ def ensure(cfg, out, *, now=None):
 
 
 def versions(cfg):
-    """(registry version, folders version), None for a missing or unreadable file."""
-    return _version(cfg.registry_path), _version(_folders_path(cfg))
+    """(registry version, folders version, dispatches.json version), None for a missing or unreadable file (dispatches
+    version 3 is the stub 0.17 leaves: the dispatches are in dispatches.db)."""
+    return _version(cfg.registry_path), _version(_folders_path(cfg)), _version(Path(cfg.state_dir) / "dispatches.json")
 
 
 def _dry_run(cfg, out):
@@ -260,7 +295,7 @@ def _dry_run(cfg, out):
     except registry.RegistryError as e:
         out(f"❌ 升級會失敗（登記表讀不到）：{e}")
         return 2
-    reg, fol = versions(cfg)
+    reg, fol, _dis = versions(cfg)
     out("sampan migrate --dry-run（在複本上試做，原檔不動）")
     out(f"  登記表 v{reg} → v{registry.VERSION}、資料夾{_v(fol)} → v{folders.VERSION}；"
         f"會產生 {sum(1 for r in rows if not r.id)} 個 session id")
@@ -328,15 +363,48 @@ def _revert(cfg, out, now):
 
 def cmd_migrate(cfg, out, *, dry_run=False, revert=False, now=None):
     """sampan migrate [--dry-run | --revert]."""
+    from . import migrate_017
     if dry_run and revert:
         out("❌ --dry-run 和 --revert 只能選一個")
         return 2
     now = now or datetime.now()
     if revert:
-        return _revert(cfg, out, now)
-    if not needed(cfg):
+        try:
+            lines = migrate_017.revert(cfg, now=now)
+        except Exception as e:
+            why = str(e) if isinstance(e, migrate_017.MigrateError) else f"{type(e).__name__}: {e}"
+            out(f"❌ {why}")
+            return 2
+        for line in lines:
+            out(line)
+        return 0
+    if not needed(cfg) and not migrate_017.pending(cfg) and not migrate_017.reverted(cfg):
         out("資料已是新格式（或還沒有資料），不用升級")
         return 0
     if dry_run:
-        return _dry_run(cfg, out)
-    return ensure(cfg, out, now=now)
+        return _dry_run_all(cfg, out)
+    if migrate_017.reverted(cfg):
+        if (Path(cfg.state_dir) / "dispatches.db").exists():
+            out("❌ 上次降版沒做完（dispatches.db 還在）：先跑 sampan migrate --revert 做完，再跑 sampan migrate")
+            return 2
+        migrate_017.unmark(cfg)
+        out("已移除降版標記，重新升級派工資料")
+    return ensure(cfg, out, now=now, touches_dispatches=True)
+
+
+def _dry_run_all(cfg, out):
+    from . import migrate_017
+    rc = _dry_run(cfg, out) if needed(cfg) else 0
+    if rc or not migrate_017.pending(cfg):
+        return rc
+    if not needed(cfg):
+        out("sampan migrate --dry-run（在複本上試做，原檔不動）")
+    try:
+        lines = migrate_017.dry_run(cfg)
+    except Exception as e:
+        out(f"  ❌ 派工試做失敗，真的升級會停下、dispatches.json 不動：{e}")
+        return 2
+    _say(out, lines)
+    if migrate_017.reverted(cfg):
+        out("  現在有降版標記：sampan migrate 會先移除它")
+    return 0

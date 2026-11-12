@@ -64,6 +64,10 @@ class MigrateTest(unittest.TestCase):
         self.cfg = make_env(Path(self._tmp.name))
         self.state = self.cfg.state_dir
         self.state.mkdir(parents=True, exist_ok=True)
+        # the 0.15 step alone: put_dispatches' records are not real ones, the 0.17 step has its own tests
+        p = mock.patch("sampan.migrate_017.pending", return_value=False)
+        p.start()
+        self.addCleanup(p.stop)
 
     def put_v2(self, sessions=None, folders_doc=V1_FOLDERS):
         doc = {"version": 2, "saved_at": "2026-10-30T10:00:00+08:00", "sessions": sessions or v2_sessions()}
@@ -97,6 +101,12 @@ class MigrateTest(unittest.TestCase):
     def cmd(self, **kw):
         buf = io.StringIO()
         rc = migrate.cmd_migrate(self.cfg, lambda m="": buf.write(m + "\n"), now=NOW, **kw)
+        return rc, buf.getvalue()
+
+    def revert_014(self):
+        """0.16's `sampan migrate --revert` (still here, no longer reachable from 0.17's command line)."""
+        buf = io.StringIO()
+        rc = migrate._revert(self.cfg, lambda m="": buf.write(m + "\n"), NOW)
         return rc, buf.getvalue()
 
     # --- needed / snapshot
@@ -403,7 +413,7 @@ class MigrateTest(unittest.TestCase):
         before = migrate.snapshot(self.cfg)
         self.ensure()
         ids = {s["tmux"]: s["id"] for s in self.read("registry.json")["sessions"]}
-        rc, text = self.cmd(revert=True)
+        rc, text = self.revert_014()
         self.assertEqual(rc, 0, text)
         self.assertIn("降版前請先跑這個；再升級會產生新的 id", text)
         reg = self.read("registry.json")
@@ -429,7 +439,7 @@ class MigrateTest(unittest.TestCase):
         self.assertEqual(migrate.snapshot(self.cfg), before)
 
     def test_revert_without_registry(self):
-        rc, text = self.cmd(revert=True)
+        rc, text = self.revert_014()
         self.assertEqual(rc, 0)
         self.assertEqual(self.all_files(), {})
 
@@ -511,7 +521,8 @@ class CliMigrateTest(unittest.TestCase):
             self.assertEqual(cli.main(["migrate"]), 0)
             self.assertEqual(self.version(), 3)
             self.assertEqual(cli.main(["migrate", "--revert"]), 0)
-        self.assertEqual(self.version(), 2)
+        self.assertEqual(self.version(), 3)  # --revert is for 0.16 now: only the dispatches go back (and the mark)
+        self.assertTrue((self.cfg.state_dir / "migrate-0.17.reverted").exists())
 
 
 if __name__ == "__main__":
