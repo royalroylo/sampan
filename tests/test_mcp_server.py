@@ -441,6 +441,20 @@ class FailClosedTest(Base):
                                run=tmux_runner())
                 self.assertFalse(c.response(2)["result"]["isError"])
 
+    def test_codex_config_from_0_16_keeps_the_old_tools_and_refuses_resend(self):
+        """0.16 wrote prompt tables for its five acting tools; resend is newer. Each tool is checked on its own, so
+        the old ones still work and resend is refused with the fix, never run without asking."""
+        old = '[mcp_servers.sampan]\ncommand = "sampan"\n' + "".join(
+            f'\n[mcp_servers.sampan.tools.{t}]\napproval_mode = "prompt"\n'
+            for t in ("send", "send_batch", "new_session", "cancel_dispatch", "folder_move"))
+        self.codex_toml(old)
+        c = self.serve(Client([init(1, client="codex-mcp-client"), call(2, "send", {"session": "b", "message": "hi"}),
+                               call(3, "resend", {"dispatch_id": "ffff"})]), run=tmux_runner())
+        self.assertFalse(c.response(2)["result"]["isError"], tool_text(c.response(2)))
+        self.assertTrue(c.response(3)["result"]["isError"])
+        self.assertEqual(tool_text(c.response(3)),
+                         mcp_server.CODEX_NOT_PROMPT.format(path=self.cfg.codex.home / "config.toml"))
+
     def test_codex_without_prompt_tables_is_refused(self):
         installed = '[mcp_servers.sampan]\ncommand = "sampan"\n'
         approve_send = codex_approval.with_prompt(installed).replace(

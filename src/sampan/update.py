@@ -10,6 +10,9 @@ uv tool install --reinstall git+REPO@v<latest> (pinned to the latest tag found; 
 injectable run/stream, so tests never touch the network or a real installation.
 U in the ui and sampan update re-check now (force, skipping the cache); with force, do_update reinstalls without trying upgrade first.
 The scheduled sampan save does not check.
+
+After `sampan update`: after_update_notices names the sessions whose `sampan mcp serve` started before this install
+(they still run the old code until restarted) and says when Codex's sampan tables need `sampan mcp install`.
 """
 import json
 import os
@@ -22,7 +25,9 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as metadata_version
 from pathlib import Path
 
+from . import procs
 from .fsutil import PRIVATE_FILE, atomic_write, private_dir
+from .tmux import Tmux
 
 REPO = "https://github.com/royalroylo/sampan"
 PACKAGE = "sampan"
@@ -257,3 +262,68 @@ def do_update(out, *, current, stream=_stream, run=_run, which=shutil.which, lat
         out(f"⚠ 執行後版本仍是 {after or '（讀不到）'}" + (f"（exit {rc}）" if rc else ""))
     out(f"❌ 更新沒有成功，仍是 {current}；可以在終端機手動執行：{' '.join(reinstall_cmd(tag))}")
     return False
+
+
+# ── after an update ──
+
+_SERVE = re.compile(r"(?:^|[\s/])sampan\s+mcp\s+serve(?:\s|$)")
+RESTART_NOTICE = ("這些 session 要重開才會用新版：{names}（在 sampan 畫面按 S）。",
+                  "重開之前，它們用 sampan 送訊息會失敗；收件端會先用貼全文。")
+CODEX_STALE = "Codex 的 sampan 工具表要更新：跑 sampan mcp install 補上"
+
+
+def installed_at():
+    """When the installed package was written (mtime of its __init__.py: the update rewrote it); None if unreadable."""
+    try:
+        return (Path(__file__).with_name("__init__.py")).stat().st_mtime
+    except OSError:
+        return None
+
+
+def running_0_16_servers(run, *, installed_at=installed_at):
+    """The tmux sessions (names, in pane order, each once) running a `sampan mcp serve` that started before the
+    installed package was written, i.e. the version before this update. installed_at: a timestamp, or a function
+    giving one. A server outside tmux, one whose start time ps cannot give, or tmux unreadable: not listed."""
+    at = installed_at() if callable(installed_at) else installed_at
+    if at is None:
+        return []
+    cutoff = datetime.fromtimestamp(int(at))  # local time, whole seconds like ps lstart
+    table = procs.list_procs(run)
+    servers = [p for p in table.values() if not p.zombie and _SERVE.search(p.args)]
+    if not servers:
+        return []
+    panes = Tmux(run).panes() or []
+    names = []
+    for pane in panes:
+        for p in servers:
+            if not procs.is_descendant(table, p.pid, pane.pane_pid):
+                continue
+            started = procs.start_time(p.pid, run)
+            if started is not None and datetime.fromisoformat(started) < cutoff and pane.session not in names:
+                names.append(pane.session)
+    return names
+
+
+def restart_notice(names):
+    """The two lines naming the sessions to restart; none when there are none."""
+    if not names:
+        return []
+    return [RESTART_NOTICE[0].format(names="、".join(names)), RESTART_NOTICE[1]]
+
+
+def _codex_stale(cfg):
+    from . import codex_approval  # imports mcp_server, which imports this module
+    try:
+        text = (Path(cfg.codex.home) / "config.toml").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    return codex_approval.needs_fix(text, cfg.mcp_confirm)
+
+
+def after_update_notices(run, cfg=None, *, installed_at=installed_at):
+    """Lines to print after a successful `sampan update`: the sessions to restart, then (with a config whose Codex
+    is enabled) a hint when Codex's sampan tables are out of date."""
+    lines = restart_notice(running_0_16_servers(run, installed_at=installed_at))
+    if cfg is not None and cfg.codex.enabled and _codex_stale(cfg):
+        lines.append(CODEX_STALE)
+    return lines

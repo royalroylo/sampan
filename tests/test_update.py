@@ -517,5 +517,79 @@ class DoctorVersionTest(unittest.TestCase):
         self.assertTrue((cfg.state_dir / "update-check.json").exists())
 
 
+class RestartNoticeTest(unittest.TestCase):
+    """After `sampan update`: the sessions whose `sampan mcp serve` started before this install, and Codex's tables."""
+
+    INSTALLED_AT = datetime(2026, 11, 13, 9, 0, 0).timestamp()
+
+    def runner(self, starts, panes=None):
+        from tests.fakes import ps_line
+        procs = "\n".join([
+            ps_line(100, 1, "tmux", "tmux"),
+            ps_line(200, 100, "zsh", "-zsh"), ps_line(201, 200, "claude", "claude --resume x"),
+            ps_line(202, 201, "python3", "/u/.local/share/uv/tools/sampan/bin/python /u/.local/bin/sampan mcp serve"),
+            ps_line(300, 100, "zsh", "-zsh"), ps_line(301, 300, "claude", "claude"),
+            ps_line(302, 301, "sampan", "/u/.local/bin/sampan mcp serve"),
+            ps_line(400, 100, "zsh", "-zsh"), ps_line(401, 400, "codex", "codex"),
+            ps_line(402, 401, "sampan", "/u/.local/bin/sampan mcp serve"),
+            ps_line(500, 1, "claude", "claude"), ps_line(501, 500, "sampan", "sampan mcp serve"),  # not in tmux
+            ps_line(600, 100, "zsh", "-zsh"), ps_line(601, 600, "sampan", "sampan mcp install"),
+            ps_line(602, 600, "less", "less sampan mcp serve.txt"),
+        ])
+        r = FakeRunner(strict=True).on(["ps", "-A"], cp(out=procs + "\n"))
+        r.on(["ps", "-o", "lstart="], lambda a: cp(out=starts.get(int(a[-1]), "")))
+        from tests.fakes import pane_line
+        lines = panes if panes is not None else [pane_line("alpha-pm", "%1", 200, "claude", "/w"),
+                                                 pane_line("beta-dev", "%2", 300, "claude", "/w"),
+                                                 pane_line("gamma-cx", "%3", 400, "codex", "/w")]
+        r.on(["tmux", "-u", "list-panes"], cp(out="".join(line + "\n" for line in lines)))
+        return r
+
+    def test_update_lists_sessions_still_on_old_servers(self):
+        starts = {202: "Thu Nov 13 08:10:00 2026", 302: "Thu Nov 13 09:01:00 2026",  # beta-dev restarted after
+                  402: "Wed Nov 12 23:00:00 2026", 501: "Thu Nov 13 08:00:00 2026"}
+        r = self.runner(starts)
+        self.assertEqual(update.running_0_16_servers(r, installed_at=self.INSTALLED_AT), ["alpha-pm", "gamma-cx"])
+        asked = sorted(int(c["args"][-1]) for c in r.called(["ps", "-o", "lstart="]))
+        self.assertEqual(asked, [202, 302, 402])  # only servers in a tmux pane are looked at
+
+    def test_a_server_whose_start_cannot_be_read_is_not_listed(self):
+        r = self.runner({302: "Thu Nov 13 08:00:00 2026"})
+        self.assertEqual(update.running_0_16_servers(r, installed_at=self.INSTALLED_AT), ["beta-dev"])
+
+    def test_no_install_time_or_no_tmux_lists_nothing(self):
+        starts = {202: "Thu Nov 13 08:10:00 2026"}
+        self.assertEqual(update.running_0_16_servers(self.runner(starts), installed_at=None), [])
+        r = self.runner(starts)
+        r.on(["tmux", "-u", "list-panes"], cp(rc=1, err="error connecting to /tmp/x (Permission denied)"))
+        self.assertEqual(update.running_0_16_servers(r, installed_at=self.INSTALLED_AT), [])
+
+    def test_installed_at_defaults_to_the_installed_package(self):
+        import sampan
+        self.assertEqual(update.installed_at(), Path(sampan.__file__).stat().st_mtime)
+
+    def test_notice_text(self):
+        self.assertEqual(update.restart_notice(["alpha-pm", "beta-dev"]),
+                         ["這些 session 要重開才會用新版：alpha-pm、beta-dev（在 sampan 畫面按 S）。",
+                          "重開之前，它們用 sampan 送訊息會失敗；收件端會先用貼全文。"])
+        self.assertEqual(update.restart_notice([]), [])
+
+    def test_after_update_notices_name_sessions_and_stale_codex_tables(self):
+        from tests.helpers import make_env
+        cfg = make_env(Path(tempfile.mkdtemp()))
+        cfg.codex.home.mkdir(parents=True, exist_ok=True)
+        old = '[mcp_servers.sampan]\ncommand = "sampan"\n\n[mcp_servers.sampan.tools.send]\napproval_mode = "prompt"\n'
+        (cfg.codex.home / "config.toml").write_text(old)
+        r = self.runner({202: "Thu Nov 13 08:10:00 2026"})
+        lines = update.after_update_notices(r, cfg, installed_at=self.INSTALLED_AT)
+        self.assertEqual(lines, ["這些 session 要重開才會用新版：alpha-pm（在 sampan 畫面按 S）。",
+                                 "重開之前，它們用 sampan 送訊息會失敗；收件端會先用貼全文。",
+                                 "Codex 的 sampan 工具表要更新：跑 sampan mcp install 補上"])
+        from sampan import codex_approval
+        (cfg.codex.home / "config.toml").write_text(codex_approval.with_prompt(old))
+        self.assertEqual(update.after_update_notices(self.runner({}), cfg, installed_at=self.INSTALLED_AT), [])
+        self.assertEqual(update.after_update_notices(self.runner({}), None, installed_at=self.INSTALLED_AT), [])
+
+
 if __name__ == "__main__":
     unittest.main()

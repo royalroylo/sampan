@@ -125,6 +125,9 @@ def build_parser():
         mi = mc.add_parser(verb, help=help_)
         mi.add_argument("--dry-run", action="store_true")
         mi.add_argument("--profile", action="append", default=[], help="只處理這個 profile（可重複；Codex 用它的 profile 名稱）；預設全部")
+        if verb == "install":
+            mi.add_argument("--allow-inbox", action="store_true",
+                            help="不問，直接在各 Claude profile 的 settings.json 允許 inbox_take、reply（取信和回覆不用每次按允許）")
     sub.add_parser("status", help="登記表與實際狀態的差異、最後活動、context 用量")
     sv = sub.add_parser("save", help="記錄每個 tmux session 的 agent、profile 與對話 id")
     sv.add_argument("--quiet", action="store_true", help="沒有警告時不輸出（給 launchd 用）")
@@ -269,8 +272,36 @@ def _init(no_launchd, yes=False, hook=False):
         return 130
 
 
+ALLOW_QUESTION = "讓 agent 取信和回覆不用每次按允許？(y/N): "
+
+
+def _want_inbox_allow(flag, *, dry_run=False, isatty=None, ask=input):
+    """Whether `sampan mcp install` adds the inbox allow entries: --allow-inbox says yes without asking; otherwise
+    ask on a terminal (default no); no terminal, or a dry run, means no."""
+    if flag:
+        return True
+    tty = isatty() if isatty is not None else bool(sys.stdin and sys.stdin.isatty())
+    if dry_run or not tty:
+        return False
+    try:
+        answer = ask(ALLOW_QUESTION)
+    except EOFError:
+        answer = ""
+    return (answer or "").strip().lower() == "y"
+
+
+def _after_update_notices(run):
+    """update.after_update_notices with the user's config when it loads (the Codex check needs it)."""
+    from . import update
+    try:
+        cfg = load_config(paths.config_path(), state_dir=paths.state_dir())
+    except ConfigError:
+        cfg = None
+    return update.after_update_notices(run, cfg)
+
+
 def _update_cmd(yes, force, *, run=None, stream=None, which=None, ask=input, isatty=None, current=None,
-                state_dir=None):
+                state_dir=None, notices=None):
     """sampan update: always a fresh check (no cache), then update or, with force, reinstall. Needs no config file.
     Exits after do_update; no restart is exec'd. 0 ok / up to date / cancelled, 1 failed or latest unknown, 2 needs a terminal."""
     from . import update
@@ -325,6 +356,12 @@ def _update_cmd(yes, force, *, run=None, stream=None, which=None, ask=input, isa
             return 0
     ok = update.do_update(out, current=current, stream=stream, run=run, which=which, latest=pin,
                           force=not is_newer, reopen=False)
+    if ok:
+        try:
+            for line in (notices or _after_update_notices)(run):
+                out(line)
+        except Exception:  # noqa: BLE001  a notice must never turn a done update into a failure
+            pass
     return 0 if ok else 1
 
 
@@ -597,7 +634,9 @@ def _dispatch(cfg, args):
         from .doctor import current_sampan
         from .runner import run
         if args.action == "install":
-            return mcp_install.install(cfg, run, out, sampan_path=current_sampan(), dry_run=args.dry_run, profiles=args.profile)
+            allow = _want_inbox_allow(args.allow_inbox, dry_run=args.dry_run)
+            return mcp_install.install(cfg, run, out, sampan_path=current_sampan(), dry_run=args.dry_run, profiles=args.profile,
+                                       allow_inbox=allow)
         return mcp_install.uninstall(cfg, run, out, dry_run=args.dry_run, profiles=args.profile)
     if cmd == "mcp":
         from . import mcp_server, procs

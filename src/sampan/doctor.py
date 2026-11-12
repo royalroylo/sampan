@@ -439,9 +439,14 @@ def _codex_approval(cfg):
         tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
         return [Check("warn", f"Codex config.toml 讀不了：{e}")]
-    if not codex_approval.needs_fix(text, cfg.mcp_confirm):
+    wrong = codex_approval.mismatched(text, cfg.mcp_confirm)
+    if not wrong:
         return []
     if cfg.mcp_confirm:
+        missing = codex_approval.absent(text)
+        if set(wrong) <= set(missing) and any(t not in wrong for t in codex_approval.ACTING_TOOLS):
+            # set up by an older sampan: only the newer tools lack their tables (the others still ask)
+            return [Check("warn", f"Codex 的 sampan 工具表要更新（{'、'.join(wrong)}）：跑 sampan mcp install 補上")]
         return [Check("warn", "Codex 的 sampan 工具沒設成每次詢問（[mcp] confirm = true）：跑 sampan mcp install 補上")]
     return [Check("warn", "Codex 的 sampan 工具還設著每次詢問（[mcp] confirm = false）：跑 sampan mcp install 拿掉")]
 
@@ -451,7 +456,23 @@ def _mcp(cfg):
     st = mcp_install.status(cfg)
     here = [n for n, v in st.items() if v]
     codex = _codex_approval(cfg) if cfg.codex.enabled else []  # a broken config.toml reads as "not installed" in st
-    return (_mcp_where(st, here) if here else []) + codex
+    return (_mcp_where(st, here) if here else []) + _inbox_allow(cfg, st) + codex
+
+
+def _inbox_allow(cfg, st):
+    """Which Claude profiles with the sampan MCP let the agent take and answer mail without a prompt (an optional
+    consent, so never a warning); quiet when no Claude profile has the MCP."""
+    names = [p.name for p in cfg.profiles.values() if st.get(p.name)]
+    if not names:
+        return []
+    yes = [n for n in names if mcp_install.allow_status(cfg.profiles[n].config_dir)]
+    no = [n for n in names if n not in yes]
+    hint = "要免按允許：sampan mcp install --allow-inbox"
+    if not no:
+        return [Check("info", f"取信／回覆不用按允許：{'、'.join(yes)}")]
+    if not yes:
+        return [Check("info", f"取信／回覆要按允許：{'、'.join(no)}", hint)]
+    return [Check("info", f"取信／回覆不用按允許：{'、'.join(yes)}；要按：{'、'.join(no)}", hint)]
 
 
 def _mcp_where(st, here):

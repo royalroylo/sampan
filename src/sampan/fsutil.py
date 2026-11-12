@@ -98,3 +98,24 @@ def cache_by_stat(fn):
         return memo[key]
     wrapper.__wrapped__ = fn
     return wrapper
+
+
+def backup(path, raw, mode, now):
+    """Write the bytes raw next to path as <name>.bak-sampan-<time> with mode; never overwrites an earlier backup.
+    Returns the backup's path."""
+    base = f"{path.name}.bak-sampan-{now:%Y%m%d-%H%M%S}"
+    for n in range(100):
+        target = path.with_name(base if n == 0 else f"{base}-{n}")
+        try:
+            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, PRIVATE_FILE)
+        except FileExistsError:
+            continue
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(raw)
+            os.chmod(target, mode)
+        except BaseException:
+            target.unlink(missing_ok=True)
+            raise
+        return target
+    raise OSError(f"{path.parent} 裡的 sampan 備份檔太多")

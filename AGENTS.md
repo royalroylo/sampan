@@ -12,6 +12,7 @@ which conversation each session runs, so sessions can be resumed after an agent 
    - `~/.config/sampan/` and `~/.local/state/sampan/` (config, registry, history).
    - macOS: one launchd job that runs `sampan save` every 5 minutes. It only saves.
    - Claude's `settings.json` is untouched unless they run `sampan init --hook`.
+   - `sampan mcp install` adds `mcp__sampan__inbox_take` and `mcp__sampan__reply` to each Claude profile's `settings.json` `permissions.allow` only with consent (y at its question, or `--allow-inbox`), after a backup; `sampan mcp uninstall` removes only those two. Do not pass `--allow-inbox` on the user's behalf.
    - It types into tmux panes only when the user acts: open, resume, stop, move or send (`sampan send`, only into an empty prompt).
 
 ## Installing for a user

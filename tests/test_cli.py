@@ -834,7 +834,7 @@ class UpdateCmdTest(unittest.TestCase):
         self.msgs, self.streamed, self.asked = [], [], []
 
     def call(self, *, latest="0.6.1", current="0.6.0", after=None, yes=False, force=False, tty=True, answer="y",
-             cache=None):
+             cache=None, notices=lambda run: []):
         from sampan import update
         if cache is not None:
             update.write_cache(self.state, cache, update._now())
@@ -854,7 +854,7 @@ class UpdateCmdTest(unittest.TestCase):
             return answer
         with mock.patch("sampan.cli.out", self.msgs.append):
             return cli._update_cmd(yes, force, run=self.run, stream=stream, which=lambda n: "/x/uv", ask=ask,
-                                   isatty=lambda: tty, current=current, state_dir=self.state)
+                                   isatty=lambda: tty, current=current, state_dir=self.state, notices=notices)
 
     def test_newer_with_yes_updates(self):
         self.assertEqual(self.call(yes=True, cache="0.6.0"), 0)  # fresh cache says 0.6.0: ignored
@@ -872,6 +872,22 @@ class UpdateCmdTest(unittest.TestCase):
         self.assertEqual(self.call(answer="n"), 0)
         self.assertEqual(self.streamed, [])
         self.assertIn("已取消", self.msgs)
+
+    def test_after_a_successful_update_the_notices_are_printed(self):
+        seen = []
+
+        def notices(run):
+            seen.append(run)
+            return ["第一行", "第二行"]
+        self.assertEqual(self.call(yes=True, notices=notices), 0)
+        self.assertEqual(seen, [self.run])
+        self.assertEqual(self.msgs[-2:], ["第一行", "第二行"])
+        self.msgs, seen[:] = [], []
+        self.assertEqual(self.call(yes=True, after="0.6.0", notices=notices), 1)  # failed: nothing to restart for
+        self.assertEqual(seen, [])
+
+    def test_a_failing_notice_does_not_fail_the_update(self):
+        self.assertEqual(self.call(yes=True, notices=lambda run: 1 / 0), 0)
 
     def test_update_failure_is_rc_1(self):
         self.assertEqual(self.call(yes=True, after="0.6.0"), 1)

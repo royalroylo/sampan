@@ -46,6 +46,7 @@ sampan init
 - macOS：新增一個 launchd 排程，每 5 分鐘跑 `sampan save`，只存檔。
 - 升到 0.15 的第一次執行會把登記表與資料夾檔升到新格式，先備份到 `backup-0.15-<時間>/`（`sampan migrate --revert` 可寫回 0.14 的格式）。
 - 不會動 Claude 的 `settings.json`，除非你自己跑 `sampan init --hook`（或同意修復以前裝的 hook）。
+- 只有你同意時（`sampan mcp install` 問「讓 agent 取信和回覆不用每次按允許？」答 y，或加 `--allow-inbox`），才會在各 Claude profile 的 `settings.json` 的 `permissions.allow` 加上 `mcp__sampan__inbox_take`、`mcp__sampan__reply` 兩項；改之前先備份成 `settings.json.bak-sampan-<時間>`，其他設定不動；`sampan mcp uninstall` 只移除這兩項。
 - 只有你動手（開、接回、停止、搬目錄、`sampan send`／`send-batch` 傳訊息）時，才會對 tmux 的 pane 打字；傳訊息只送進空的輸入框。直接送（`--raw`）只貼一行 `/` 開頭的指令再按 Enter，不替它按其他鍵。
 - 只有你自己跑 `sampan mcp install` 時，才會用 `claude mcp add --scope user` 與 `codex mcp add` 把 sampan MCP 寫進各 profile 與 Codex 的設定（`sampan mcp uninstall` 移除）。這兩個指令也會改 Codex 的 `config.toml`：`[mcp] confirm` 開著（預設）時 `install` 加上讓 Codex 在 sampan 會動作的工具前先問你的設定，confirm 關著時的 `install` 與 `uninstall` 只拿掉設成 `prompt` 的那幾段（使用者自己改成 `approve` 的不動）；只動 sampan 自己的 `[mcp_servers.sampan.tools.*]` 幾段，每次改之前先備份成 `config.toml.bak-sampan-<時間>`。
 - 網路：畫面開著時，最多每 6 小時到 GitHub 查一次 sampan 的版本 tag；還不知道有新版時按 `U` 會當下重新查，`sampan update` 每次都重新查。

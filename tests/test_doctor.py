@@ -419,6 +419,41 @@ class McpDoctorTest(DoctorTest):
         self.assertEqual(self.approval_titles(),
                          ["Codex 的 sampan 工具還設著每次詢問（[mcp] confirm = false）：跑 sampan mcp install 拿掉"])
 
+    def test_doctor_names_the_codex_tables_a_0_16_config_lacks(self):
+        old = '[mcp_servers.sampan]\ncommand = "sampan"\n' + "".join(
+            f'\n[mcp_servers.sampan.tools.{t}]\napproval_mode = "prompt"\n'
+            for t in ("send", "send_batch", "new_session", "cancel_dispatch", "folder_move"))
+        self.codex_toml(old)
+        hits = [c for c in self.checks() if "Codex 的 sampan 工具" in c.title]
+        self.assertEqual([c.title for c in hits],
+                         ["Codex 的 sampan 工具表要更新（resend、inbox_take、reply）：跑 sampan mcp install 補上"])
+        self.assertEqual(hits[0].level, "warn")
+        self.codex_toml(codex_approval.with_prompt(old).replace(  # every table there, the user chose "always allow"
+            '[mcp_servers.sampan.tools.send]\napproval_mode = "prompt"', '[mcp_servers.sampan.tools.send]\napproval_mode = "approve"'))
+        self.assertEqual(self.approval_titles(),
+                         ["Codex 的 sampan 工具沒設成每次詢問（[mcp] confirm = true）：跑 sampan mcp install 補上"])
+
+    def allow_titles(self):
+        return [(c.level, c.title, c.detail) for c in self.checks() if "取信" in c.title]
+
+    def test_doctor_lists_the_inbox_allow_per_profile(self):
+        self.assertEqual(self.allow_titles(), [])  # sampan MCP nowhere: nothing to say
+        for name in ("alice", "work"):
+            p = self.cfg.profiles[name]
+            p.claude_json.parent.mkdir(parents=True, exist_ok=True)
+            p.claude_json.write_text('{"mcpServers": {"sampan": {}}}')
+        for name in ("alice", "work"):
+            Path(self.cfg.profiles[name].config_dir).mkdir(parents=True, exist_ok=True)
+        self.assertEqual(self.allow_titles(), [("info", "取信／回覆要按允許：alice、work",
+                                                 "要免按允許：sampan mcp install --allow-inbox")])
+        (Path(self.cfg.profiles["alice"].config_dir) / "settings.json").write_text(
+            '{"permissions": {"allow": ["mcp__sampan__inbox_take", "mcp__sampan__reply"]}}')
+        self.assertEqual(self.allow_titles(), [("info", "取信／回覆不用按允許：alice；要按：work",
+                                                 "要免按允許：sampan mcp install --allow-inbox")])
+        (Path(self.cfg.profiles["work"].config_dir) / "settings.json").write_text(
+            '{"permissions": {"allow": ["mcp__sampan__inbox_take", "mcp__sampan__reply"]}}')
+        self.assertEqual(self.allow_titles(), [("info", "取信／回覆不用按允許：alice、work", "")])
+
     def test_doctor_says_when_codex_config_is_broken(self):
         self.codex_toml('[mcp_servers.sampan]\ncommand = "sampan"\n[x')
         hits = [c for c in self.checks() if c.title.startswith("Codex config.toml 讀不了：")]

@@ -50,7 +50,7 @@ def modes(text):
 class EditTest(unittest.TestCase):
     def test_with_prompt_appends_three_sections(self):
         out = ca.with_prompt(INSTALLED)
-        self.assertEqual(modes(out), {t: "prompt" for t in ca.ACTING_TOOLS})
+        self.assertEqual(modes(out), ca.WANTED)
         self.assertTrue(out.startswith(INSTALLED))
 
     def test_edit_keeps_other_tables_byte_for_byte(self):
@@ -60,14 +60,14 @@ class EditTest(unittest.TestCase):
         self.assertTrue(out.startswith(OTHERS_BEFORE + OTHERS_AFTER))
         data = tomllib.loads(out)
         self.assertEqual(data["mcp_servers"]["other"]["tools"]["thing"], {"approval_mode": "approve"})
-        self.assertEqual(modes(out), {t: "prompt" for t in ca.ACTING_TOOLS})
+        self.assertEqual(modes(out), ca.WANTED)
 
     def test_edit_file_without_trailing_newline(self):
         text = INSTALLED + 'args = ["mcp", "serve"]'
         out = ca.with_prompt(text)
         self.assertTrue(out.startswith(text + "\n\n[mcp_servers.sampan.tools."))
         self.assertEqual(tomllib.loads(out)["mcp_servers"]["sampan"]["args"], ["mcp", "serve"])
-        self.assertEqual(modes(out), {t: "prompt" for t in ca.ACTING_TOOLS})
+        self.assertEqual(modes(out), ca.WANTED)
         self.assertEqual(ca.strip_sections(out), text + "\n")
         last = INSTALLED + '\n[mcp_servers.sampan.tools.send]\napproval_mode = "approve"'  # sampan's table is last, no \n
         self.assertEqual(ca.strip_sections(last), INSTALLED)
@@ -104,6 +104,69 @@ class EditTest(unittest.TestCase):
         self.assertTrue(all(ca.tool_prompts(p, t) for t in ca.ACTING_TOOLS))
 
 
+OLD_016 = INSTALLED + "".join(f'\n[mcp_servers.sampan.tools.{t}]\napproval_mode = "prompt"\n'
+                              for t in ("send", "send_batch", "new_session", "cancel_dispatch", "folder_move"))
+
+
+class InboxToolsTest(unittest.TestCase):
+    """inbox_take and reply: sampan writes approval_mode = "approve" for them, with confirm only."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.path = self.dir / "config.toml"
+
+    def test_codex_tables_approve_inbox_tools(self):
+        self.assertEqual(ca.INBOX_TOOLS, ("inbox_take", "reply"))
+        self.assertEqual({t: ca.WANTED[t] for t in ca.INBOX_TOOLS}, {"inbox_take": "approve", "reply": "approve"})
+        self.assertEqual({t: ca.WANTED[t] for t in ca.ACTING_TOOLS}, {t: "prompt" for t in ca.ACTING_TOOLS})
+        self.path.write_text(INSTALLED)
+        self.assertTrue(ca.apply(self.path, True, now=NOW).startswith("已更新"))
+        self.assertEqual(modes(self.path.read_text()), ca.WANTED)
+        self.assertEqual(ca.apply(self.path, True, now=NOW), "不用改")
+
+    def test_inbox_table_set_to_prompt_is_put_back_to_approve(self):
+        text = ca.with_prompt(INSTALLED).replace(
+            '[mcp_servers.sampan.tools.reply]\napproval_mode = "approve"', '[mcp_servers.sampan.tools.reply]\napproval_mode = "prompt"')
+        self.assertEqual(ca.mismatched(text, True), ["reply"])
+        self.path.write_text(text)
+        ca.apply(self.path, True, now=NOW)
+        self.assertEqual(modes(self.path.read_text()), ca.WANTED)
+
+    def test_0_16_config_lists_only_the_new_tools(self):
+        self.assertEqual(ca.mismatched(OLD_016, True), ["resend", "inbox_take", "reply"])
+        self.assertEqual(ca.absent(OLD_016), ["resend", "inbox_take", "reply"])
+        self.assertEqual(ca.absent(ca.with_prompt(OLD_016)), [])
+        self.assertEqual(ca.absent("[x"), [])
+        self.assertTrue(ca.needs_fix(OLD_016, True))
+        self.assertTrue(all(ca.tool_prompts(self.write(OLD_016), t) for t in ca.ACTING_TOOLS if t != "resend"))
+        self.assertFalse(ca.tool_prompts(self.path, "resend"))  # asked for nowhere: the server refuses it
+        self.assertTrue(ca.apply(self.path, True, now=NOW).startswith("已更新"))
+        self.assertEqual(modes(self.path.read_text()), ca.WANTED)
+
+    def write(self, text):
+        self.path.write_text(text)
+        return self.path
+
+    def test_confirm_off_leaves_the_inbox_tables(self):
+        approved = INSTALLED + "".join(f'\n{ca.section(t)}\napproval_mode = "approve"\n' for t in ca.INBOX_TOOLS)
+        self.assertEqual(ca.mismatched(approved, False), [])
+        self.write(approved)
+        self.assertEqual(ca.apply(self.path, False, now=NOW), "不用改")
+        self.write(ca.with_prompt(INSTALLED))  # removing the prompt tables keeps the approve ones
+        self.assertTrue(ca.apply(self.path, False, now=NOW).startswith("已更新"))
+        self.assertEqual(self.path.read_text(), approved)
+
+    def test_uninstall_removes_the_inbox_tables_too(self):
+        self.write(ca.with_prompt(INSTALLED))
+        self.assertTrue(ca.apply(self.path, False, now=NOW, uninstall=True).startswith("已更新"))
+        self.assertEqual(self.path.read_text(), INSTALLED)
+        self.assertEqual(ca.apply(self.path, False, now=NOW, uninstall=True), "不用改")
+        mine = INSTALLED + f'\n{ca.section("reply")}\napproval_mode = "prompt"\n'  # not sampan's value: the user's
+        self.write(mine)
+        self.assertEqual(ca.apply(self.path, False, now=NOW, uninstall=True), "不用改")
+        self.assertEqual(self.path.read_text(), mine)
+
+
 class ApplyTest(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp())
@@ -116,7 +179,7 @@ class ApplyTest(unittest.TestCase):
         self.path.write_text(ORIGINAL)
         os.chmod(self.path, 0o640)
         self.assertEqual(ca.apply(self.path, True, now=NOW), f"已更新（備份：{BACKUP}）")
-        self.assertEqual(modes(self.path.read_text()), {t: "prompt" for t in ca.ACTING_TOOLS})
+        self.assertEqual(modes(self.path.read_text()), ca.WANTED)
         self.assertEqual(self.backups(), [BACKUP])
         self.assertEqual((self.dir / BACKUP).read_text(), ORIGINAL)
         self.assertEqual(stat.S_IMODE(self.path.stat().st_mode), 0o640)
@@ -124,7 +187,7 @@ class ApplyTest(unittest.TestCase):
 
     def test_uninstall_strips_the_tables(self):
         self.path.write_text(ca.with_prompt(INSTALLED))
-        self.assertTrue(ca.apply(self.path, False, now=NOW).startswith("已更新"))
+        self.assertTrue(ca.apply(self.path, False, now=NOW, uninstall=True).startswith("已更新"))
         self.assertEqual(self.path.read_text(), INSTALLED)
 
     def test_broken_codex_config_is_not_written(self):
@@ -176,10 +239,10 @@ class ApplyTest(unittest.TestCase):
         kept = (OTHERS_BEFORE + OTHERS_AFTER).replace("\n", "\r\n").encode()
         self.assertTrue(new.startswith(kept), new)
         tail = new[len(kept):]
-        self.assertEqual(tail, "".join(f'\r\n{ca.section(t)}\r\napproval_mode = "prompt"\r\n'
-                                       for t in ca.ACTING_TOOLS).encode())
-        self.assertEqual(modes(new.decode()), {t: "prompt" for t in ca.ACTING_TOOLS})
-        self.assertTrue(ca.apply(self.path, False, now=NOW).startswith("已更新"))
+        self.assertEqual(tail, "".join(f'\r\n{ca.section(t)}\r\napproval_mode = "{m}"\r\n'
+                                       for t, m in ca.WANTED.items()).encode())
+        self.assertEqual(modes(new.decode()), ca.WANTED)
+        self.assertTrue(ca.apply(self.path, False, now=NOW, uninstall=True).startswith("已更新"))
         self.assertEqual(self.path.read_bytes(), kept)
 
     def test_unrecognised_sampan_tables_get_their_own_message(self):
