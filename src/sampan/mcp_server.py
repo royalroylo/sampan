@@ -27,6 +27,7 @@ from .status import status_rows
 from .update import current_version
 
 PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26")  # the first is answered when the client asks for another one
+BEAT_S = 30  # the heartbeat is written at most this often (it must stay well under heartbeat.HEARTBEAT_S)
 WATCH_S = 3
 WAIT_MAX_S = 60  # a tool call may not block longer than this (MCP clients time tool calls out themselves)
 INTERACTION_META = "anthropic/requiresUserInteraction"
@@ -229,6 +230,7 @@ class Server:
         self.start_of = start_of  # pid -> start time (procs.start_time); None writes no heartbeat
         self.nonce = secrets.token_hex(8)  # this instance's key in the inboxes table
         self.started = None
+        self._last_beat = None  # self.clock() of the last attempt
         self.mine = set()  # dispatch ids created by this server (an unregistered caller's have no from_name to match)
         self._write_lock = threading.Lock()
         self._threads = []
@@ -635,6 +637,9 @@ class Server:
         caller = self.caller
         if self.start_of is None or not caller.id or not caller.agent:
             return
+        if self._last_beat is not None and self.clock() - self._last_beat < BEAT_S:
+            return
+        self._last_beat = self.clock()
         try:
             if self.started is None:
                 self.started = self.start_of(os.getpid())
@@ -645,9 +650,9 @@ class Server:
             with dispatch.transaction(self.cfg.state_dir, wait_s=2) as items:
                 heartbeat.beat(items.conn, session_id=caller.id, agent=caller.agent, conversation=row.sid,
                                nonce=self.nonce, pid=os.getpid(), started=self.started, version=current_version(),
-                               now=self.now_fn())
-        except (dispatch.DispatchError, OSError, RegistryError) as e:
-            _log(f"心跳寫不進去：{e}")
+                               now=self.now_fn(), alive=os.kill, start_of=self.start_of)
+        except Exception as e:  # noqa: BLE001  (a heartbeat must never stop the server or its watcher)
+            _log(f"心跳寫不進去：{e!r}")
 
     def forget(self):
         if self.start_of is None or not self.caller.id:
@@ -655,8 +660,8 @@ class Server:
         try:
             with dispatch.transaction(self.cfg.state_dir, wait_s=2) as items:
                 heartbeat.forget(items.conn, self.nonce)
-        except (dispatch.DispatchError, OSError) as e:
-            _log(f"心跳刪不掉：{e}")
+        except Exception as e:  # noqa: BLE001
+            _log(f"心跳刪不掉：{e!r}")
 
     def watch_once(self):
         """Advance this caller's pending dispatches (and the ones this server created) once."""

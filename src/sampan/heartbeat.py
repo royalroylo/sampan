@@ -14,12 +14,33 @@ def _iso(now):
     return now.isoformat(timespec="seconds")
 
 
-def beat(conn, *, session_id, agent, conversation, nonce, pid, started, version, now):
+def _fresh(row, now):
+    try:
+        age = (now - parse_iso(row["at"])).total_seconds()
+    except (TypeError, ValueError):
+        return False
+    return 0 <= age <= HEARTBEAT_S
+
+
+def _live(row, now, alive, start_of):
+    """Whether a row is a running instance: fresh, and (when alive / start_of are given) its pid exists with the
+    recorded start time."""
+    if not _fresh(row, now):
+        return False
+    if alive is not None and not _pid_alive(alive, row["pid"]):
+        return False
+    return start_of is None or (bool(row["started"]) and start_of(row["pid"]) == row["started"])
+
+
+def beat(conn, *, session_id, agent, conversation, nonce, pid, started, version, now, alive=None, start_of=None):
     """Record that instance `nonce` serves session_id. An instance that started before another live row of the same
-    session does not overwrite it (returns False); rows of older instances of the session are replaced."""
-    for other, other_started in conn.execute(
-            "SELECT nonce, started FROM inboxes WHERE session_id = ? AND nonce != ?", (session_id, nonce)).fetchall():
-        if (other_started or "") > (started or ""):
+    session does not overwrite it (returns False); rows of older instances, and rows that are expired, whose pid is
+    dead or whose start time does not match (an instance that died without forget), are deleted."""
+    others = conn.execute("SELECT * FROM inboxes WHERE session_id = ? AND nonce != ?", (session_id, nonce)).fetchall()
+    for other in others:
+        if not _live(other, now, alive, start_of):
+            conn.execute("DELETE FROM inboxes WHERE nonce = ?", (other["nonce"],))
+        elif (other["started"] or "") > (started or ""):
             return False
     conn.execute("DELETE FROM inboxes WHERE session_id = ? AND nonce != ?", (session_id, nonce))
     conn.execute("INSERT OR REPLACE INTO inboxes (session_id, nonce, agent, conversation, pid, started, version, at) "
@@ -57,15 +78,8 @@ def valid(conn, *, session_id, conversation, now, alive=os.kill, start_of=procs.
     except sqlite3.Error:
         return None
     for row in rows:
-        try:
-            age = (now - parse_iso(row["at"])).total_seconds()
-        except (TypeError, ValueError):
+        if row["conversation"] != conversation or not _version_ok(row["version"]):
             continue
-        if age < 0 or age > HEARTBEAT_S or row["conversation"] != conversation or not _version_ok(row["version"]):
-            continue
-        if not _pid_alive(alive, row["pid"]):
-            continue
-        if not row["started"] or start_of(row["pid"]) != row["started"]:
-            continue
-        return row
+        if _live(row, now, alive, start_of) and row["started"]:
+            return row
     return None

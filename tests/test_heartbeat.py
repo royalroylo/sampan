@@ -1,5 +1,6 @@
 """Heartbeats in dispatches.db: validity rules, no overwrite by an older instance, forget on shutdown."""
 import io
+import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -86,6 +87,21 @@ class WriteTest(HeartbeatBase):
         self.assertEqual([r["nonce"] for r in rows], ["n2"])
 
 
+    def test_dead_or_expired_newer_row_does_not_block_a_live_older_instance(self):
+        self.beat("crashed", started=LATER, pid=999)
+        alive = lambda pid, sig: None if pid == 4242 else (_ for _ in ()).throw(ProcessLookupError())  # noqa: E731
+        self.assertTrue(self.beat("old", started=START, alive=alive, start_of=lambda pid: START))
+        self.assertEqual([r["nonce"] for r in self.conn.execute("SELECT nonce FROM inboxes")], ["old"])
+        self.beat("expired", session_id="S3", started=LATER, now=NOW - timedelta(seconds=500))
+        self.assertTrue(self.beat("mine", session_id="S3", started=START))
+        self.assertEqual([r["nonce"] for r in self.conn.execute("SELECT nonce FROM inboxes WHERE session_id = 'S3'")],
+                         ["mine"])
+
+    def test_live_newer_row_still_blocks(self):
+        self.beat("new", started=LATER)
+        self.assertFalse(self.beat("old", started=START, alive=lambda pid, sig: None, start_of=lambda pid: LATER))
+
+
 class StartTimeTest(unittest.TestCase):
     def test_parses_ps_lstart(self):
         run = FakeRunner(strict=True)
@@ -108,10 +124,10 @@ class ServerHeartbeatTest(unittest.TestCase):
         self.cfg = make_env(Path(tmp.name))
         self.rows = [status_row("alpha-pm", sid="conv-1", pane="%1", id="S1")]
 
-    def server(self, caller=CALLER, start_of=lambda pid: START):
+    def server(self, caller=CALLER, start_of=lambda pid: START, clock=lambda: 0.0):
         return mcp_server.Server(self.cfg, FakeRunner(strict=True), io.StringIO(), io.StringIO(), caller=caller,
                                  status_fn=lambda cfg, run, snapshot_fn=None: self.rows, now_fn=lambda: NOW,
-                                 start_of=start_of)
+                                 start_of=start_of, clock=clock)
 
     def inboxes(self):
         conn = store.connect(self.cfg.state_dir, create=True)
@@ -144,6 +160,37 @@ class ServerHeartbeatTest(unittest.TestCase):
         self.rows = [status_row("alpha-pm", sid="", pane="%1", id="S1")]
         self.server().watch_once()
         self.assertEqual(self.inboxes(), [])
+
+    def test_beats_are_throttled_to_one_per_30s(self):
+        t = [0.0]
+        s = self.server(clock=lambda: t[0])
+        writes = []
+        orig = heartbeat.beat
+        self.addCleanup(setattr, heartbeat, "beat", orig)
+        heartbeat.beat = lambda *a, **k: writes.append(1) or orig(*a, **k)
+        for t[0] in (0.0, 3.0, 29.9, 30.0, 33.0, 60.0):
+            s.watch_once()
+        self.assertEqual(len(writes), 3)
+
+    def test_sqlite_error_inside_the_transaction_keeps_the_server_running(self):
+        s = self.server()
+        orig = heartbeat.beat
+
+        def boom(*a, **k):
+            raise sqlite3.OperationalError("no such table: inboxes")
+        heartbeat.beat = boom
+        self.addCleanup(setattr, heartbeat, "beat", orig)
+        self.assertEqual(s.serve(None), 0)  # the startup beat fails; serve still runs and shuts down
+        s.watch_once()  # and so does a watcher pass
+        orig_forget = heartbeat.forget
+        heartbeat.forget = boom
+        self.addCleanup(setattr, heartbeat, "forget", orig_forget)
+        s.forget()
+
+    def test_a_failing_status_read_does_not_break_the_server(self):
+        s = self.server()
+        s.status_fn = lambda *a, **k: (_ for _ in ()).throw(ValueError("bad"))
+        s.watch_once()
 
     def test_a_failing_write_does_not_break_the_server(self):
         s = self.server()
