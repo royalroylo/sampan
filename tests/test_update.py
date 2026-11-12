@@ -355,9 +355,15 @@ class UiUpdateTest(unittest.TestCase):
         self.assertEqual(self.execs, [("sampan", ["sampan", "ui"])])  # still restarts after them
 
     def test_u_failure_or_cancel_prints_no_notices(self):
-        boom = lambda: 1 / 0  # noqa: E731
-        self.ui([("update", []), ("quit", [])], ["y"], updater=FakeUpdater(), result=False, notices_fn=boom)
-        self.ui([("update", []), ("quit", [])], ["n"], updater=FakeUpdater(), notices_fn=boom)
+        calls = []
+
+        def notices():
+            calls.append(1)
+            return ["不該出現"]
+        self.ui([("update", []), ("quit", [])], ["y"], updater=FakeUpdater(), result=False, notices_fn=notices)
+        self.ui([("update", []), ("quit", [])], ["n"], updater=FakeUpdater(), notices_fn=notices)
+        self.assertEqual(calls, [])
+        self.assertNotIn("不該出現", self.msgs)
 
     def test_u_a_failing_notice_still_restarts(self):
         self.ui([("update", [])], ["y"], updater=FakeUpdater(), notices_fn=lambda: 1 / 0)

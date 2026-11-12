@@ -340,6 +340,27 @@ class AllowInboxTest(unittest.TestCase):
         self.assertEqual(oct(self.path.stat().st_mode & 0o777), oct(0o640))
         self.assertTrue(mcp_install.allow_status(self.dir))
 
+    def test_settings_stay_utf8_under_a_big5_locale(self):
+        """A child Python whose locale encoding really is not UTF-8 (skipped where no such locale exists)."""
+        import subprocess
+        import sys
+        before = {"statusLine": {"type": "command", "command": "echo 狀態 café"}}
+        self.path.write_bytes(json.dumps(before, ensure_ascii=False).encode("utf-8"))
+        src = Path(mcp_install.__file__).resolve().parents[1]
+        code = ("import locale, sys; from datetime import datetime; from sampan import mcp_install as m; "
+                "print(locale.getpreferredencoding(False)); "
+                f"m.allow_inbox({str(self.dir)!r}, now=datetime(2026, 11, 13))")
+        env = {"PATH": "/usr/bin:/bin", "LC_ALL": "zh_TW.Big5", "LANG": "zh_TW.Big5", "PYTHONUTF8": "0",
+               "PYTHONCOERCECLOCALE": "0", "PYTHONPATH": str(src), "HOME": str(self.dir)}
+        r = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, encoding="utf-8",
+                           errors="replace")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        if "big5" not in r.stdout.lower() and "950" not in r.stdout:
+            self.skipTest(f"no Big5 locale here ({r.stdout.strip()})")
+        raw = self.path.read_bytes()
+        self.assertIn("echo 狀態 café".encode("utf-8"), raw)
+        self.assertEqual(json.loads(raw.decode("utf-8"))["permissions"]["allow"], ALLOW)
+
     def test_allow_inbox_adds_only_the_missing_one(self):
         self.path.write_text(json.dumps({"permissions": {"allow": ["mcp__sampan__reply", "Read"]}}))
         mcp_install.allow_inbox(self.dir, now=NOW)
@@ -448,6 +469,21 @@ class InstallAllowTest(Base):
         before = list(self.out)
         mcp_install.uninstall(self.cfg, self.runner(), self.o)
         self.assertFalse(any("settings.json" in s for s in self.out[len(before):]))  # nothing to remove: quiet
+
+    def test_uninstall_removes_the_allow_even_when_claude_mcp_remove_fails(self):
+        self.settings("alice").parent.mkdir(parents=True, exist_ok=True)
+        self.settings("alice").write_text(json.dumps({"permissions": {"allow": ["Read", *ALLOW]}}))
+        r = self.runner(installed={"default"})
+        r.on(["claude", "mcp", "remove"], cp(1, "", "boom"))
+        self.assertEqual(mcp_install.uninstall(self.cfg, r, self.o), 1)
+        self.assertTrue(any(s.startswith("❌ alice：claude mcp remove") for s in self.out), self.out)
+        self.assertEqual(json.loads(self.settings("alice").read_text()), {"permissions": {"allow": ["Read"]}})
+
+    def test_install_failure_adds_no_allow(self):
+        r = self.runner()
+        r.on(["claude", "mcp", "add"], cp(1, "", "boom"))
+        self.assertEqual(mcp_install.install(self.cfg, r, self.o, sampan_path=SP, allow_inbox=True), 1)
+        self.assertFalse(self.settings("alice").exists())
 
     def test_uninstall_dry_run_keeps_the_allow(self):
         self.settings("alice").parent.mkdir(parents=True, exist_ok=True)

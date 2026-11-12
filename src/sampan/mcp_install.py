@@ -95,7 +95,7 @@ def _write_settings(path, raw, data, now):
     if raw is not None:
         target = fsutil.write_target(path)
         backup = fsutil.backup(target, raw, stat.S_IMODE(target.stat().st_mode), now).name
-    fsutil.atomic_write(path, text)
+    fsutil.atomic_write(path, text, encoding="utf-8")  # not the locale's: ensure_ascii=False keeps the user's text
     return backup
 
 
@@ -212,7 +212,7 @@ def _apply(cfg, run, out, build, *, want_installed, dry_run, done, skip, codex_c
                 out(f"❌ {name}：{shlex.join(argv)} 失敗：{redact((r.stderr or r.stdout).strip())[:300]}")
         if agent == "codex" and not codex_first and ok:
             rc |= _codex_approval(cfg, out, codex_confirm, dry_run, adding=need)
-        if agent == "claude" and inbox and ok:
+        if agent == "claude" and inbox and (ok or inbox == "remove"):  # uninstall removes them whatever claude said
             rc |= _inbox_allow(out, name, profile, dry_run, adding=inbox == "add")
     return rc
 
