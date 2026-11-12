@@ -290,6 +290,14 @@ def _want_inbox_allow(flag, *, dry_run=False, isatty=None, ask=input):
     return (answer or "").strip().lower() == "y"
 
 
+def _shows_upgrade_notice(args):
+    """Whether this command may print the one-time notice after an upgrade: not `mcp serve` (stdout is the protocol)
+    and not `save --quiet` (launchd)."""
+    if args.cmd == "mcp" and args.action == "serve":
+        return False
+    return not (args.cmd == "save" and args.quiet)
+
+
 def _after_update_notices(run):
     """update.after_update_notices with the user's config when it loads (the Codex check needs it)."""
     from . import update
@@ -517,6 +525,9 @@ def _dispatch(cfg, args):
         rc = migrate.ensure(cfg, _err if serve else out, touches_dispatches=touches)
         if rc:
             return rc
+        if _shows_upgrade_notice(args):
+            from .update import show_pending_notices
+            show_pending_notices(cfg, run, out)
     if cmd == "ui":
         from .detach_key import ensure as detach_fn
         from .ui import cmd_ui, curses_ui

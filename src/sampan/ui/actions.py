@@ -409,10 +409,10 @@ def _resume_line(cfg, name):
 REINSTALL_HINT = "；要重新安裝請用 sampan update --force"
 
 
-def _update(out, ask, updater, update_fn):
+def _update(out, ask, updater, update_fn, notices=None):
     """U: update after confirmation; returns whether sampan must be restarted (only after a real update).
     Nothing newer known: re-check now (the cache may predate a fresh tag), and if still nothing newer only say so;
-    reinstalling is `sampan update --force`."""
+    reinstalling is `sampan update --force`. notices(): the lines to print after a real update (as `sampan update`)."""
     if updater is None:
         out("目前已是最新版")
         return False
@@ -425,7 +425,14 @@ def _update(out, ask, updater, update_fn):
         if (_ask(ask, f"更新到 v{latest}？(y/N): ") or "").lower() != "y":
             out("已取消")
             return False
-        return update_fn(out, current=updater.current, latest=latest)
+        ok = update_fn(out, current=updater.current, latest=latest)
+        if ok and notices is not None:
+            try:
+                for line in notices():
+                    out(line)
+            except Exception:  # noqa: BLE001  a notice must never stop the restart into the new version
+                pass
+        return ok
     pin = updater.latest
     if pin is None:
         out(f"查不到最新版（離線或連不到 GitHub）{REINSTALL_HINT}")
@@ -451,7 +458,7 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
            adopt_fn=adopt_mod.cmd_adopt, adopt_picker_fn=None, save_fn=save_mod.cmd_save, loop=False,
            attach_fn=None, choose_dir_fn=None, updater=None, update_fn=update_mod.do_update, argv=(), prompt_fn=None, plugins_fn=None,
            profiles_fn=None, set_cfg_fn=None, dispatches_fn=None, choose_folder_fn=None, restart_fn=None,
-           detach_fn=None, typeahead_fn=None):
+           detach_fn=None, typeahead_fn=None, notices_fn=None):
     """typeahead_fn() drops the keys typed while an action ran (curses: CursesScreen.drop_typeahead).
     dispatches_fn(ask=…) is the dispatch list for D (curses: CursesScreen.dispatches); when None, the dispatches are printed.
     picker_fn(rows, current) returns (action, list of names); when None, use the plain-text menu where a number is typed.
@@ -460,7 +467,8 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
     With loop and picker_fn (curses), an action that raises is shown as "❌ <action> 失敗：<error>" and the list stays (Ctrl-C still interrupts).
     choose_dir_fn(start, allow_missing=…) is the directory chooser screen for n / m (returns a path or None); when None, the directory is typed.
     U (updater = update.Checker) updates after confirmation, re-checking first when no newer version is known and offering a reinstall when there is none;
-    on success sampan is re-executed with the same arguments (argv).
+    on success sampan is re-executed with the same arguments (argv), after notices_fn()'s lines (default
+    update.after_update_notices: sessions to restart, Codex tables out of date).
     prompt_fn(name, agent, prompt): used when R reattach or m move waits for the agent (n and Enter-reattach of one do not wait, they go straight into tmux) and the agent stops at a startup menu (in curses it is
     CursesScreen.prompt_choice, with --plain prompts.plain_prompt); when "go in and handle it myself" is chosen, that session is attached when the action ends.
     None = do not look at prompts (as before).
@@ -607,6 +615,8 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
             return dispatches_fn(ask=ask), None
         return send_mod.cmd_dispatches(cfg, out, all_=False), None
 
+    notices = notices_fn or (lambda: update_mod.after_update_notices(run, cfg))
+
     # one handler per action: (names, rows, kw) -> (rc, session to attach to, or None);
     # an unknown action raises directly and is never written to the registry as a state
     handlers = {
@@ -615,7 +625,7 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
         "stop": lambda names, rows, kw: (_stop(cfg, run, out, ask, names, own_pane, stop_fn, confirmed=False), None),
         "stop!": lambda names, rows, kw: (_stop(cfg, run, out, ask, names, own_pane, stop_fn, confirmed=True), None),
         "save": lambda names, rows, kw: (save_fn(cfg, run, out), None),
-        "update": lambda names, rows, kw: (0, UPDATED) if _update(out, ask, updater, update_fn) else (1, None),
+        "update": lambda names, rows, kw: (0, UPDATED) if _update(out, ask, updater, update_fn, notices) else (1, None),
         "restore": _restore,
         "adopt": _adopt,
         "rename": lambda names, rows, kw: (_rename(cfg, run, out, ask, names[0], rename_fn), None),

@@ -262,6 +262,9 @@ def _ensure_017(cfg, out, *, now, touches_dispatches):
         return 2 if touches_dispatches else 0
     for line in lines:
         out(line)
+    if lines:  # migrated just now: this is the first 0.17 run after an update made by 0.16's code
+        from .update import mark_upgrade_notice
+        mark_upgrade_notice(cfg.state_dir)
     return 0
 
 

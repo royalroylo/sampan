@@ -11,8 +11,10 @@ injectable run/stream, so tests never touch the network or a real installation.
 U in the ui and sampan update re-check now (force, skipping the cache); with force, do_update reinstalls without trying upgrade first.
 The scheduled sampan save does not check.
 
-After `sampan update`: after_update_notices names the sessions whose `sampan mcp serve` started before this install
-(they still run the old code until restarted) and says when Codex's sampan tables need `sampan mcp install`.
+After `sampan update` (and U in the ui): after_update_notices names the sessions whose `sampan mcp serve` started
+before this install (they still run the old code until restarted) and says when Codex's sampan tables need
+`sampan mcp install`. An update from 0.16 ran 0.16's code, which knows nothing of this, so the 0.17 migration leaves
+NOTICE_MARKER in the state dir and the next command that may print shows the notices once (show_pending_notices).
 """
 import json
 import os
@@ -327,3 +329,30 @@ def after_update_notices(run, cfg=None, *, installed_at=installed_at):
     if cfg is not None and cfg.codex.enabled and _codex_stale(cfg):
         lines.append(CODEX_STALE)
     return lines
+
+
+NOTICE_MARKER = "upgrade-notice"
+
+
+def mark_upgrade_notice(state_dir):
+    """Leave the marker that makes the next command show the notices (after a migration: the update ran old code).
+    Best-effort: a marker that cannot be written only means no notice."""
+    try:
+        atomic_write(Path(state_dir) / NOTICE_MARKER, "", mode=PRIVATE_FILE)
+    except OSError:
+        pass
+
+
+def show_pending_notices(cfg, run, out, *, installed_at=installed_at):
+    """When the marker is there, print after_update_notices (nothing when there is nothing to say) and remove it.
+    A lookup that fails keeps the marker for the next command and prints nothing."""
+    marker = Path(cfg.state_dir) / NOTICE_MARKER
+    if not marker.exists():
+        return
+    try:
+        lines = after_update_notices(run, cfg, installed_at=installed_at)
+    except Exception:  # noqa: BLE001  a notice must never break the command it rides on
+        return
+    for line in lines:
+        out(line)
+    marker.unlink(missing_ok=True)

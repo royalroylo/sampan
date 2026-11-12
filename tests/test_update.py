@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 from sampan import update
 from sampan.update import Checker, do_update, latest_tag, newer, reinstall_cmd
@@ -322,7 +323,7 @@ class UiUpdateTest(unittest.TestCase):
         self.cfg = make_env(Path(tempfile.mkdtemp()))
         self.msgs, self.execs, self.updates, self.update_kws = [], [], [], []
 
-    def ui(self, actions, answers=(), *, updater=None, result=True, picker=True, argv=("ui",)):
+    def ui(self, actions, answers=(), *, updater=None, result=True, picker=True, argv=("ui",), **kw):
         from sampan.ui import cmd_ui
         actions, answers = iter(actions), iter(answers)
 
@@ -334,13 +335,39 @@ class UiUpdateTest(unittest.TestCase):
         return cmd_ui(self.cfg, FakeRunner(), self.msgs.append, lambda _p: next(answers),
                       rows_fn=lambda c, r: [row("a")], picker_fn=(lambda rows, cur: next(actions)) if picker else None,
                       exec_fn=lambda *a: self.execs.append(a), updater=updater, update_fn=update_fn, argv=list(argv),
-                      loop=True)
+                      loop=True, **kw)
 
     def test_u_confirms_updates_and_restarts_with_same_args(self):
         rc = self.ui([("update", [])], ["y"], updater=FakeUpdater())
         self.assertEqual(rc, 0)
         self.assertEqual(self.updates, ["0.4.5"])
         self.assertEqual(self.execs, [("sampan", ["sampan", "ui"])])
+
+    def test_u_prints_the_update_notices_after_a_successful_update(self):
+        calls = []
+
+        def notices():
+            calls.append(1)
+            return ["這些 session 要重開才會用新版：alpha-pm（在 sampan 畫面按 S）。", "第二行"]
+        self.ui([("update", [])], ["y"], updater=FakeUpdater(), notices_fn=notices)
+        self.assertEqual(calls, [1])
+        self.assertEqual(self.msgs[-2:], ["這些 session 要重開才會用新版：alpha-pm（在 sampan 畫面按 S）。", "第二行"])
+        self.assertEqual(self.execs, [("sampan", ["sampan", "ui"])])  # still restarts after them
+
+    def test_u_failure_or_cancel_prints_no_notices(self):
+        boom = lambda: 1 / 0  # noqa: E731
+        self.ui([("update", []), ("quit", [])], ["y"], updater=FakeUpdater(), result=False, notices_fn=boom)
+        self.ui([("update", []), ("quit", [])], ["n"], updater=FakeUpdater(), notices_fn=boom)
+
+    def test_u_a_failing_notice_still_restarts(self):
+        self.ui([("update", [])], ["y"], updater=FakeUpdater(), notices_fn=lambda: 1 / 0)
+        self.assertEqual(self.execs, [("sampan", ["sampan", "ui"])])
+
+    def test_u_default_notices_are_after_update_notices(self):
+        with mock.patch("sampan.update.after_update_notices", return_value=["提示"]) as an:
+            self.ui([("update", [])], ["y"], updater=FakeUpdater())
+        self.assertEqual(an.call_args.args[1], self.cfg)
+        self.assertIn("提示", self.msgs)
 
     def test_u_failure_stays_in_list(self):
         rc = self.ui([("update", []), ("quit", [])], ["y"], updater=FakeUpdater(), result=False)
@@ -589,6 +616,77 @@ class RestartNoticeTest(unittest.TestCase):
         (cfg.codex.home / "config.toml").write_text(codex_approval.with_prompt(old))
         self.assertEqual(update.after_update_notices(self.runner({}), cfg, installed_at=self.INSTALLED_AT), [])
         self.assertEqual(update.after_update_notices(self.runner({}), None, installed_at=self.INSTALLED_AT), [])
+
+
+class PendingNoticeTest(unittest.TestCase):
+    """The first 0.17 command after an upgrade from 0.16 (whose `sampan update` ran the old code) shows the notices
+    once: the migration leaves NOTICE_MARKER, show_pending_notices prints and removes it."""
+
+    INSTALLED_AT = RestartNoticeTest.INSTALLED_AT
+    runner = RestartNoticeTest.runner
+
+    def setUp(self):
+        from tests.helpers import make_env
+        self.cfg = make_env(Path(tempfile.mkdtemp()))
+        self.cfg.state_dir.mkdir(parents=True, exist_ok=True)
+        self.marker = self.cfg.state_dir / update.NOTICE_MARKER
+        self.msgs = []
+
+    def show(self, run):
+        update.show_pending_notices(self.cfg, run, self.msgs.append, installed_at=self.INSTALLED_AT)
+
+    def test_mark_then_show_once(self):
+        update.mark_upgrade_notice(self.cfg.state_dir)
+        self.assertTrue(self.marker.exists())
+        self.show(self.runner({202: "Thu Nov 13 08:10:00 2026"}))
+        self.assertEqual(self.msgs, ["這些 session 要重開才會用新版：alpha-pm（在 sampan 畫面按 S）。",
+                                     "重開之前，它們用 sampan 送訊息會失敗；收件端會先用貼全文。"])
+        self.assertFalse(self.marker.exists())
+        self.show(FakeRunner(strict=True))  # no marker: nothing is looked at
+        self.assertEqual(len(self.msgs), 2)
+
+    def test_codex_tables_out_of_date_are_said_too(self):
+        self.cfg.codex.home.mkdir(parents=True, exist_ok=True)
+        (self.cfg.codex.home / "config.toml").write_text(
+            '[mcp_servers.sampan]\ncommand = "sampan"\n\n[mcp_servers.sampan.tools.send]\napproval_mode = "prompt"\n')
+        update.mark_upgrade_notice(self.cfg.state_dir)
+        self.show(self.runner({}))
+        self.assertEqual(self.msgs, ["Codex 的 sampan 工具表要更新：跑 sampan mcp install 補上"])
+
+    def test_nothing_to_say_is_quiet_and_clears_the_marker(self):
+        update.mark_upgrade_notice(self.cfg.state_dir)
+        self.show(self.runner({}))
+        self.assertEqual(self.msgs, [])
+        self.assertFalse(self.marker.exists())
+
+    def test_a_failure_is_quiet_and_keeps_the_marker(self):
+        update.mark_upgrade_notice(self.cfg.state_dir)
+        r = FakeRunner(strict=True)  # ps has no rule: the lookup raises
+        self.show(r)
+        self.assertEqual(self.msgs, [])
+        self.assertTrue(self.marker.exists())  # tried again next time
+
+    def test_which_commands_show_it(self):
+        from sampan import cli
+        parse = cli.build_parser().parse_args
+        for argv, shown in ((["status"], True), (["save"], True), (["save", "--quiet"], False),
+                            (["mcp", "serve"], False), (["mcp", "install"], True), (["dispatches"], True)):
+            with self.subTest(argv=argv):
+                self.assertEqual(cli._shows_upgrade_notice(parse(argv)), shown)
+
+    def test_cli_shows_it_after_migrate(self):
+        from sampan import cli
+        with mock.patch("sampan.cli.load_config", return_value=self.cfg), \
+                mock.patch("sampan.migrate.ensure", return_value=0), \
+                mock.patch("sampan.update.show_pending_notices") as show, \
+                mock.patch("sampan.status.cmd_status", return_value=0):
+            cli.main(["status"])
+        self.assertEqual(show.call_args.args[0], self.cfg)
+        with mock.patch("sampan.cli.load_config", return_value=self.cfg), \
+                mock.patch("sampan.migrate.ensure", return_value=2), \
+                mock.patch("sampan.update.show_pending_notices") as show:
+            cli.main(["status"])
+        show.assert_not_called()  # the migration failed: the command stops before
 
 
 if __name__ == "__main__":

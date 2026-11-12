@@ -248,6 +248,24 @@ class UpgradeTest(Base):
         self.assertEqual((self.state / "dispatches.json").read_bytes(), self.original)
         self.assertEqual([p.name for p in self.state.iterdir() if p.name.startswith("dispatches.db")], [])
 
+    def test_upgrade_leaves_the_upgrade_notice_marker_once(self):
+        from sampan import update
+        marker = self.state / update.NOTICE_MARKER
+        self.assertFalse(marker.exists())
+        self.ensure()
+        self.assertTrue(marker.exists())  # the next command that may print shows the notices (update.show_pending_notices)
+        marker.unlink()
+        self.ensure(LATER)
+        self.assertFalse(marker.exists())  # nothing migrated: no new marker
+
+    def test_failed_upgrade_leaves_no_marker(self):
+        from sampan import update
+        doc = json.loads(self.original)
+        doc["dispatches"].append({"id": "bad1"})
+        (self.state / "dispatches.json").write_text(json.dumps(doc))
+        self.ensure()
+        self.assertFalse((self.state / update.NOTICE_MARKER).exists())
+
     def test_failure_blocks_only_dispatch_commands(self):
         doc = json.loads(self.original)
         doc["dispatches"].append({"id": "bad1"})  # 0.16 could not read it either
