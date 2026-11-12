@@ -145,12 +145,12 @@ class ProtocolTest(Base):
                 self.assertEqual(r["capabilities"], {"tools": {}})
                 self.assertEqual(r["serverInfo"]["name"], "sampan")
 
-    def test_tools_list_has_seven_tools_with_schemas(self):
+    def test_tools_list_has_nine_tools_with_schemas(self):
         c = self.serve(Client([init(1), json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n",
                                req(2, "tools/list")]))
         tools = {t["name"]: t for t in c.response(2)["result"]["tools"]}
         self.assertEqual(set(tools), {"list_sessions", "send", "new_session", "dispatch_result", "cancel_dispatch",
-                                      "folder_move", "send_batch"})
+                                      "folder_move", "send_batch", "inbox_take", "reply"})
         for t in tools.values():
             self.assertEqual(t["inputSchema"]["type"], "object")
             self.assertTrue(t["description"])
@@ -227,6 +227,49 @@ class ToolsListTest(Base):
                 self.assertEqual(set(tools), mcp_server.TOOL_NAMES)
                 marked = '"_meta": {"anthropic/requiresUserInteraction": true}' in json.dumps(c.response(2))
                 self.assertIs(marked, confirm)
+
+
+class InboxToolTest(Base):
+    ID_A, ID_B = "aaaaaaaa-0000-4000-8000-000000000001", "bbbbbbbb-0000-4000-8000-000000000002"
+
+    def setUp(self):
+        super().setUp()
+        self.rows["a"] = status_row("a", sid="sa", pane="%1", id=self.ID_A)
+        self.rows["b"] = status_row("b", sid="sb", pane="%2", id=self.ID_B)
+
+    def test_tools_need_no_approval(self):
+        self.assertNotIn("inbox_take", mcp_server.ACTING_TOOLS)
+        self.assertNotIn("reply", mcp_server.ACTING_TOOLS)
+        tools = {t["name"]: t for t in mcp_server.tools_list(True)}
+        for name in ("inbox_take", "reply"):
+            self.assertNotIn("_meta", tools[name])
+            self.assertIn("最終回覆", tools[name]["description"])
+            self.assertIn("做完再回", tools[name]["description"])
+        self.assertEqual(tools["reply"]["inputSchema"]["required"], ["dispatch_id", "text"])
+        self.assertIn("receipt", tools["reply"]["inputSchema"]["properties"])
+        self.assertEqual(tools["inbox_take"]["inputSchema"]["properties"], {})
+        d = send.submit(self.cfg, FakeRunner(strict=True), Caller("a", "alice", "claude", "%1", id=self.ID_A), "b",
+                        "please do", notify=False, now=NOW, status_fn=self.status_fn)
+        b = Caller("b", "alice", "claude", "%2", id=self.ID_B)
+        # confirm on and a client that is not known to ask: an acting tool would be refused, these two are not
+        c = self.serve(Client([init(1, client="other-client"), call(2, "inbox_take", {})]), confirm=True, caller=b)
+        self.assertFalse(c.response(2)["result"]["isError"])
+        self.assertTrue(tool_text(c.response(2)).startswith("收據 d"))  # plain text, not a JSON string
+        self.assertIn("please do", tool_text(c.response(2)))
+        c = self.serve(Client([init(1, client="other-client"), call(3, "reply", {"dispatch_id": d.id, "text": "done it"}),
+                               call(4, "reply", {"dispatch_id": d.id, "text": " "}),
+                               call(5, "send", {"session": "a", "message": "x"})]), confirm=True, caller=b)
+        self.assertEqual(tool_text(c.response(3)), f"已記下，派工 {d.id} 的回覆（第 1 段）")
+        self.assertTrue(c.response(4)["result"]["isError"])
+        self.assertEqual(tool_text(c.response(4)), "回覆是空的")
+        self.assertEqual(tool_text(c.response(5)), mcp_server.NOT_ASKING)
+
+    def test_reply_to_mail_of_another_session_is_an_error(self):
+        d = send.submit(self.cfg, FakeRunner(strict=True), Caller("a", "alice", "claude", "%1", id=self.ID_A), "b",
+                        "please do", notify=False, now=NOW, status_fn=self.status_fn)
+        c = self.serve(Client([init(1), call(2, "reply", {"dispatch_id": d.id, "text": "mine?"})]))
+        self.assertTrue(c.response(2)["result"]["isError"])
+        self.assertEqual(tool_text(c.response(2)), "這則不是寄給你的")
 
 
 class ParentAgentTest(Base):

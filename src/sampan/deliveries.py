@@ -102,11 +102,12 @@ def parts(conn, message):
     return out
 
 
-def latest_part(conn, message):
+def latest_part(conn, message, delivery=None):
     """The part that stands for message's reply: the newest at that is not late, the larger id on the same at. None
-    when it has none."""
-    r = conn.execute("SELECT id, how, text, at, late FROM reply_parts WHERE message=? AND late=0 ORDER BY at DESC, id DESC "
-                     "LIMIT 1", (message,)).fetchone()
+    when it has none. delivery: only the parts given within that delivery."""
+    within = "" if delivery is None else " AND reply IN (SELECT id FROM replies WHERE delivery=?)"
+    r = conn.execute("SELECT id, how, text, at, late FROM reply_parts WHERE message=? AND late=0" + within +
+                     " ORDER BY at DESC, id DESC LIMIT 1", (message,) if delivery is None else (message, delivery)).fetchone()
     if r is None:
         return None
     return {"id": r["id"], "how": r["how"], "text": r["text"], "at": r["at"], "late": bool(r["late"])}

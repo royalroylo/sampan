@@ -1,0 +1,6 @@
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_take", "name": "mcp__sampan__inbox_take", "input": {}}]}}
+{"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_take", "content": [{"type": "text", "text": "收據 {receipt}；2 則，依時間順序；前後衝突時以後面的為準\n\n【1／2｜派工 {first}｜來自 a（alice）｜10/26 20:00】\nfirst job\n\n【2／2｜派工 {second}｜來自 a（alice）｜10/26 20:00】\nsecond job"}]}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "先處理第一則。"}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_reply", "name": "mcp__sampan__reply", "input": {"dispatch_id": "{first}", "text": "answer one", "receipt": "{receipt}"}}]}}
+{"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_reply", "content": [{"type": "text", "text": "已記下，派工 {first} 的回覆（第 1 段）"}]}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "第二則也做完了：answer two"}]}}

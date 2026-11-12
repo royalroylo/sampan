@@ -18,7 +18,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import dispatch, folders, heartbeat, ids, machine, send, session_run
+from . import dispatch, folders, heartbeat, ids, inbox, machine, send, session_run
 from .procs import list_procs
 from .prompts import SKIP
 from .registry import RegistryError, load_rows
@@ -108,6 +108,18 @@ TOOLS = [
     {"name": "cancel_dispatch",
      "description": "取消一筆還沒送出的（排隊中）派工；已送出、等回覆的，改成不再等它的回覆（訊息已在對方那裡，收不回）。",
      "inputSchema": {"type": "object", "properties": {"id": _str("派工編號")}, "required": ["id"]}},
+    {"name": "inbox_take",
+     "description": "收到 sampan 門鈴時呼叫：一次取走寄給你的所有新訊息（純文字，依時間順序，附收據編號），也列出之前取走、"
+                    "還沒回的。全部看完再動手；每則做完用 reply 回一次，那是最終回覆，做完再回，不要用來報進度。",
+     "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "reply",
+     "description": "回覆一則用 inbox_take 取走的訊息。這是給寄件者的最終回覆：做完再回，每則一次，不要用來報進度"
+                    "（這一輪結束時，還沒回的會拿你最後一段回答補上）。",
+     "inputSchema": {"type": "object", "properties": {
+         "dispatch_id": _str("派工編號（inbox_take 列出的）"),
+         "text": _str("回覆內容（最多 100,000 字）"),
+         "receipt": _str("選填：inbox_take 給的收據編號")},
+         "required": ["dispatch_id", "text"]}},
 ]
 TOOL_NAMES = {t["name"] for t in TOOLS}
 
@@ -166,7 +178,9 @@ def parent_is_agent(run, ppid):
 
 
 def _ok(obj):
-    return {"content": [{"type": "text", "text": json.dumps(obj, ensure_ascii=False)}], "isError": False}
+    """A tool result: a str as plain text (inbox_take, reply), anything else as JSON."""
+    text = obj if isinstance(obj, str) else json.dumps(obj, ensure_ascii=False)
+    return {"content": [{"type": "text", "text": text}], "isError": False}
 
 
 def _err(text):
@@ -628,6 +642,27 @@ class Server:
         if r.reason == send.REASON_STOP_WATCHING:
             out["reason"] = r.reason
         return out
+
+    def tool_inbox_take(self, args):
+        caller = self._refresh_caller()
+        try:
+            return inbox.take(self.cfg, caller, rows=self._rows(), now=self.now_fn())
+        except (inbox.InboxError, dispatch.DispatchError) as e:
+            raise ToolError(str(e)) from e
+
+    def tool_reply(self, args):
+        did, text, receipt = args.get("dispatch_id"), args.get("text"), args.get("receipt")
+        if not isinstance(did, str) or not did:
+            raise ToolError("參數 dispatch_id 要是非空字串")
+        if not isinstance(text, str):
+            raise ToolError("參數 text 要是字串")
+        if receipt is not None and not isinstance(receipt, str):
+            raise ToolError("參數 receipt 要是字串")
+        caller = self._refresh_caller()
+        try:
+            return inbox.reply(self.cfg, caller, did, text, receipt or None, now=self.now_fn())
+        except (inbox.InboxError, dispatch.DispatchError) as e:
+            raise ToolError(str(e)) from e
 
     # --- watcher ---------------------------------------------------------------------------------------------
 

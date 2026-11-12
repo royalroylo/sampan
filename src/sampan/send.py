@@ -12,7 +12,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
 from . import actionlog, deliver, deliveries, dispatch, doorbell, procs
-from .claude_state import Reply, command_reply, find_transcript
+from .claude_state import Reply, TurnInfo, after_marker, command_reply, find_transcript
 from .claude_state import reply_to as claude_reply_to
 from .clock import fmt_local, parse_iso
 from .codex_state import _is_codex, find_rollout
@@ -54,6 +54,9 @@ REASON_MENU_SEEN = deliver.REASON_BLOCKED  # one look at a menu after a direct s
 READY = ("idle", "shell")  # Claude statuses where the prompt takes input ("shell": the turn is over, a background
 # shell task still runs; Claude 2.1.287 reports it until the task ends, so waiting for "idle" would hold messages)
 BUSY = {"busy": "對方正在忙", "working": "對方正在忙", "waiting": "對方在等使用者回應"}
+REASON_TAKEN = "已取走，對方還在做"  # inbox_take took it (status taken)
+REASON_PARTIAL = "已有回覆段落，對方還在做"  # it has a reply part, the turn goes on (status partial)
+REASON_UNANSWERED = "已取走，這一輪結束卻沒有回覆"  # status unanswered
 REASON_BEHIND = "排在前面的派工還沒送完"  # a direct send waits for those before it, and the ones after it for it
 WAITING = {*BUSY.values(), REASON_NOT_RUNNING, REASON_NO_THREAD, REASON_BEHIND}  # queued reasons that clear by themselves: no limit
 RUNNING_VERSION = current_version()  # read once at import: the code this process runs, even after an upgrade on disk
@@ -703,6 +706,9 @@ def _check(cfg, d, row, now, run=None, items=None):
     other messages of that delivery finish with it: a reply is split by 〔回覆 id〕 markers into one part each."""
     conn = getattr(items, "conn", None)
     delivery = deliveries.delivery_of(conn, d.id) if conn is not None else None
+    if delivery is not None and delivery["kind"] == "inbox":
+        _check_inbox(cfg, d, row, now, items, delivery)
+        return
     _judge(cfg, d, row, now, run, delivery["text"] if delivery is not None and delivery["text"] else d.text)
     if delivery is not None:
         _settle(conn, items, d, delivery, now)
@@ -733,6 +739,70 @@ def _settle(conn, items, d, delivery, now):
             _finish(x, d.state, now, d.reason)
     if active:
         deliveries.end_delivery(conn, delivery["id"], now)
+
+
+def receipt_marker(delivery_id):
+    """How an inbox delivery shows up in the target's transcript: the first line of the inbox_take result."""
+    return f"收據 {delivery_id}"
+
+
+def _check_inbox(cfg, d, row, now, items, delivery):
+    """Judge every message of an inbox delivery (taken through inbox_take) at once. Once the target is idle and the
+    turn after the take (the receipt in its transcript, read from the delivery's cursor) has ended, the delivery
+    ends: a message with a reply part is replied, one without gets the turn's last text (fill), or is unanswered when
+    there is none. A new conversation, or a take that is not in the transcript, ends it with no fill."""
+    conn = items.conn
+    if delivery["state"] != deliveries.ACTIVE:  # it ended without d (should not happen): d alone
+        _end_inbox(cfg, conn, delivery, [d], now, "")
+        return
+    ids = deliveries.members(conn, delivery["id"])
+    waiting = [x for x in items if x.id in ids and x.state == "sent"]
+    if row is None or row.state in GONE or row.agent != d.to_agent:
+        why = REASON_AGENT_CHANGED if row is not None and row.state not in GONE else REASON_STOPPED
+        _end_inbox(cfg, conn, delivery, waiting, now, "", status="failed", reason=why)
+        return
+    if row.state != State.RUNNING:  # tmux unreadable, a trust prompt…: wait, do not judge
+        return
+    if not row.sid:  # not read this time (a /clear gives a new id, never none): wait
+        return
+    if delivery["conversation"] and row.sid != delivery["conversation"]:  # /clear: that turn is gone
+        _end_inbox(cfg, conn, delivery, waiting, now, "")
+        return
+    for x in waiting:
+        x.reason = REASON_PARTIAL if x.status == "partial" else REASON_TAKEN
+    if row.agent_status not in READY:
+        return
+    path = find_transcript(cfg.profiles.values(), row.sid, prefer=row.profile)
+    info = after_marker(path, receipt_marker(delivery["id"]), start=delivery["cursor"]) if path else TurnInfo(False)
+    if info.found and not info.ended:
+        return
+    created = parse_iso(delivery["created"])
+    if not info.found and created is not None and (now - created).total_seconds() < NOT_SEEN_GRACE_S:
+        return  # the take's result may not be written yet
+    _end_inbox(cfg, conn, delivery, waiting, now, info.last_text if info.found else "")
+
+
+def _end_inbox(cfg, conn, delivery, waiting, now, last_text, *, status="unanswered", reason=REASON_UNANSWERED):
+    """End an inbox delivery: each waiting message with a part of it is replied (its latest part), one without gets
+    last_text as a fill part, or (no text) fails with status / reason."""
+    done, missed = [], []
+    for x in waiting:
+        part = deliveries.latest_part(conn, x.id, delivery=delivery["id"])
+        if part is None and last_text:
+            deliveries.add_part(conn, delivery_id=delivery["id"], message=x.id, text=last_text, how="fill", now=now)
+            part = {"text": last_text}
+        if part is not None:
+            _finish(x, "done", now, reply=part["text"])
+            x.status = "replied"
+            done.append(x.id)
+        else:
+            _finish(x, "failed", now, reason)
+            x.status = status
+            missed.append(x.id)
+    deliveries.end_delivery(conn, delivery["id"], now)
+    said = [f"已回覆 {'、'.join(done)}"] if done else []
+    said += [f"{reason} {'、'.join(missed)}"] if missed else []
+    _log(cfg, "send", f"送達 {delivery['id']}：這一輪結束" + (f"（{'；'.join(said)}）" if said else ""))
 
 
 def _judge(cfg, d, row, now, run, text):
@@ -859,8 +929,10 @@ def notify_caller(cfg, run, d, sleep, *, rows=None, snapshot_fn=None, status_fn=
         owers += [x for x in items if x is not d and x.from_kind == "session" and _same_caller(x, d)
                   and _owes_notice(x, items)]
     members = [m for x in owers for m in (_group(items, x.batch) if x.batch is not None else [x])]
-    if len(owers) == 1:
-        text = notice_text(d) if d.batch is None else batch_notice_text(d.batch, members, d.batch_skipped)
+    if len(owers) == 1 and d.batch is not None:
+        text = batch_notice_text(d.batch, members, d.batch_skipped)
+    elif len(owers) == 1 and _inbox_note(getattr(items, "conn", None), d) is None:
+        text = notice_text(d)
     else:
         text = merged_notice_text(sorted(owers, key=_position(items)), items)
     what = "、".join(f"批次 {x.batch}" if x.batch is not None else f"派工 {x.id}" for x in owers)
@@ -881,10 +953,16 @@ def merged_notice_text(owers, items):
     with its reason, then each batch, then where to read them, e.g.
     〔sampan：b 已回覆派工 a1b2、c3d4；c 已回覆派工 e5f6；給 d 的派工 0a0b 失敗：對方 session 已停止；
     批次 b1234 完成：2 完成、0 失敗、1 跳過；用 sampan 工具 dispatch_result 看內容〕 (without the line break).
+    Messages answered through the inbox are told by their delivery: 給 b 的派工 a1b2、c3d4（一起送出）已回覆, 給 b 的派工
+    a1b2：已取走，這一輪結束卻沒有回覆, or 給 b 的派工 a1b2 又多了一段回覆 (a part after the turn ended).
     owers: plain dispatches (done or failed) and batches' first items, in creation order."""
-    replied, failed, batches = {}, [], []
+    replied, failed, batches, taken = {}, [], [], {}
+    conn = getattr(items, "conn", None)
     for x in owers:
-        if x.batch is not None:
+        note = _inbox_note(conn, x) if x.batch is None else None
+        if note is not None:
+            taken.setdefault((x.to_name, *note), []).append(x.id)
+        elif x.batch is not None:
             group = _group(items, x.batch)
             done = sum(g.state == "done" for g in group)
             bad = sum(g.state in ("failed", "cancelled") for g in group)
@@ -893,8 +971,33 @@ def merged_notice_text(owers, items):
             failed.append(f"給 {x.to_name} 的派工 {x.id} 失敗：{' '.join((x.reason or '').split())}")
         else:
             replied.setdefault(x.to_name, []).append(x.id)
-    parts = [f"{to} 已回覆派工 {'、'.join(ids)}" for to, ids in replied.items()] + failed + batches
+    parts = [f"{to} 已回覆派工 {'、'.join(ids)}" for to, ids in replied.items()]
+    for (to, _delivery, how), ids in taken.items():
+        together = "（一起送出）" if len(ids) > 1 and how != "more" else ""
+        gap = together or (" " if how == "replied" else "")
+        parts.append(f"給 {to} 的派工 {'、'.join(ids)}{gap}{INBOX_NOTES[how]}")
+    parts += failed + batches
     return "〔sampan：" + "；".join(parts) + "；用 sampan 工具 dispatch_result 看內容〕"
+
+
+INBOX_NOTES = {"replied": "已回覆", "unanswered": f"：{REASON_UNANSWERED}", "more": " 又多了一段回覆"}
+
+
+def _inbox_note(conn, x):
+    """For a finished message taken through inbox_take: (its delivery id, "replied" / "unanswered" / "more": a reply
+    part came after its turn ended); None for any other message."""
+    status = x.status or dispatch.STATUS_OF_STATE.get(x.state)
+    if conn is None or status not in ("replied", "unanswered"):
+        return None
+    delivery = deliveries.delivery_of(conn, x.id)
+    if delivery is None or delivery["kind"] != "inbox":
+        return None
+    if status == "replied":
+        latest, end = deliveries.latest_part(conn, x.id, delivery=delivery["id"]), parse_iso(x.done_at)
+        at = parse_iso(latest["at"]) if latest is not None else None
+        if at is not None and end is not None and at > end:
+            return delivery["id"], "more"
+    return delivery["id"], status
 
 
 def _notify(cfg, run, d, owers, members, text, what, sleep, rows, snapshot_fn, status_fn, save):
