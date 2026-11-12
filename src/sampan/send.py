@@ -47,7 +47,7 @@ REASON_SKIPPED = "對方沒回這則就換了下一則"
 REASON_NO_TEXT_YET = "對方閒著，但還沒看到回覆文字"
 REASON_NO_TEXT = "對方這輪結束了，但沒有回覆文字"
 REASON_ABORTED = "對方這輪被中斷了"
-REASON_STOP_WATCHING = "不再等回覆"  # what a 0.16 cancel of a sent dispatch wrote (and actions.log still says)
+REASON_STOP_WATCHING = "不再等回覆"  # what a 0.16 cancel of a sent dispatch wrote (still recognised on old rows)
 REASON_CANCELLED = "寄件者已取消"  # a cancelled message that had reached the target (taken, partial, pasted)
 REASON_RAN = "指令已執行（沒有文字回覆）"  # a direct send done without reply text: its reply
 REASON_NEW_THREAD = "對方換成新對話（{sid8}）"  # a direct send (/clear…) after which the target's conversation id changed
@@ -1144,7 +1144,7 @@ def cancel(cfg, did, *, now=None, wait_s=None):
             result = replace(d)
     except (dispatch.DispatchError, OSError) as e:
         return str(e)
-    what = "取消" if was == "queued" else REASON_STOP_WATCHING
+    what = "取消" if was == "queued" else REASON_CANCELLED
     _log(cfg, "cancel", f"派工 {did}：{what}（給 {result.to_name}）")
     return result
 

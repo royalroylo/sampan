@@ -29,7 +29,7 @@ from dataclasses import fields, replace
 from datetime import datetime
 from pathlib import Path
 
-from . import dispatch, store
+from . import deliveries, dispatch, store
 from .clock import now_iso
 from .dispatch import Dispatch, DispatchError
 from .fsutil import PRIVATE_DIR, PRIVATE_FILE, private_dir, try_chmod
@@ -44,6 +44,7 @@ SIDE_FILES = ("-wal", "-shm", "-journal")  # what sqlite keeps beside a db file
 STUB = {"version": dispatch.DB_VERSION_STUB, "dispatches": [], "moved_to": store.DB_FILE}
 TRIES = 3  # dispatches.json changed while migrating: start again from the backup at most this many times
 REVERTED_NOTE = dispatch.REVERTED_NOTE
+REASON_IN_FLIGHT = "降版時還在處理，請重送"  # a sent message 0.16 could never judge (a group paste, an inbox take)
 REINSTALL_016 = "uv tool install --reinstall git+https://github.com/royalroylo/sampan@v0.16.1"
 # the fields of 0.16's Dispatch: a key of an old record that is not one of these is kept in `extra`, as 0.16 did
 OLD_FIELDS = tuple(f.name for f in fields(Dispatch) if f.name not in ("status", "in_reply_to", "thread", "extra"))
@@ -400,15 +401,29 @@ def dry_run(cfg):
 
 # --- back to 0.16
 
+def _in_flight(conn, did):
+    """Whether sent message did waits in an active delivery 0.16 cannot judge: an inbox take (0.16 never pasted it)
+    or a group paste (0.16 looks for the message's own text, and the target got the group's)."""
+    for r in conn.execute("SELECT d.id, d.kind FROM deliveries d JOIN delivery_messages dm ON dm.delivery=d.id "
+                          "WHERE dm.message=? AND dm.archived=0 AND d.state=?", (did, deliveries.ACTIVE)):
+        if r["kind"] == "inbox" or conn.execute("SELECT COUNT(*) FROM delivery_messages WHERE delivery=?",
+                                                (r["id"],)).fetchone()[0] > 1:
+            return True
+    return False
+
+
 def _export(state_dir):
     """The version-2 records of every message whose text is kept: its fields as 0.16 knows them, the time of its last
-    delivery and its newest reply part (else the reply the message row holds)."""
+    delivery and its newest reply part (else the reply the message row holds). A sent message in an active inbox
+    take or group paste is written as failed (REASON_IN_FLIGHT): 0.16 would wait for a text it can never find."""
     conn = store.connect(state_dir)
     try:
         items, _ids = dispatch._read(conn)
         records = []
         for d in items:
             rec = {name: getattr(d, name) for name in OLD_FIELDS}
+            if d.state == "sent" and _in_flight(conn, d.id):
+                rec.update(state="failed", reason=REASON_IN_FLIGHT, done_at=now_iso())
             part = conn.execute("SELECT text FROM reply_parts WHERE message=? AND late=0 ORDER BY at DESC, id DESC "
                                 "LIMIT 1", (d.id,)).fetchone()
             if part is not None and part["text"] is not None:

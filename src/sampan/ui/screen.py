@@ -1125,11 +1125,12 @@ def run_outside(scr, args, env=None):
 
 
 def curses_ui(cfg, run, out, *, current_session=None, own_pane=None, exec_fn=os.execvp, wrapper=None,
-              run_outside=run_outside, updater=None, watcher=None, dispatch_watcher=None, **kw):
+              run_outside=run_outside, updater=None, watcher=None, dispatch_watcher=None, notices_fn=None, **kw):
     """The whole ui opens curses only once. When attaching to a session outside tmux, curses steps out temporarily and tmux attach runs in the foreground; after detach we are back at the list.
     On exit the last contents of the message area are printed on the terminal.
     watcher (daemon_watch.DaemonWatcher, None = none) and dispatch_watcher (dispatch_watch.DispatchWatcher) are started here
-    and stopped when the ui ends, however it ends."""
+    and stopped when the ui ends, however it ends. notices_fn(out): prints the one-time upgrade notices into the
+    message area once the screen is up (update.show_pending_notices)."""
     pending, box = [], {}
 
     def ui_rows(c, r):  # the daemon is read by the watcher thread only: never on the ui thread
@@ -1159,6 +1160,11 @@ def curses_ui(cfg, run, out, *, current_session=None, own_pane=None, exec_fn=os.
                         title="選搬過去的目錄" if allow_missing else "選工作目錄", **dir_context(screen.cfg)))
         opts.update(rows_fn=rows_fn)
         opts.update(kw)
+        if notices_fn is not None:
+            try:
+                notices_fn(screen.out)
+            except Exception:  # noqa: BLE001  a notice must never keep the screen from opening
+                pass
         return cmd_ui(cfg, run, screen.out, screen.ask, current_session=current_session, own_pane=own_pane,
                       updater=updater, **opts)
 

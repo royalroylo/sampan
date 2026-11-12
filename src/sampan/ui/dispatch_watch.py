@@ -12,7 +12,7 @@ from .text import MOVES, text_width
 
 INTERVAL_S = 3  # seconds between two rounds
 STOP_WAIT_S = 35  # after the screen closed: how long to let a round in flight finish (`codex queue` takes up to 30 s)
-LIST_HELP = "↑↓ 移動　x 取消排隊中的／不再等回覆　q 返回"
+LIST_HELP = "↑↓ 移動　x 取消（已送出的：寄件者已取消）　q 返回"
 LIST_TITLE = "sampan · 派工"
 STATE_STYLE = {"queued": "warn", "sent": "info", "done": "ok", "failed": "err", "cancelled": "muted"}
 NAME_MAX, REASON_MAX = 12, 40  # widest from / to and reason columns of the list

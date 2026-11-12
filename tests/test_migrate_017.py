@@ -423,6 +423,30 @@ class RevertTest(Base):
         self.assertEqual(conn.execute("SELECT count(*) FROM messages").fetchone()[0], 13)  # nothing lost from it
         conn.close()
 
+    def test_revert_fails_messages_in_an_active_group_paste_or_inbox_take(self):
+        migrate_017.upgrade(self.cfg, now=NOW)
+
+        def sent(did, text):
+            return Dispatch(id=did, from_name="alpha-pm", from_profile="work", from_agent="claude", to_name="beta-dev",
+                            to_agent="claude", to_profile="work", text=text, state="sent",
+                            created="2026-11-12T00:00:00+00:00", sent_at="2026-11-12T00:00:05+00:00", to_id="s-beta")
+        with dispatch.transaction(self.state) as items:
+            items.extend([sent("c001", "單獨貼的"), sent("c002", "一起貼的一"), sent("c003", "一起貼的二"),
+                          sent("c004", "取走的")])
+            c = items.conn
+            for did, kind, to_id, members in (("dpaste1", "paste", "s-one", ["c001"]),
+                                              ("dgroup1", "paste", "s-group", ["c002", "c003"]),
+                                              ("dinbox1", "inbox", "s-other", ["c004"])):
+                c.execute("INSERT INTO deliveries (id, kind, to_id, state) VALUES (?, ?, ?, 'active')", (did, kind, to_id))
+                for i, m in enumerate(members):
+                    c.execute("INSERT INTO delivery_messages (delivery, message, position) VALUES (?, ?, ?)", (did, m, i))
+        migrate_017.revert(self.cfg, now=LATER)
+        recs = {r["id"]: r for r in read_016(self.state)}
+        self.assertEqual((recs["c001"]["state"], recs["c001"]["reason"]), ("sent", ""))  # 0.16 finds its own text
+        for did in ("c002", "c003", "c004"):
+            self.assertEqual((recs[did]["state"], recs[did]["reason"]), ("failed", "降版時還在處理，請重送"), did)
+            self.assertTrue(recs[did]["done_at"])
+
     def test_revert_drops_purged_messages_and_uses_cached_reply_without_parts(self):
         migrate_017.upgrade(self.cfg, now=NOW)
         conn = store.connect(self.state)

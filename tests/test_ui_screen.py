@@ -595,6 +595,15 @@ class CursesUiTest(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(printed, ["✔ 已存檔"])
 
+    def test_upgrade_notices_show_in_the_message_area(self):
+        cfg = make_env(Path(tempfile.mkdtemp()))
+        printed = []
+        rc = curses_ui(cfg, FakeRunner(), printed.append, wrapper=lambda fn: fn(FakeScr(["q"])),
+                       rows_fn=lambda c, run: [row("a")],
+                       notices_fn=lambda o: o("這些 session 要重開才會用新版：a"))
+        self.assertEqual(rc, 0)
+        self.assertEqual(printed, ["這些 session 要重開才會用新版：a"])  # still in the message area when the ui ended
+
 
 class FakeWatcher:
     """Stand-in for daemon_watch.DaemonWatcher: latest is set by the test; start/stop are recorded (no thread)."""

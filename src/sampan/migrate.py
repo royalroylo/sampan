@@ -13,20 +13,20 @@ running again; while the mark is there only the commands that use dispatches sto
 
 `cmd_migrate` is `sampan migrate`: both steps by hand (also after a revert: the mark is removed first), `--dry-run` (a
 rehearsal on copies, nothing written) and `--revert` (dispatches back into a dispatches.json 0.16 reads, for a downgrade
-to 0.16; see migrate_017.revert). `_revert` (registry version 2 and folders version 1 again, for 0.14) is 0.16's
-`--revert`: to go further back, revert to 0.16 first and run it there.
+to 0.16; see migrate_017.revert). To go further back, revert to 0.16 first and run 0.16's `sampan migrate --revert`
+there.
 """
 import json
 import os
 import shutil
 import tempfile
-from dataclasses import asdict, replace
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
 from . import folders, registry
 from .clock import now_iso
-from .fsutil import PRIVATE_DIR, PRIVATE_FILE, atomic_write, private_file, write_target
+from .fsutil import PRIVATE_DIR, PRIVATE_FILE, private_file, write_target
 from .machine import registry_machine
 
 FILES = ("registry.json", folders.FOLDERS_FILE, "dispatches.json")  # backed up (those that exist)
@@ -34,8 +34,6 @@ FILES = ("registry.json", folders.FOLDERS_FILE, "dispatches.json")  # backed up 
 # folders v1, the state a later run resumes from, never folders keyed by ids the registry no longer has.
 RESTORED = (folders.FOLDERS_FILE, "registry.json")
 BACKUP_PREFIX = "backup-0.15-"
-REVERT_NOTE = "降版前請先跑這個；再升級會產生新的 id"
-_V14_DROPPED = ("id", "alias")  # Row fields 0.14 does not know: its Row(**s) would refuse the file
 
 
 def _version(path):
@@ -324,44 +322,6 @@ def _dry_run(cfg, out):
 
 def _v(version):
     return "（沒有）" if version is None else f" v{version}"
-
-
-def _revert(cfg, out, now):
-    if not cfg.registry_path.exists():
-        out("沒有登記表，不用寫回")
-        return 0
-    with registry.lock(cfg.state_dir):
-        try:
-            rows, tree, broken = _read(cfg)
-        except registry.RegistryError as e:
-            out(f"❌ 沒有寫回（檔案都沒動）：{e}")
-            return 2
-        before = _snap(rows, tree)
-        kept_bytes = _raw(_folders_path(cfg))
-        bk = _backup(cfg.state_dir, now)
-        try:
-            sessions = [{k: v for k, v in asdict(r).items() if k not in _V14_DROPPED} for r in rows]
-            body = {"version": 2, "saved_at": now_iso(), "sessions": sessions}
-            atomic_write(cfg.registry_path, json.dumps(body, ensure_ascii=False, indent=2) + "\n", mode=PRIVATE_FILE)
-            if tree is not None and (kept_bytes is not None or tree.folders or tree.sessions):
-                data = {"version": 1, "folders": {p: {"collapsed": c} for p, c in tree.folders.items()},
-                        "sessions": {n: p for n, p in tree.sessions.items() if p}}  # pending members too, by name
-                atomic_write(_folders_path(cfg), json.dumps(data, ensure_ascii=False, indent=1, sort_keys=True) + "\n",
-                             mode=PRIVATE_FILE)
-            problems = _check(cfg, before, want=(2, 1), kept=tree is None, kept_bytes=kept_bytes)
-        except Exception as e:
-            problems = [f"{type(e).__name__}: {e}"]
-        if problems:
-            out(_restore_or_say(cfg, bk).replace("資料升級失敗", "寫回失敗"))
-            _say(out, problems)
-            return 2
-    out(f"已把資料寫回 0.14 的格式：登記表 v2{'' if broken else '、資料夾 v1'}（備份在 {bk}）")
-    if broken:
-        out(f"⚠ folders.json 讀不到，原檔保留沒動（備份在 {bk}）：{broken}")
-    if any(r.alias for r in rows):
-        out("  0.14 沒有別名：別名沒有寫回（備份裡還有）")
-    out(REVERT_NOTE)
-    return 0
 
 
 def cmd_migrate(cfg, out, *, dry_run=False, revert=False, now=None):

@@ -676,13 +676,64 @@ class PendingNoticeTest(unittest.TestCase):
         from sampan import cli
         parse = cli.build_parser().parse_args
         for argv, shown in ((["status"], True), (["save"], True), (["save", "--quiet"], False),
-                            (["mcp", "serve"], False), (["mcp", "install"], True), (["dispatches"], True)):
+                            (["mcp", "serve"], False), (["mcp", "install"], True), (["dispatches"], True),
+                            (["ui"], False), (["claude"], False), (["codex"], False)):
             with self.subTest(argv=argv):
                 self.assertEqual(cli._shows_upgrade_notice(parse(argv)), shown)
 
+    def cli_status(self, caller):
+        """`sampan status` with the marker, the notices and the caller lookup faked; what it printed."""
+        from sampan import cli
+        from sampan.send import Caller
+        callers = {"terminal": Caller(None, "", "", None), "agent": Caller("alpha-pm", "alice", "claude", "%1")}
+        printed = []
+        with mock.patch("sampan.cli.load_config", return_value=self.cfg), \
+                mock.patch("sampan.cli.out", printed.append), \
+                mock.patch("sampan.migrate.ensure", return_value=0), \
+                mock.patch("sampan.update.after_update_notices", return_value=["重開 alpha-pm"]), \
+                mock.patch("sampan.send.command_caller", return_value=callers[caller]), \
+                mock.patch("sampan.status.cmd_status", return_value=0):
+            cli.main(["status"])
+        return printed
+
+    def test_a_terminal_command_shows_and_clears_it(self):
+        update.mark_upgrade_notice(self.cfg.state_dir)
+        self.assertEqual(self.cli_status("terminal"), ["重開 alpha-pm"])
+        self.assertFalse(self.marker.exists())
+        self.assertEqual(self.cli_status("terminal"), [])
+
+    def test_a_command_an_agent_runs_leaves_it(self):
+        update.mark_upgrade_notice(self.cfg.state_dir)
+        self.assertEqual(self.cli_status("agent"), [])
+        self.assertTrue(self.marker.exists())
+
+    def test_the_ui_shows_it_inside_the_screen(self):
+        from sampan import cli
+        update.mark_upgrade_notice(self.cfg.state_dir)
+        got = {}
+
+        def fake_ui(cfg, run, out, **kw):
+            got["before"] = self.marker.exists()  # nothing used it up on the way in
+            kw["notices_fn"](got.setdefault("screen", []).append)
+            return 0
+        with mock.patch("sampan.cli.load_config", return_value=self.cfg), \
+                mock.patch("sampan.migrate.ensure", return_value=0), \
+                mock.patch("sampan.update.after_update_notices", return_value=["重開 alpha-pm"]), \
+                mock.patch("sampan.ui.curses_ui", fake_ui), \
+                mock.patch("sampan.update.Checker"), \
+                mock.patch("sampan.ui.daemon_watch.make_watcher"), \
+                mock.patch("sampan.ui.dispatch_watch.make_dispatch_watcher"), \
+                mock.patch("sampan.cli._current_tmux_session", return_value=None), \
+                mock.patch("sys.stdin.isatty", return_value=True), mock.patch("sys.stdout.isatty", return_value=True):
+            cli.main([])
+        self.assertEqual((got["before"], got["screen"]), (True, ["重開 alpha-pm"]))
+        self.assertFalse(self.marker.exists())
+
     def test_cli_shows_it_after_migrate(self):
         from sampan import cli
-        with mock.patch("sampan.cli.load_config", return_value=self.cfg), \
+        update.mark_upgrade_notice(self.cfg.state_dir)
+        with mock.patch("sampan.cli._run_by_agent", return_value=False), \
+                mock.patch("sampan.cli.load_config", return_value=self.cfg), \
                 mock.patch("sampan.migrate.ensure", return_value=0), \
                 mock.patch("sampan.update.show_pending_notices") as show, \
                 mock.patch("sampan.status.cmd_status", return_value=0):

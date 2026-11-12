@@ -1002,7 +1002,7 @@ class PendingCancelTest(Base):
         self.assertIn(f"不再等派工 {d.id} 的回覆", lines[-1])
         self.assertEqual((self.stored(d.id).state, self.stored(d.id).reason), ("cancelled", "寄件者已取消"))
         self.assertNotIn(d.id, send.pending(self.cfg))
-        self.assertIn("不再等回覆", (self.cfg.state_dir / "actions.log").read_text())
+        self.assertIn(f"派工 {d.id}：寄件者已取消", (self.cfg.state_dir / "actions.log").read_text())
         self.assertEqual(send.cmd_cancel(self.cfg, lines.append, d.id), 2)  # finished now
         self.assertIn("只能取消排隊中的", lines[-1])
         self.assertEqual(send.cmd_cancel(self.cfg, lines.append, "zzzz"), 2)

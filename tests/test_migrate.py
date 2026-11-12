@@ -3,7 +3,6 @@ import json
 import tempfile
 import unittest
 from contextlib import redirect_stdout
-from dataclasses import dataclass, fields
 from datetime import datetime
 from pathlib import Path
 from unittest import mock
@@ -41,20 +40,6 @@ V1_FOLDERS = {
     "sessions": {"alpha": "客戶/甲", "beta": "客戶/甲", "gamma": "客戶/乙", "delta": "客戶", "zeta": "開發",
                  "eta": "工具/小", "later": "開發"},
 }
-
-
-@dataclass
-class Row014:
-    """sampan 0.14's registry row: Row(**s) raises TypeError on any key it does not know."""
-    tmux: str
-    agent: str
-    profile: str
-    session_id: str
-    cwd: str
-    state: str = "active"
-    seen_at: str = ""
-    server: str = ""
-    pid: int | None = None
 
 
 class MigrateTest(unittest.TestCase):
@@ -101,12 +86,6 @@ class MigrateTest(unittest.TestCase):
     def cmd(self, **kw):
         buf = io.StringIO()
         rc = migrate.cmd_migrate(self.cfg, lambda m="": buf.write(m + "\n"), now=NOW, **kw)
-        return rc, buf.getvalue()
-
-    def revert_014(self):
-        """0.16's `sampan migrate --revert` (still here, no longer reachable from 0.17's command line)."""
-        buf = io.StringIO()
-        rc = migrate._revert(self.cfg, lambda m="": buf.write(m + "\n"), NOW)
         return rc, buf.getvalue()
 
     # --- needed / snapshot
@@ -406,42 +385,6 @@ class MigrateTest(unittest.TestCase):
         rc, text = self.cmd()
         self.assertEqual(rc, 0)
         self.assertIn("已是新格式", text)
-
-    def test_revert_writes_v2_v1_that_0_14_can_read(self):
-        self.put_v2()
-        self.put_dispatches()
-        before = migrate.snapshot(self.cfg)
-        self.ensure()
-        ids = {s["tmux"]: s["id"] for s in self.read("registry.json")["sessions"]}
-        rc, text = self.revert_014()
-        self.assertEqual(rc, 0, text)
-        self.assertIn("降版前請先跑這個；再升級會產生新的 id", text)
-        reg = self.read("registry.json")
-        self.assertEqual(set(reg), {"version", "saved_at", "sessions"})
-        self.assertEqual(reg["version"], 2)
-        known = {f.name for f in fields(Row014)}
-        for s in reg["sessions"]:
-            self.assertLessEqual(set(s), known)
-            Row014(**({"agent": "claude", "pid": None} | s))  # 0.14's reader
-        fol = self.read("folders.json")
-        self.assertEqual(fol["version"], 1)
-        self.assertEqual(fol["folders"]["客戶/甲"], {"collapsed": True})
-        self.assertIn("空的", fol["folders"])
-        self.assertEqual(fol["sessions"]["alpha"], "客戶/甲")
-        self.assertEqual(fol["sessions"]["later"], "開發")  # a pending member, by name
-        self.assertEqual(migrate.snapshot(self.cfg), before)
-        self.assertEqual(len(self.backups()), 2)  # migrate's and revert's (same stamp, so -2)
-        # 0.15 again: migrates with new ids
-        self.assertTrue(migrate.needed(self.cfg))
-        self.assertEqual(self.ensure(LATER)[0], 0)
-        again = {s["tmux"]: s["id"] for s in self.read("registry.json")["sessions"]}
-        self.assertTrue(set(again.values()).isdisjoint(ids.values()))
-        self.assertEqual(migrate.snapshot(self.cfg), before)
-
-    def test_revert_without_registry(self):
-        rc, text = self.revert_014()
-        self.assertEqual(rc, 0)
-        self.assertEqual(self.all_files(), {})
 
     def test_doctor_line(self):
         from sampan.doctor import _data_format

@@ -291,11 +291,34 @@ def _want_inbox_allow(flag, *, dry_run=False, isatty=None, ask=input):
 
 
 def _shows_upgrade_notice(args):
-    """Whether this command may print the one-time notice after an upgrade: not `mcp serve` (stdout is the protocol)
-    and not `save --quiet` (launchd)."""
+    """Whether this command may print the one-time notice after an upgrade where it starts: not `mcp serve` (stdout
+    is the protocol), not `save --quiet` (launchd), not `claude` / `codex` (the agent's screen takes over at once)
+    and not `ui` (the curses screen shows it in its message area; --plain shows it when its loop starts)."""
     if args.cmd == "mcp" and args.action == "serve":
         return False
+    if args.cmd in ("claude", "codex", "ui"):
+        return False
     return not (args.cmd == "save" and args.quiet)
+
+
+def _run_by_agent(cfg, run):
+    """Whether an agent runs this command through its shell tool (the caller lookup of the [mcp] confirm refusals);
+    a lookup that fails counts as an agent."""
+    import os
+
+    from .send import caller_kind, command_caller
+    try:
+        return caller_kind(command_caller(cfg, run, os.getpid())) != "terminal"
+    except Exception:  # noqa: BLE001  a notice must never break the command it rides on
+        return True
+
+
+def _upgrade_notice(cfg, run, out):
+    """show_pending_notices for a person: a command an agent runs leaves the marker for the next one at a terminal."""
+    from .update import NOTICE_MARKER, show_pending_notices
+    if not (Path(cfg.state_dir) / NOTICE_MARKER).exists() or _run_by_agent(cfg, run):
+        return
+    show_pending_notices(cfg, run, out)
 
 
 def _after_update_notices(run):
@@ -526,8 +549,7 @@ def _dispatch(cfg, args):
         if rc:
             return rc
         if _shows_upgrade_notice(args):
-            from .update import show_pending_notices
-            show_pending_notices(cfg, run, out)
+            _upgrade_notice(cfg, run, out)
     if cmd == "ui":
         from .detach_key import ensure as detach_fn
         from .ui import cmd_ui, curses_ui
@@ -541,8 +563,11 @@ def _dispatch(cfg, args):
             checker.start()  # check for a new version in the background: the list appears first
             from .ui.daemon_watch import make_watcher
             from .ui.dispatch_watch import make_dispatch_watcher
+            from .update import show_pending_notices
             return curses_ui(cfg, run, out, **where, updater=checker, argv=argv, watcher=make_watcher(cfg, run),
-                             dispatch_watcher=make_dispatch_watcher(cfg, run), detach_fn=detach_fn)
+                             dispatch_watcher=make_dispatch_watcher(cfg, run), detach_fn=detach_fn,
+                             notices_fn=lambda o: show_pending_notices(cfg, run, o))
+        _upgrade_notice(cfg, run, out)
         import subprocess
 
         from .prompts import plain_prompt
