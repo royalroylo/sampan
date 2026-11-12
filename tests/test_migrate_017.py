@@ -492,6 +492,22 @@ class RevertTest(Base):
         self.assertEqual([p.name for p in self.state.iterdir() if p.name.startswith("dispatches.db")],
                          ["dispatches.db.reverted-20261112-100000"])
 
+    def test_revert_mid_upgrade_keeps_a_0_16_write_to_the_v2(self):
+        with mock.patch.object(migrate_017, "_write_stub", side_effect=Killed), self.assertRaises(Killed):
+            migrate_017.upgrade(self.cfg, now=NOW)  # journal db_ready: v2 + db, the v2 is still the live copy
+        doc = self.json_doc()
+        doc["dispatches"].append({**self.old["a001"], "id": "f016"})  # what a 0.16 write would do meanwhile
+        (self.state / "dispatches.json").write_text(json.dumps(doc, ensure_ascii=False))
+        live = (self.state / "dispatches.json").read_bytes()
+        lines = migrate_017.revert(self.cfg, now=LATER)
+        self.assertIn(REINSTALL, "\n".join(lines))
+        self.assertEqual((self.state / "dispatches.json").read_bytes(), live)  # kept byte for byte
+        self.assertIn("f016", {r["id"] for r in read_016(self.state)})
+        self.assertFalse((self.state / migrate_017.JOURNAL).exists())
+        self.assertTrue(migrate_017.reverted(self.cfg))
+        self.assertEqual([p.name for p in self.state.iterdir() if p.name.startswith("dispatches.db")],
+                         ["dispatches.db.reverted-20261112-100000"])  # renamed, never deleted
+
     def test_revert_command(self):
         migrate_017.upgrade(self.cfg, now=NOW)
         rc, text = self.cmd(revert=True, now=LATER)

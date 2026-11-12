@@ -14,7 +14,7 @@ journal removed). dispatches.json is at every moment either the complete origina
 using the first and refuses the second. A failure (not a kill) rolls back to the original and raises MigrateError.
 
 `revert` (`sampan migrate --revert`) writes the messages that still have their text back into a version-2
-dispatches.json, renames the db to dispatches.db.reverted-<stamp> and leaves a mark (state/migrate-0.17.reverted): while
+dispatches.json (only when the db is the live copy: a version 1/2 dispatches.json is kept as it is), renames the db to dispatches.db.reverted-<stamp> and leaves a mark (state/migrate-0.17.reverted): while
 it is there nothing migrates them again and the commands that use dispatches refuse; `sampan migrate` removes it.
 """
 import fcntl
@@ -446,7 +446,9 @@ def _retire_db(state_dir, now):
 
 def revert(cfg, *, now):
     """`sampan migrate --revert`, under dispatches.lock: mark first (so nothing migrates them back), write the messages
-    back into a version-2 dispatches.json, rename the db, drop what an unfinished migration left. Run again after being
+    back into a version-2 dispatches.json, rename the db, drop what an unfinished migration left. The messages come
+    from the db only when it is the live copy (dispatches.json is the stub); a dispatches.json still at version 1/2 is
+    kept as it is and the db only renamed. Run again after being
     cut short, it finishes. Returns the lines to print; MigrateError when it could not (files as they were)."""
     state_dir = private_dir(cfg.state_dir)
     json_path, db = state_dir / JSON_FILE, state_dir / store.DB_FILE
@@ -460,7 +462,12 @@ def revert(cfg, *, now):
                                f"舊資料在 {state_dir}/{BACKUP_PREFIX}* 裡")
         if marked_now:
             _write_bytes(marker, (json.dumps({"at": now_iso()}) + "\n").encode())
-        if db.exists():
+        if db.exists() and _json_version(before) in dispatch.OLD_VERSIONS:
+            # the stub was never written (a migration cut short, or a revert cut short after its export): the v1/v2
+            # is the live copy 0.16 keeps using. It wins, byte for byte; the db is only set aside.
+            gone = _retire_db(state_dir, now)
+            lines.append(f"dispatches.json 還是 0.16 的格式，原檔保留沒動；資料庫改名為 {gone.name}")
+        elif db.exists():
             try:
                 records = _export(state_dir)
                 body = json.dumps({"version": 2, "dispatches": records}, ensure_ascii=False, indent=2) + "\n"
