@@ -274,11 +274,11 @@ def _create(cfg, caller, to, to_agent, to_profile, message, state, now, *, notif
     """Write the outbox and record a dispatch under the lock. A copy of it, or why not (str).
     strip: drop trailing newlines from the text (a startup prompt goes through `$(cat …)`, which drops them)."""
     try:
-        with dispatch.transaction(cfg.state_dir) as items:
-            d = _record(cfg, caller, to, to_agent, to_profile, message, state, now, {d.id for d in items},
+        with dispatch.transaction(cfg.state_dir, keep_days=cfg.keep_days) as items:
+            d = _record(cfg, caller, to, to_agent, to_profile, message, state, now, items.ids,
                         notify=notify, thread_id=thread_id, strip=strip, startup=startup, raw=raw, batch=batch,
                         to_id=to_id)
-            _keep(cfg, items, now, [d])
+            _keep(items, [d])
     except (dispatch.DispatchError, OSError) as e:
         return str(e)
     return replace(d)
@@ -301,11 +301,9 @@ def _record(cfg, caller, to, to_agent, to_profile, message, state, now, taken, *
         machine=registry_machine(cfg))
 
 
-def _keep(cfg, items, now, new):
-    """Prune items (dropping the outboxes of what goes) and add the new dispatches at the end."""
-    kept = dispatch.prune(items, now)
-    _drop_outboxes(cfg, {x.id for x in items} - {x.id for x in kept})
-    items[:] = kept + new
+def _keep(items, new):
+    """Add the new dispatches at the end (nothing is dropped here: the transaction clears the bodies of old ones)."""
+    items.extend(new)
 
 
 @dataclass
@@ -365,8 +363,8 @@ def submit_batch(cfg, run, caller, names, message, *, raw, notify, now, snapshot
     if not targets:
         return "沒有可以送的 session：" + "；".join(f"{n}：{why}" for n, why in skipped)
     try:
-        with dispatch.transaction(cfg.state_dir) as items:
-            bid, taken, made = _new_batch_id(items), {d.id for d in items}, []
+        with dispatch.transaction(cfg.state_dir, keep_days=cfg.keep_days) as items:
+            bid, taken, made = _new_batch_id(items), items.ids, []
             for row in targets:
                 d = _record(cfg, caller, row.name, row.agent, row.profile, message, "queued", now, taken,
                             notify=notify, thread_id=(row.sid or None) if row.agent == "codex" else None, raw=raw,
@@ -374,7 +372,7 @@ def submit_batch(cfg, run, caller, names, message, *, raw, notify, now, snapshot
                 taken.add(d.id)
                 made.append(d)
             made[0].batch_skipped = len(skipped)
-            _keep(cfg, items, now, made)
+            _keep(items, made)
     except (dispatch.DispatchError, OSError) as e:
         return str(e)
     for d in made:
@@ -416,7 +414,7 @@ def submit_new(cfg, caller, to, to_agent, to_profile, message, *, notify, now):
 def abort_new(cfg, did, reason, *, now):
     """`sampan new --message` could not start the session: mark its dispatch failed so it is not left `sent`."""
     try:
-        with dispatch.transaction(cfg.state_dir) as items:
+        with dispatch.transaction(cfg.state_dir, keep_days=cfg.keep_days) as items:
             d = next((x for x in items if x.id == did), None)
             if d is not None and d.state == "sent":
                 _finish(d, "failed", now, reason)
@@ -424,15 +422,6 @@ def abort_new(cfg, did, reason, *, now):
     except (dispatch.DispatchError, OSError):
         return
     _log(cfg, "send", f"派工 {did}：{reason}")
-
-
-def _drop_outboxes(cfg, ids):
-    for did in ids:
-        for name in (did, _notice_id(did)):
-            try:
-                dispatch.outbox_path(cfg.state_dir, name).unlink(missing_ok=True)
-            except OSError:
-                pass
 
 
 def _notice_id(did):
@@ -458,7 +447,7 @@ def advance(cfg, run, did, *, sleep, snapshot_fn=None, status_fn=None, now=None,
     when this advance finishes the batch.
     Raises DispatchError for an unknown id or an unreadable dispatches.json, RegistryError for a bad registry."""
     now = now or _utcnow()
-    with dispatch.transaction(cfg.state_dir) as items:
+    with dispatch.transaction(cfg.state_dir, keep_days=cfg.keep_days) as items:
         d = next((x for x in items if x.id == did), None)
         if d is None:
             raise dispatch.DispatchError(f"沒有派工 {did}")
@@ -801,7 +790,7 @@ def set_notify(cfg, did, on):
     it waits, on again when it gives up; off once the caller has read the reply). Never for one already notified.
     did may be a batch id: every item of the batch."""
     try:
-        with dispatch.transaction(cfg.state_dir) as items:
+        with dispatch.transaction(cfg.state_dir, keep_days=cfg.keep_days) as items:
             for d in items:
                 if (d.id == did or d.batch == did) and not d.notified and d.from_kind == "session":
                     d.notify = bool(on)
@@ -827,7 +816,7 @@ def cancel(cfg, did, *, now=None, wait_s=None):
     already with the target; reason 「不再等回覆」, no notice). The cancelled Dispatch, or why not (str).
     wait_s: give up on a busy lock after that many seconds (the ui, which must not stall behind a delivery); None waits."""
     try:
-        with dispatch.transaction(cfg.state_dir, wait_s=wait_s) as items:
+        with dispatch.transaction(cfg.state_dir, wait_s=wait_s, keep_days=cfg.keep_days) as items:
             d = next((x for x in items if x.id == did), None)
             if d is None:
                 return f"沒有派工 {did}"

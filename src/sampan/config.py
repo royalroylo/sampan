@@ -109,6 +109,7 @@ class Config:
     implicit_codex: bool  # the Codex profile was filled in from [codex] / defaults, not written in the file
     codex_auto_start: bool = True  # [ui] codex_auto_start: start the Codex daemon when the UI opens
     detach_key: str = "C-q"  # [ui] detach_key: the tmux key that jumps out of a sampan session ("" = none)
+    keep_days: int = 90  # [dispatches] keep_days: a finished message older than this loses its text and reply (the row stays)
     mcp_confirm: bool = True  # [mcp] confirm: the MCP tools that act are marked, so the agent's own permission prompt asks the user
 
     @property
@@ -242,6 +243,10 @@ def load_config(path, *, home=None, state_dir=None):
     recent_days = restore.get("recent_days", 7)
     if isinstance(recent_days, bool) or not isinstance(recent_days, int) or recent_days < 0:
         raise ConfigError(f"[restore] recent_days 要是非負整數，目前是 {recent_days!r}")
+    disp = table(data.get("dispatches", {}), "[dispatches]")
+    keep_days = disp.get("keep_days", 90)
+    if isinstance(keep_days, bool) or not isinstance(keep_days, int) or keep_days < 0:
+        raise ConfigError(f"[dispatches] keep_days 要是非負整數，目前是 {keep_days!r}")
     ui = table(data.get("ui", {}), "[ui]")
     start_dir = ui.get("start_dir")
     if start_dir is None:
@@ -274,5 +279,6 @@ def load_config(path, *, home=None, state_dir=None):
         implicit_codex=implicit_codex,
         codex_auto_start=codex_auto_start,
         detach_key=detach_key,
+        keep_days=keep_days,
         mcp_confirm=mcp_confirm,
     )

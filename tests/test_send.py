@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-from sampan import deliver, dispatch, send
+from sampan import deliver, dispatch, send, store
 from sampan.send import Caller
 from sampan.status import State
 from tests.fakes import FakeRunner, cp
@@ -123,9 +123,9 @@ class SubmitTest(Base):
             d = self.submit()
         self.assertEqual((d.to_id, d.from_id, d.machine), (ID_B, ID_A, "mach-1"))
         self.assertEqual(self.stored(d.id).to_id, ID_B)
-        raw = json.loads((self.cfg.state_dir / "dispatches.json").read_text())
-        self.assertEqual(raw["version"], 2)
-        self.assertEqual(raw["dispatches"][0]["from_id"], ID_A)
+        conn = store.connect(self.cfg.state_dir)
+        self.addCleanup(conn.close)
+        self.assertEqual(conn.execute("SELECT from_id FROM messages").fetchone()[0], ID_A)
 
     def test_terminal_caller_has_no_from_id(self):
         d = self.submit(caller=send.TERMINAL)
@@ -284,10 +284,11 @@ class SubmitTest(Base):
     def test_refuses_empty_message(self):
         self.assertIsInstance(self.submit(message="  \n"), str)
 
-    def test_prunes_old_finished_dispatches(self):
-        old = dataclasses.replace(self.submit(), state="done", created=(NOW - timedelta(days=8)).isoformat())
+    def test_old_finished_dispatches_lose_their_bodies(self):
+        old = dataclasses.replace(self.submit(), state="done", created=(NOW - timedelta(days=100)).isoformat())
         with dispatch.transaction(self.cfg.state_dir) as items:
             items[:] = [old]
+            items.conn.execute("DELETE FROM meta WHERE key='purged_at'")  # the hourly purge is due
         d = self.submit()
         self.assertEqual([x.id for x in dispatch.load(self.cfg.state_dir)], [d.id])
         self.assertFalse(dispatch.outbox_path(self.cfg.state_dir, old.id).exists())

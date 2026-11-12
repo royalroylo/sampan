@@ -159,8 +159,13 @@ class ConfigTest(unittest.TestCase):
         cfg = make_env(self.tmp, 'version = 1\n[profiles.alice]\nconfig_dir = "~/.claude"\ndefault = true\n')
         self.assertEqual(cfg.version, 1)
         self.assertEqual(cfg.recent_days, 7)
+        self.assertEqual(cfg.keep_days, 90)
         self.assertTrue(cfg.codex.enabled)
         self.assertEqual(cfg.codex.home, home / ".codex")
+
+    def test_keep_days_config(self):
+        cfg = make_env(self.tmp, 'version = 1\n[dispatches]\nkeep_days = 30\n[profiles.alice]\nconfig_dir = "~/.claude"\ndefault = true\n')
+        self.assertEqual(cfg.keep_days, 30)
 
     def test_ui_start_dir_default_is_projects_if_it_exists_else_home(self):
         home = self.tmp / "home"
@@ -250,6 +255,8 @@ class ConfigTest(unittest.TestCase):
 
         bad('config_dir = "~/.claude-profiles/work"\n', "", "config_dir")
         bad("version = 1\n", 'version = 1\n[restore]\nrecent_days = "x"\n', "recent_days")
+        bad("version = 1\n", 'version = 1\n[dispatches]\nkeep_days = -1\n', "keep_days")
+        bad("version = 1\n", 'version = 1\n[dispatches]\nkeep_days = "x"\n', "keep_days")
         bad("version = 1\n", "version = 1\ncodex = 1\n", "[codex]")
         bad("[profiles.work]", "[profiles]\nzed = 1\n[profiles.work]", "zed")
         gone = TOML.replace("~/.claude-profiles/work", "~/gone")
