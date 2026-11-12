@@ -2,6 +2,8 @@
 import dataclasses
 import json
 import os
+import re
+import sqlite3
 import tempfile
 import threading
 import time
@@ -440,6 +442,14 @@ class AdvanceClaudeTest(Base):
         self.assertEqual(d.state, "queued")
         self.assertIn("沒在執行", d.reason)
         self.assertEqual(run.calls, [])
+
+    def test_a_sqlite_error_while_notifying_is_a_dispatch_error(self):
+        d = self.submit()
+        with dispatch.transaction(self.cfg.state_dir, ids=[d.id]) as items:
+            items[0].state, items[0].notify, items[0].from_kind = "done", True, "session"
+        with mock.patch.object(send, "notify_caller", side_effect=sqlite3.OperationalError("database is locked")):
+            with self.assertRaises(dispatch.DispatchError):
+                self.advance(FakeRunner(strict=True), d.id)
 
     def test_finished_dispatches_are_left_alone(self):
         d = self.submit()
@@ -2005,6 +2015,8 @@ class GroupPasteTest(Base):
         conn = store.connect(self.cfg.state_dir)
         self.addCleanup(conn.close)
         self.assertEqual(conn.execute("SELECT COUNT(*) FROM deliveries").fetchone()[0], 0)
+        outbox = Path(self.cfg.state_dir) / "outbox"  # the group's own text was written, then dropped with it
+        self.assertEqual([p.name for p in outbox.iterdir() if re.fullmatch(r"d[0-9a-f]{6}\.txt", p.name)], [])
 
     def test_group_failure_fails_every_member(self):
         a, t, z = self.three()

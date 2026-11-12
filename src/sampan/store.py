@@ -7,6 +7,7 @@ import os
 import secrets
 import sqlite3
 from pathlib import Path
+from urllib.parse import quote
 
 from .fsutil import PRIVATE_FILE, private_dir, try_chmod
 
@@ -60,7 +61,8 @@ def connect(state_dir, *, create=False):
     old_umask = os.umask(0o077)  # the db, its -wal and -shm are created while this is set: owner only
     try:
         try:
-            conn = sqlite3.connect(f"file:{path}?mode={'rwc' if create else 'rw'}", uri=True, timeout=5.0)
+            # quoted: a #, ? or % in the path would otherwise end or change the file name in the URI
+            conn = sqlite3.connect(f"file:{quote(str(path))}?mode={'rwc' if create else 'rw'}", uri=True, timeout=5.0)
         except sqlite3.Error as exc:
             raise StoreError(f"打不開 {path}：{exc}") from exc
         conn.row_factory = sqlite3.Row
@@ -85,12 +87,19 @@ def create_schema(conn):
     conn.commit()
 
 
+ID_TRIES = 1000  # random ids tried before giving up: the space is (nearly) full
+ID_NAMES = {"messages": "派工", "reply_parts": "回覆段落", "rings": "門鈴", "deliveries": "送達"}
+IDS_EXHAUSTED = "{what} id 用完了（試了 {n} 個都已被占用，已清除本文的也占著 id）；之後的 0.17.x 會加長 id"
+
+
 def _fresh_id(conn, table, make):
-    """An id from make() that no row of table has (also rows whose text was purged keep their id)."""
-    while True:
+    """An id from make() that no row of table has (also rows whose text was purged keep their id). StoreError after
+    ID_TRIES taken ones."""
+    for _ in range(ID_TRIES):
         candidate = make()
         if conn.execute(f"SELECT 1 FROM {table} WHERE id=?", (candidate,)).fetchone() is None:
             return candidate
+    raise StoreError(IDS_EXHAUSTED.format(what=ID_NAMES.get(table, table), n=ID_TRIES))
 
 
 def new_message_id(conn):

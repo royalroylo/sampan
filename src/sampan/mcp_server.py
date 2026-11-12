@@ -757,7 +757,10 @@ class Server:
 
     def _watch(self, interval):
         while not self._stop.wait(interval):
-            self.watch_once()
+            try:
+                self.watch_once()
+            except Exception as e:  # noqa: BLE001  the watcher thread must outlive any one bad pass
+                _log(f"派工監看這一輪失敗：{e!r}")
 
 
 def serve(cfg, run, stdin, stdout, *, caller, sleep=time.sleep, clock=time.monotonic, status_fn=None,

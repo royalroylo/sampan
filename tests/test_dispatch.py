@@ -224,6 +224,28 @@ class StoreTest(unittest.TestCase):
             self.assertEqual(len(cur), 250)
         self.assertEqual(len(dispatch.load(self.dir)), 250)
 
+    def test_reverted_or_unmigrated_data_is_refused_with_or_without_a_db(self):
+        cases = ((dispatch.REVERT_MARK, "", dispatch.REVERTED_NOTE),
+                 (dispatch.MIGRATE_JOURNAL, "{}", dispatch.NOT_MIGRATED),
+                 ("dispatches.json", '{"version": 1, "dispatches": []}', dispatch.NOT_MIGRATED),
+                 ("dispatches.json", '{"version": 2, "dispatches": []}', dispatch.NOT_MIGRATED))
+        for with_db in (False, True):
+            for name, content, why in cases:
+                with self.subTest(name=name, content=content, with_db=with_db):
+                    with tempfile.TemporaryDirectory() as t:
+                        sd = Path(t) / "state"
+                        if with_db:
+                            with dispatch.transaction(sd) as cur:
+                                cur.append(mk("aaaa"))
+                        else:
+                            sd.mkdir()
+                        (sd / name).write_text(content)
+                        for use in (lambda: dispatch.transaction(sd).__enter__(), lambda: dispatch.load(sd)):
+                            with self.assertRaises(DispatchError) as ctx:
+                                use()
+                            self.assertEqual(str(ctx.exception), why)
+                        self.assertEqual((sd / store.DB_FILE).exists(), with_db)  # never created
+
     def test_load_is_by_created(self):
         self.put(mk("bbbb", created=ago(1)), mk("aaaa", created=ago(2)))
         self.assertEqual([d.id for d in dispatch.load(self.dir)], ["aaaa", "bbbb"])
@@ -269,6 +291,18 @@ class PurgeTest(unittest.TestCase):
             self.assertEqual(sorted(d.id for d in cur), ["a002", "a003"])  # a purged one is never loaded
             self.assertIn("a001", cur.ids)
 
+    def test_purge_keeps_owed_notices_and_unfinished_batches(self):
+        when = dict(created=ago(3), done_at=ago(2))
+        conn = self.seed(mk("a001", "done", notify=True, **when),  # its notice is still owed
+                         mk("a002", "done", notify=True, notified=True, **when),
+                         mk("a003", "cancelled", notify=True, **when),  # a cancelled one is never told
+                         mk("a004", "done", batch="b0001", **when), mk("a005", "queued", batch="b0001"),
+                         mk("a006", "done", batch="b0002", notify=True, notified=True, **when),
+                         mk("a007", "failed", batch="b0002", notify=True, notified=True, **when),
+                         mk("a008", "done", batch="b0003", notify=True, **when),  # the batch notice is owed
+                         mk("a009", "failed", batch="b0003", notify=True, **when))
+        self.assertEqual(sorted(dispatch.purge(conn, NOW, 0)), ["a002", "a003", "a006", "a007"])
+
     def test_transaction_purges_at_most_once_an_hour(self):
         self.seed(mk("a001", "done", created=ago(95), done_at=ago(91)))
         conn = store.connect(self.dir)
@@ -296,6 +330,23 @@ class PurgeTest(unittest.TestCase):
             self.assertEqual(cur, [])
         self.assertFalse(dispatch.outbox_path(self.dir, "a001").exists())
         self.assertFalse(dispatch.outbox_path(self.dir, "a001-notice").exists())
+
+
+class RingOutboxPurgeTest(unittest.TestCase):
+    def test_purge_removes_the_outbox_of_old_rings(self):
+        with tempfile.TemporaryDirectory() as t:
+            sd = Path(t) / "state"
+            with dispatch.transaction(sd) as cur:
+                cur.conn.execute("INSERT INTO rings (id, at) VALUES ('0a0a', ?), ('0b0b', ?)",
+                                 ((datetime.now(timezone.utc) - timedelta(days=10)).isoformat(),
+                                  (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()))
+                cur.conn.execute("DELETE FROM meta WHERE key='purged_at'")
+            for code in ("0a0a", "0b0b"):
+                dispatch.write_outbox(sd, f"ring-{code}", "ring")
+            with dispatch.transaction(sd, keep_days=5):
+                pass
+            self.assertFalse(dispatch.outbox_path(sd, "ring-0a0a").exists())
+            self.assertTrue(dispatch.outbox_path(sd, "ring-0b0b").exists())
 
 
 class BoundedLoadTest(unittest.TestCase):
@@ -397,6 +448,20 @@ class IdAndOutboxTest(unittest.TestCase):
         self.assertRegex(i, r"^[0-9a-f]{4}$")
         existing = {f"{n:04x}" for n in range(0x10000) if n != 0xbeef}
         self.assertEqual(dispatch.new_id(existing), "beef")
+
+    def test_new_id_is_bounded_when_nearly_full_and_raises_when_full(self):
+        existing = {f"{n:04x}" for n in range(0x10000) if n != 0x0042}
+        calls = []
+
+        def taken(_n):
+            calls.append(1)
+            return "beef"
+        with mock.patch.object(dispatch.secrets, "token_hex", side_effect=taken):
+            self.assertEqual(dispatch.new_id(existing), "0042")
+            self.assertEqual(len(calls), store.ID_TRIES)
+            with self.assertRaises(DispatchError) as ctx:
+                dispatch.new_id(existing | {"0042"})
+        self.assertIn("id 用完了", str(ctx.exception))
 
     def test_outbox(self):
         with tempfile.TemporaryDirectory() as t:

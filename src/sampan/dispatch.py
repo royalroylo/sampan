@@ -26,6 +26,10 @@ DB_VERSION_STUB = 3  # the "version" of the stub dispatches.json a 0.17 sampan l
 OLD_VERSIONS = (1, 2)  # a dispatches.json of these versions still holds the data: `sampan migrate` moves it to the db
 KEEP_DAYS = 90  # default of [dispatches] keep_days: finished messages older than this lose their bodies
 PURGE_EVERY = timedelta(hours=1)
+MIGRATE_JOURNAL = "migrate-0.17.json"  # an unfinished migration to 0.17 (migrate_017)
+REVERT_MARK = "migrate-0.17.reverted"  # the dispatches were moved back to 0.16 (`sampan migrate --revert`)
+NOT_MIGRATED = "派工資料還沒升級到 0.17（sampan migrate）"
+REVERTED_NOTE = "已降回 0.16 格式；要再升級請跑 sampan migrate"
 # what `status` is when a Dispatch leaves it empty: derived from state
 STATUS_OF_STATE = {"queued": "queued", "sent": "pasted", "done": "replied", "failed": "failed", "cancelled": "cancelled"}
 
@@ -74,11 +78,16 @@ class Dispatch:
 
 def new_id(existing):
     """Four lowercase hex digits not in existing. Inside a transaction pass `items.ids`: it also holds the ids of
-    messages whose text was purged."""
-    while True:
+    messages whose text was purged. After store.ID_TRIES random ones that are all taken, one of the free ones;
+    DispatchError when there is none."""
+    for _ in range(store.ID_TRIES):
         i = secrets.token_hex(2)
         if i not in existing:
             return i
+    free = sorted({f"{n:04x}" for n in range(0x10000)} - set(existing))
+    if not free:
+        raise DispatchError(store.IDS_EXHAUSTED.format(what="派工", n=0x10000))
+    return secrets.choice(free)
 
 
 COLUMNS = tuple(f.name for f in fields(Dispatch))  # the last one, extra, is stored as JSON
@@ -171,27 +180,37 @@ def _check(d):
         raise DispatchError(f"{store.DB_FILE}：派工 {d.id} 的 from_kind 是 {d.from_kind!r}，只能是 {KINDS}")
 
 
-def _old_file_problem(state_dir):
-    """Why a state dir without a db is not a fresh install: a dispatches.json is there. None when it is not."""
-    path = Path(state_dir) / "dispatches.json"
+def _old_file_problem(state_dir, db_exists):
+    """Why the db must not be opened (or, with no db, why this is not a fresh install), None when it may: a 0.16
+    revert mark or an unfinished 0.17 migration, a dispatches.json that still holds the data (version 1 or 2), or,
+    with no db, any other dispatches.json."""
+    state_dir = Path(state_dir)
+    if (state_dir / REVERT_MARK).exists():
+        return REVERTED_NOTE
+    if (state_dir / MIGRATE_JOURNAL).exists():
+        return NOT_MIGRATED
+    path = state_dir / "dispatches.json"
     if not path.exists():
         return None
     try:
         version = json.loads(path.read_text())["version"]
     except (OSError, ValueError, KeyError, TypeError) as e:
-        return f"{path} 無法解析（{e}）。不會覆蓋它。"
+        return None if db_exists else f"{path} 無法解析（{e}）。不會覆蓋它。"
     if version in OLD_VERSIONS:
-        return "派工資料還沒升級到 0.17（sampan migrate）"
+        return NOT_MIGRATED
+    if db_exists:
+        return None
     if version == DB_VERSION_STUB:
-        return f"找不到 {Path(state_dir) / store.DB_FILE}；派工資料已搬進資料庫，沒有資料庫就無法繼續"
+        return f"找不到 {state_dir / store.DB_FILE}；派工資料已搬進資料庫，沒有資料庫就無法繼續"
     return f"{path} 是未知的版本 {version!r}（只認得 {'、'.join(map(str, OLD_VERSIONS + (DB_VERSION_STUB,)))}）。不會覆蓋它。"
 
 
 def _open(state_dir, *, fresh_ok):
     """The connection to the db. With no db yet and no dispatches.json either (a fresh install) it is created when
-    fresh_ok, else None."""
+    fresh_ok, else None. DispatchError, db or not, while the data is reverted to 0.16 or not migrated to 0.17 yet: a
+    heartbeat or a send then never creates or writes a db beside the data 0.16 uses."""
     exists = (Path(state_dir) / store.DB_FILE).exists()
-    problem = None if exists else _old_file_problem(state_dir)
+    problem = _old_file_problem(state_dir, exists)
     if problem:
         raise DispatchError(problem)
     if not exists and not fresh_ok:
@@ -204,7 +223,8 @@ def _open(state_dir, *, fresh_ok):
 
 # a message still moving (queued, sent) or whose caller is still owed its notice (see send._owes_notice: a plain one
 # done or failed; a batch item, whose batch's first item owes the one batch notice)
-LIVE = ("(state IN ('queued','sent') OR (notify=1 AND notified=0 AND (batch IS NOT NULL OR state IN ('done','failed'))))")
+OWED = "(notify=1 AND notified=0 AND (batch IS NOT NULL OR state IN ('done','failed')))"
+LIVE = f"(state IN ('queued','sent') OR {OWED})"
 
 
 def _named(ids):
@@ -253,11 +273,14 @@ def load(state_dir, ids=None):
 
 @contextmanager
 def _sqlite_errors(state_dir):
-    """A sqlite error (locked, corrupt, schema) is a DispatchError, which the callers report instead of crashing."""
+    """A sqlite error (locked, corrupt, schema) or a StoreError is a DispatchError, which the callers report instead
+    of crashing."""
     try:
         yield
     except sqlite3.Error as e:
         raise DispatchError(f"{Path(state_dir) / store.DB_FILE} 無法使用（{e}）。不會覆蓋它。") from e
+    except store.StoreError as e:  # e.g. the ids of a table are used up
+        raise DispatchError(str(e)) from e
 
 
 def checkpoint(state_dir, items):
@@ -270,11 +293,14 @@ def checkpoint(state_dir, items):
 
 def purge(conn, now, keep_days):
     """Clear text, reply and extra of finished messages whose done_at (created when there is none) is more than
-    keep_days before now; their rows, ids and statistics stay (purged=1). The delivery and reply-part texts of those
-    messages go too. Returns the ids purged. No commit."""
+    keep_days before now; their rows, ids and statistics stay (purged=1). Never one whose caller is still owed its
+    notice, nor an item of a batch that is not finished yet (the batch notice counts every item). The delivery and
+    reply-part texts of those messages go too. Returns the ids purged. No commit."""
     limit = now - timedelta(days=keep_days)
     old = []
-    for r in conn.execute("SELECT id, done_at, created FROM messages WHERE purged=0 AND state IN (?,?,?)", FINISHED):
+    for r in conn.execute(f"SELECT id, done_at, created FROM messages AS m WHERE purged=0 AND state IN (?,?,?) "
+                          f"AND NOT {OWED} AND (batch IS NULL OR NOT EXISTS (SELECT 1 FROM messages WHERE "
+                          f"batch=m.batch AND state IN ('queued','sent')))", FINISHED):
         when = parse_iso(r["done_at"] or r["created"])
         if when is not None and when < limit:
             old.append(r["id"])
@@ -295,6 +321,7 @@ def _purge_if_due(conn, state_dir, keep_days):
     names = [n for did in gone for n in (did, f"{did}-notice")]  # the outbox of the message and of its failure notice
     names += sorted({r["delivery"] for did in gone  # and of a group paste it was in
                      for r in conn.execute("SELECT delivery FROM delivery_messages WHERE message=?", (did,))})
+    names += _old_rings(conn, now, keep_days)
     conn.execute("INSERT INTO meta (key, value) VALUES ('purged_at', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                  (now.isoformat(timespec="seconds"),))
     conn.commit()
@@ -303,6 +330,13 @@ def _purge_if_due(conn, state_dir, keep_days):
             outbox_path(state_dir, name).unlink(missing_ok=True)
         except OSError:
             pass
+
+
+def _old_rings(conn, now, keep_days):
+    """The outbox names (ring-<code>) of the rings rung more than keep_days before now."""
+    limit = now - timedelta(days=keep_days)
+    return [f"ring-{r['id']}" for r in conn.execute("SELECT id, at FROM rings")
+            if (at := parse_iso(r["at"])) is not None and at < limit]
 
 
 @contextmanager

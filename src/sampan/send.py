@@ -483,24 +483,25 @@ def advance(cfg, run, did, *, sleep, snapshot_fn=None, status_fn=None, now=None,
 
         def save():
             dispatch.checkpoint(cfg.state_dir, items)
-        with dispatch._sqlite_errors(cfg.state_dir):  # deliveries are read and written through items.conn
+        # deliveries, rings and the notice's reply parts are read and written through items.conn
+        with dispatch._sqlite_errors(cfg.state_dir):
             if d.state == "queued":
                 _deliver(cfg, run, d, _row_of(rows(), d.to_id, d.to_name), sleep, now, save, items)
                 _expire(cfg, d, now)
             elif d.state == "sent":
                 _check(cfg, d, _row_of(rows(), d.to_id, d.to_name), now, run, items)
-        if d.batch is None:
-            if report and d.state in dispatch.FINISHED:
-                d.notify = False  # the tool result tells the caller
-            owed = d
-        else:
-            group = _group(items, d.batch)
-            if report_batch and all(x.state in dispatch.FINISHED for x in group):
-                for x in group:
-                    x.notify = False  # the tool result tells the caller about every item
-            owed = group[0]
-        if _owes_notice(owed, items):
-            notify_caller(cfg, run, owed, sleep, rows=rows(), save=save, items=items)
+            if d.batch is None:
+                if report and d.state in dispatch.FINISHED:
+                    d.notify = False  # the tool result tells the caller
+                owed = d
+            else:
+                group = _group(items, d.batch)
+                if report_batch and all(x.state in dispatch.FINISHED for x in group):
+                    for x in group:
+                        x.notify = False  # the tool result tells the caller about every item
+                owed = group[0]
+            if _owes_notice(owed, items):
+                notify_caller(cfg, run, owed, sleep, rows=rows(), save=save, items=items)
         result = replace(d)
     return result
 
@@ -606,6 +607,11 @@ def _deliver(cfg, run, d, row, sleep, now, save, items):
         for x in group:
             x.state, x.sent_at, x.reason = "queued", None, why  # nothing was sent: try again later
         deliveries.drop_delivery(items.conn, did)
+        if name == did:  # a group paste's own outbox: nothing of it was pasted
+            try:
+                dispatch.outbox_path(cfg.state_dir, did).unlink(missing_ok=True)
+            except OSError:
+                pass
         if behind:
             d.reason = why  # what stops the head stops d too
         return

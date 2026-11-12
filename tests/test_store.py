@@ -66,6 +66,33 @@ class StoreTest(unittest.TestCase):
         self.assertRegex(store.new_part_id(conn), r"^p[0-9a-f]{8}$")
         self.assertRegex(store.new_message_id(conn), r"^[0-9a-f]{4}$")
 
+    def test_a_state_dir_with_uri_characters_opens_the_right_file(self):
+        odd = Path(self._tmp.name) / "a#b%c?d"
+        odd.mkdir()
+        conn = store.connect(odd, create=True)
+        conn.execute("INSERT INTO meta(key, value) VALUES ('k', 'odd')")
+        conn.commit()
+        conn.close()
+        self.assertTrue((odd / store.DB_FILE).exists())
+        self.assertEqual(sorted(p.name for p in Path(self._tmp.name).iterdir()), ["a#b%c?d", "state"])  # nothing beside it
+        again = store.connect(odd)
+        self.addCleanup(again.close)
+        self.assertEqual(again.execute("SELECT value FROM meta").fetchone()["value"], "odd")
+
+    def test_fresh_id_gives_up_after_bounded_tries(self):
+        conn = self.make()
+        conn.execute("INSERT INTO rings(id) VALUES ('cccc')")
+        calls = []
+
+        def taken(_n):
+            calls.append(1)
+            return "cccc"
+        with mock.patch.object(secrets, "token_hex", side_effect=taken):
+            with self.assertRaises(StoreError) as ctx:
+                store.new_ring_id(conn)
+        self.assertEqual(len(calls), store.ID_TRIES)
+        self.assertIn("id 用完了", str(ctx.exception))
+
     def test_mnt_problem(self):
         self.assertTrue(store.mnt_problem("/mnt/c/x"))
         self.assertIsNone(store.mnt_problem(self.dir))

@@ -35,15 +35,15 @@ from .dispatch import Dispatch, DispatchError
 from .fsutil import PRIVATE_DIR, PRIVATE_FILE, private_dir, try_chmod
 from .migrate import _raw, _write_bytes
 
-JOURNAL = "migrate-0.17.json"
-REVERTED = "migrate-0.17.reverted"
+JOURNAL = dispatch.MIGRATE_JOURNAL
+REVERTED = dispatch.REVERT_MARK
 BACKUP_PREFIX = "backup-0.17-"
 JSON_FILE = "dispatches.json"
 TMP_FILE = store.DB_FILE + ".tmp"
 SIDE_FILES = ("-wal", "-shm", "-journal")  # what sqlite keeps beside a db file
 STUB = {"version": dispatch.DB_VERSION_STUB, "dispatches": [], "moved_to": store.DB_FILE}
 TRIES = 3  # dispatches.json changed while migrating: start again from the backup at most this many times
-REVERTED_NOTE = "已降回 0.16 格式；要再升級請跑 sampan migrate"
+REVERTED_NOTE = dispatch.REVERTED_NOTE
 REINSTALL_016 = "uv tool install --reinstall git+https://github.com/royalroylo/sampan@v0.16.1"
 # the fields of 0.16's Dispatch: a key of an old record that is not one of these is kept in `extra`, as 0.16 did
 OLD_FIELDS = tuple(f.name for f in fields(Dispatch) if f.name not in ("status", "in_reply_to", "thread", "extra"))

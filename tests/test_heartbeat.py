@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 from sampan import dispatch, heartbeat, mcp_server, procs, store
 from sampan.send import Caller
@@ -150,6 +151,43 @@ class ServerHeartbeatTest(unittest.TestCase):
         self.assertEqual(len(self.inboxes()), 1)
         self.assertEqual(s.serve(None), 0)  # stdin is empty: serve beats once, then shuts down
         self.assertEqual(self.inboxes(), [])
+
+    def test_no_fresh_db_while_reverted_or_not_migrated(self):
+        sd = Path(self.cfg.state_dir)
+        sd.mkdir(parents=True, exist_ok=True)
+        for name, content in ((dispatch.REVERT_MARK, ""), (dispatch.MIGRATE_JOURNAL, "{}"),
+                              ("dispatches.json", '{"version": 2, "dispatches": []}')):
+            with self.subTest(name):
+                (sd / name).write_text(content)
+                with mock.patch.object(mcp_server, "_log") as log:
+                    self.server().watch_once()
+                self.assertIn(dispatch.DispatchError.__name__, log.call_args_list[0].args[0])
+                self.assertFalse((sd / store.DB_FILE).exists())
+                (sd / name).unlink()
+
+    def test_a_pass_that_raises_does_not_end_the_watcher(self):
+        t = [0.0]
+        s = self.server(clock=lambda: t[0])
+        passes, beats, logged = [], [], []
+        real_load, real_beat = dispatch.load, heartbeat.beat
+
+        def load(*a, **k):
+            passes.append(1)
+            if len(passes) == 1:
+                raise RuntimeError("unexpected")
+            s._stop.set()  # the second pass is the last
+            return real_load(*a, **k)
+
+        def beat(*a, **k):
+            beats.append(1)
+            t[0] += 60  # the next beat is due on the next pass
+            return real_beat(*a, **k)
+        for target, name, fake in ((dispatch, "load", load), (heartbeat, "beat", beat), (mcp_server, "_log", logged.append)):
+            self.addCleanup(setattr, target, name, getattr(target, name))
+            setattr(target, name, fake)
+        s._watch(0.001)
+        self.assertEqual((len(passes), len(beats)), (2, 2))
+        self.assertIn("unexpected", logged[0])
 
     def test_unknown_caller_writes_nothing(self):
         s = self.server(caller=Caller(None, "", "", None, kind="unregistered"))
