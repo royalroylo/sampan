@@ -712,3 +712,24 @@ class DispatchStoreDoctorTest(DoctorTest):
         from tests.helpers import status_row
         checks = self.checks(rows_fn=self.rows(status_row("alpha-dev", sid="s1", id="id1")))
         self.assertFalse([c for c in checks if "心跳" in c.title and c.level == "warn"])
+
+    def test_unreadable_db_and_registry_error_are_reported(self):
+        from sampan import store
+        from tests.helpers import status_row
+        self.seed("id1", "s1", NOW.isoformat(timespec="seconds"))
+        (self.cfg.state_dir / store.DB_FILE).write_bytes(b"this is not a sqlite database" * 100)
+        checks = self.checks(rows_fn=self.rows(status_row("alpha-dev", sid="s1", id="id1")))
+        broken = [c for c in checks if "派工資料庫" in c.title]
+        self.assertEqual([c.level for c in broken], ["fail"])
+        self.assertTrue(broken[0].detail)
+
+    def test_registry_error_is_reported(self):
+        from sampan.registry import RegistryError
+        self.seed("id1", "s1", NOW.isoformat(timespec="seconds"))
+
+        def bad(cfg, run, snapshot_fn=None):
+            raise RegistryError("登記表壞了")
+        checks = self.checks(rows_fn=bad)
+        broken = [c for c in checks if "登記表" in c.title and "心跳" in c.title]
+        self.assertEqual([c.level for c in broken], ["warn"])
+        self.assertIn("登記表壞了", broken[0].detail)

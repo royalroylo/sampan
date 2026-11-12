@@ -303,9 +303,13 @@ def _dispatch_store(cfg, run, now, rows_fn, alive, start_of):
         return []
     try:
         rows = [r for r in rows_fn(cfg, run) if r.state == State.RUNNING and r.agent == "claude" and r.id]
+    except (RegistryError, OSError) as e:
+        return [Check("warn", "讀不到登記表，沒辦法檢查心跳", str(e))]
+    try:
         conn = store.connect(cfg.state_dir)
-    except (RegistryError, store.StoreError, OSError):
-        return []
+        conn.execute("SELECT 1 FROM inboxes LIMIT 1")
+    except (store.StoreError, sqlite3.Error, OSError) as e:
+        return [Check("fail", "派工資料庫讀不了，沒辦法檢查心跳", str(e))]
     try:
         stale = [r.name for r in rows
                  if heartbeat.valid(conn, session_id=r.id, conversation=r.sid, now=now, alive=alive, start_of=start_of) is None]

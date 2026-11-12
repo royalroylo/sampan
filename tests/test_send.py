@@ -2178,6 +2178,23 @@ class SearchAndInboxTest(Base):
         self.assertEqual(ids(since="2026-11-12", until="2026-11-13"), [late, early])  # newest first
         self.assertEqual(ids(limit=1), [late])
 
+    def test_search_mixed_offsets_boundaries_and_order(self):
+        # Taipei midnight 11/13 is 2026-11-12 16:00:00 UTC; the same instant is written three ways
+        at_start_z = self.keep("z", created="2026-11-12T16:00:00Z")
+        at_start_taipei = self.keep("t", created="2026-11-13T00:00:00+08:00")
+        before_z = self.keep("b", created="2026-11-12T15:59:59Z")
+        last = self.keep("l", created="2026-11-13T07:59:59+08:00")  # = 11-12 23:59:59 UTC, the latest instant
+        mid = self.keep("m", created="2026-11-12T20:00:00Z")  # text sorts before the +08:00 ones, instant is later than 16:00Z
+        conn = self.conn()
+        ids = lambda **kw: {m["id"] for m in send.search(conn, **kw)}  # noqa: E731
+        self.assertEqual(ids(since="2026-11-13"), {at_start_z, at_start_taipei, last, mid})
+        self.assertEqual(ids(until="2026-11-12"), {before_z})
+        self.assertEqual(ids(since="2026-11-12", until="2026-11-12"), {before_z})
+        # newest first by instant, not by the stored text: +08:00 text sorts before Z text of a later instant
+        newest = [m["id"] for m in send.search(conn)]
+        self.assertEqual(newest[:2], [last, mid])
+        self.assertEqual(newest[-1], before_z)
+
     def test_cmd_search_without_db_and_bad_date(self):
         rc, text = self.run_cmd(send.cmd_search, "x")
         self.assertEqual((rc, text), (0, "沒有派工"))

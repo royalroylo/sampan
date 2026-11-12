@@ -1447,7 +1447,7 @@ def search(conn, *, keyword=None, from_ids=(), to_ids=(), since=None, until=None
         where.append("(state = ? OR status = ?)")
         args += [state, state]
     sql = (f"SELECT {MESSAGE_COLUMNS} FROM messages" + (" WHERE " + " AND ".join(where) if where else "")
-           + " ORDER BY created DESC, rowid DESC")
+           + " ORDER BY datetime(created) DESC, rowid DESC")
     if limit is not None:
         sql += " LIMIT ?"
         args.append(limit)
@@ -1574,7 +1574,7 @@ def cmd_inbox(cfg, out, name, *, now_fn=_utcnow, alive=os.kill, start_of=procs.s
             out(f"最後一次門鈴：{fmt_local(parse_iso(ring['at']))}，{RING_LABELS.get(ring['result'], ring['result'])}"
                 if ring else "還沒按過門鈴")
             recent = conn.execute(f"SELECT {MESSAGE_COLUMNS} FROM messages WHERE {mine} "
-                                  f"ORDER BY created DESC, rowid DESC LIMIT {INBOX_RECENT}", who).fetchall()
+                                  f"ORDER BY datetime(created) DESC, rowid DESC LIMIT {INBOX_RECENT}", who).fetchall()
     except dispatch.DispatchError as e:
         out(f"❌ {e}")
         return 2
