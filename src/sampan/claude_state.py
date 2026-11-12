@@ -238,7 +238,8 @@ def _reply_to(path, sent):
 
 INBOX_TAKE = "mcp__sampan__inbox_take"
 INTERRUPTED = "[Request interrupted"  # Claude's record of an Esc (or a denied tool call)
-DENIED = ("doesn't want to proceed", "was rejected", "permission")  # in the error result of a tool call not allowed
+DENIED = ("doesn't want to proceed", "was rejected")  # the user said no to the call; other errors (even about
+# permissions: a classifier denial, "permission denied" from a command) leave the turn going
 
 
 def _denied(part):

@@ -34,14 +34,11 @@ def marker(code):
 
 
 def ring_pending(screen, line):
-    """The prompt holds this very ring as typed text (its marker with the same code, then as much of the line as the
-    prompt shows). Never a paste mark: a user's own paste looks the same, and sampan never presses Enter on it."""
+    """The prompt holds exactly this ring's line as typed text (trailing whitespace aside). Never a paste mark (a
+    user's own paste looks the same) and never the line with more typed after it: Enter would send the user's words."""
     if claude_input_state(screen) != "draft":
         return False
-    text = (claude_prompt_text(screen) or "").strip()
-    head = line.split("〕", 1)[0] + "〕"
-    n = min(len(text), len(line))
-    return n >= len(head) and text[:n] == line[:n]
+    return (claude_prompt_text(screen) or "").strip() == line.strip()
 
 
 def ring_text(code, counts, n):

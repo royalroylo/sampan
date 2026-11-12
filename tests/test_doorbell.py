@@ -129,6 +129,14 @@ class FixRoundOneTest(DoorbellBase):
         self.assertEqual(self.rings()[0]["result"], "no_answer")
         self.assertEqual((got.state, got.reason), ("queued", deliver.REASON_DRAFT))  # the paste waits for an empty box
 
+    def test_ring_line_plus_typed_text_never_gets_enter(self):
+        a = self.submit_at(0)
+        ring = self.ring(a)
+        run = runner(ring_screen(self.ring_line(ring) + " 我自己補的字"))
+        self.advance(run, a.id, later(40))
+        self.assertEqual(run.sent_keys(), [])
+        self.assertEqual(self.rings()[0]["result"], "no_answer")
+
     def test_ringing_too_long_with_an_idle_target_is_no_answer(self):
         a = self.submit_at(0)
         ring = self.ring(a)
@@ -434,6 +442,13 @@ class AfterMarkerTest(unittest.TestCase):
     def test_a_failed_tool_is_mid_turn(self):
         self.write([ts.user("門鈴 abcd"), tool_use("Bash"), tool_result("Exit code 1", error=True)])
         self.assertFalse(after_marker(self.path, "門鈴 abcd").ended)
+
+    def test_other_errors_that_mention_permission_are_mid_turn(self):
+        for text in ("Exit code 1\nerror: permission denied for table messages",
+                     "Permission for this action was denied by the Claude Code auto mode classifier. If you have other "
+                     "tasks that don't depend on this action, continue working on those."):
+            self.write([ts.user("門鈴 abcd"), tool_use("Bash"), tool_result(text, error=True)])
+            self.assertFalse(after_marker(self.path, "門鈴 abcd").ended, text)
 
     def test_denied_or_interrupted_tool_ends_the_turn(self):
         self.write([ts.user("門鈴 abcd"), tool_use("mcp__sampan__inbox_take"), tool_result(
