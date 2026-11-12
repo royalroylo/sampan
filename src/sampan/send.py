@@ -11,7 +11,7 @@ import unicodedata
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
-from . import actionlog, deliver, dispatch
+from . import actionlog, deliver, deliveries, dispatch
 from .claude_state import Reply, command_reply, find_transcript
 from .claude_state import reply_to as claude_reply_to
 from .clock import fmt_local, parse_iso
@@ -54,7 +54,8 @@ REASON_MENU_SEEN = deliver.REASON_BLOCKED  # one look at a menu after a direct s
 READY = ("idle", "shell")  # Claude statuses where the prompt takes input ("shell": the turn is over, a background
 # shell task still runs; Claude 2.1.287 reports it until the task ends, so waiting for "idle" would hold messages)
 BUSY = {"busy": "對方正在忙", "working": "對方正在忙", "waiting": "對方在等使用者回應"}
-WAITING = {*BUSY.values(), REASON_NOT_RUNNING, REASON_NO_THREAD}  # queued reasons that clear by themselves: no limit
+REASON_BEHIND = "排在前面的派工還沒送完"  # a direct send waits for those before it, and the ones after it for it
+WAITING = {*BUSY.values(), REASON_NOT_RUNNING, REASON_NO_THREAD, REASON_BEHIND}  # queued reasons that clear by themselves: no limit
 RUNNING_VERSION = current_version()  # read once at import: the code this process runs, even after an upgrade on disk
 
 
@@ -68,6 +69,8 @@ def _log(cfg, label, line):
 
 
 STATE_LABELS = {"queued": "排隊中", "sent": "已送出、等回覆", "done": "已回覆", "failed": "失敗", "cancelled": "已取消"}
+STATUS_LABELS = {"queued": "排隊中", "rung": "已按門鈴", "taken": "已取走", "partial": "已有回覆段落", "pasted": "已貼全文",
+                 "replied": "已回覆", "unanswered": "已取走沒回覆", "failed": "失敗", "cancelled": "已取消"}
 LOG_PREVIEW = 100
 
 
@@ -460,11 +463,12 @@ def advance(cfg, run, did, *, sleep, snapshot_fn=None, status_fn=None, now=None,
 
         def save():
             dispatch.checkpoint(cfg.state_dir, items)
-        if d.state == "queued":
-            _deliver(cfg, run, d, _row_of(rows(), d.to_id, d.to_name), sleep, now, save)
-            _expire(cfg, d, now)
-        elif d.state == "sent":
-            _check(cfg, d, _row_of(rows(), d.to_id, d.to_name), now, run)
+        with dispatch._sqlite_errors(cfg.state_dir):  # deliveries are read and written through items.conn
+            if d.state == "queued":
+                _deliver(cfg, run, d, _row_of(rows(), d.to_id, d.to_name), sleep, now, save, items)
+                _expire(cfg, d, now)
+            elif d.state == "sent":
+                _check(cfg, d, _row_of(rows(), d.to_id, d.to_name), now, run, items)
         if d.batch is None:
             if report and d.state in dispatch.FINISHED:
                 d.notify = False  # the tool result tells the caller
@@ -491,10 +495,12 @@ def advance_batch(cfg, run, bid, *, sleep, snapshot_fn=None, status_fn=None, now
                     report_batch=report) for i in ids]
 
 
-def _deliver(cfg, run, d, row, sleep, now, save):
+def _deliver(cfg, run, d, row, sleep, now, save, items):
     """Two-phase: the record is written as `sent` (「送出中」) before any key is pressed or `codex queue` runs, so a
     process killed in the middle never sends it again (at most once: it later fails as 找不到回覆). It goes back to
-    queued only when the step says nothing was sent."""
+    queued only when the step says nothing was sent.
+    Every message queued for the same target before its first direct send goes with it, as one paste (deliveries:
+    one active delivery per target at a time); a direct send goes alone, once nothing is before it."""
     if row is None or row.state in GONE:
         d.reason = REASON_NOT_RUNNING
         return
@@ -508,9 +514,6 @@ def _deliver(cfg, run, d, row, sleep, now, save):
         if not row.sid:
             d.reason = REASON_NO_THREAD
             return
-        d.thread_id = row.sid
-        _sending(d, now, save)
-        why = deliver.to_codex(cfg, run, row.sid, d.text)  # `codex queue` waits for the turn by itself
     else:
         if row.agent_status not in READY:
             d.reason = BUSY.get(row.agent_status, "看不出對方是否閒著")
@@ -518,22 +521,94 @@ def _deliver(cfg, run, d, row, sleep, now, save):
         if row.pane is None:
             d.reason = REASON_NOT_RUNNING
             return
-        outbox = dispatch.outbox_path(cfg.state_dir, d.id)
-        if not outbox.exists():
-            outbox = dispatch.write_outbox(cfg.state_dir, d.id, d.text)
-        if d.raw:
-            d.thread_id = row.sid or None  # the conversation it went to: a /clear changes it
-        _sending(d, now, save)
-        why = deliver.to_claude(Tmux(run), row.pane, outbox, d.id, sleep, raw=d.raw)
+    target = row.id or row.name
+    if _busy_with_delivery(items, target, now):
+        d.reason = BUSY["busy"]
+        return
+    group = _next_group(items, d, row)
+    if group is None:
+        d.reason = REASON_BEHIND
+        return
+    text = d.text if len(group) == 1 else deliver.compose_group(group)
+    try:
+        did = deliveries.open_delivery(items.conn, kind="raw" if d.raw else "paste", to_id=target, to_name=row.name,
+                                       messages=[x.id for x in group], text=text, conversation=row.sid or None,
+                                       cursor=None, now=now)
+    except deliveries.ActiveDelivery:
+        d.reason = BUSY["busy"]
+        return
+    name = d.id if len(group) == 1 else did  # one message: its own outbox and tmux buffer, as before
+    if row.agent != "codex":  # written before the record says 送出中: a failed write leaves it queued
+        outbox = dispatch.outbox_path(cfg.state_dir, name)
+        if len(group) > 1 or not outbox.exists():
+            outbox = dispatch.write_outbox(cfg.state_dir, name, text)
+    for x in group:
+        if row.agent == "codex":
+            x.thread_id = row.sid
+        elif x.raw:
+            x.thread_id = row.sid or None  # the conversation it went to: a /clear changes it
+        x.state, x.sent_at, x.reason = "sent", _iso(now), REASON_SENDING
+    save()
+    if row.agent == "codex":
+        why = deliver.to_codex(cfg, run, row.sid, text)  # `codex queue` waits for the turn by itself
+    else:
+        why = deliver.to_claude(Tmux(run), row.pane, outbox, name, sleep, raw=d.raw)
+    ids = "、".join(x.id for x in group)
     if isinstance(why, deliver.Unsure):  # it may have reached the target: never send the same dispatch twice
-        _finish(d, "failed", now, f"{REASON_PASTED}：{why}" if isinstance(why, deliver.Pasted) else str(why))
-        _log(cfg, "send", f"派工 {d.id}：{d.reason}")
+        for x in group:
+            _finish(x, "failed", now, f"{REASON_PASTED}：{why}" if isinstance(why, deliver.Pasted) else str(why))
+        deliveries.end_delivery(items.conn, did, now)
+        _log(cfg, "send", f"派工 {ids}：{d.reason}")
         return
     if why:
-        d.state, d.sent_at, d.reason = "queued", None, why  # nothing was sent: try again later
+        for x in group:
+            x.state, x.sent_at, x.reason = "queued", None, why  # nothing was sent: try again later
+        deliveries.drop_delivery(items.conn, did)
         return
-    d.reason = ""
-    _log(cfg, "send", f"派工 {d.id}：已送到 {d.to_name}")
+    for x in group:
+        x.reason = ""
+    if len(group) == 1:
+        _log(cfg, "send", f"派工 {d.id}：已送到 {d.to_name}")
+    else:
+        _log(cfg, "send", f"派工 {ids}：一起送到 {d.to_name}（送達 {did}，{len(group)} 則）")
+
+
+def _for_target(x, row):
+    """Whether dispatch x is addressed to row's session (by id; by name only for an old dispatch with no id)."""
+    return x.to_id == row.id if x.to_id else x.to_name == row.name
+
+
+def _next_group(items, d, row):
+    """The dispatches to deliver together with d now, by created: every one still queued for the same target up to
+    (not including) the first direct send, whoever sent it; a direct send alone when nothing is queued before it.
+    None when d has to wait for others before it."""
+    line = sorted((x for x in items if x.state == "queued" and (x.status or "queued") == "queued"
+                   and x.to_agent == row.agent and _for_target(x, row)), key=_created_key)
+    group = []
+    for x in line:
+        if x.raw:
+            if not group and x is d:
+                return [d]
+            break
+        group.append(x)
+    return group if any(x is d for x in group) else None
+
+
+def _created_key(x):
+    return parse_iso(x.created) or datetime.max.replace(tzinfo=timezone.utc)
+
+
+def _busy_with_delivery(items, target, now):
+    """Whether target still has an active delivery that a message is waiting on. One whose messages are all finished
+    (none sent any more) is ended here, so it cannot hold the target forever."""
+    active = deliveries.active_delivery(items.conn, target)
+    if active is None:
+        return False
+    ids = set(deliveries.members(items.conn, active["id"]))
+    if any(x.id in ids and x.state == "sent" for x in items):
+        return True
+    deliveries.end_delivery(items.conn, active["id"], now)
+    return False
 
 
 def _expire(cfg, d, now):
@@ -549,11 +624,6 @@ def _expire(cfg, d, now):
     last = f"（最後一次：{d.reason}）" if d.reason else ""
     _finish(d, "failed", now, f"排隊 {QUEUE_LIMIT_S // 60} 分鐘還送不出去{last}")
     _log(cfg, "send", f"派工 {d.id}：{d.reason}")
-
-
-def _sending(d, now, save):
-    d.state, d.sent_at, d.reason = "sent", _iso(now), REASON_SENDING
-    save()
 
 
 def _finish(d, state, now, reason="", reply=None):
@@ -582,7 +652,44 @@ def _starting(d, row, now):
     return False
 
 
-def _check(cfg, d, row, now, run=None):
+def _check(cfg, d, row, now, run=None, items=None):
+    """Judge a sent dispatch by the text of its delivery (a group paste: the whole pasted text). When it finishes, the
+    other messages of that delivery finish with it: a reply is split by 〔回覆 id〕 markers into one part each."""
+    conn = getattr(items, "conn", None)
+    delivery = deliveries.delivery_of(conn, d.id) if conn is not None else None
+    _judge(cfg, d, row, now, run, delivery["text"] if delivery is not None and delivery["text"] else d.text)
+    if delivery is not None:
+        _settle(conn, items, d, delivery, now)
+
+
+def _settle(conn, items, d, delivery, now):
+    """Carry d's judgement to the other messages of its delivery (only while it is active: a delivery that already
+    ended, e.g. from a 0.16 migration, settles d alone). Done: each gets its marked section, or the whole reply."""
+    active = delivery["state"] == deliveries.ACTIVE
+    ids = deliveries.members(conn, delivery["id"]) if active else [d.id]
+    others = [x for x in items if x is not d and x.id in ids and x.state == "sent"]
+    if d.state == "sent":
+        for x in others:
+            x.reason = d.reason  # the two-look marks are the delivery's
+            if d.thread_id:
+                x.thread_id = d.thread_id
+        return
+    if d.state == "done":
+        whole = d.reply
+        every = deliveries.members(conn, delivery["id"], archived=True)  # a cancelled one's section is not another's
+        marked = deliveries.split_markers(whole, every) if len(every) > 1 else {}
+        for x in [d, *others]:
+            text, how = (marked[x.id], "marker") if x.id in marked else (whole, "whole")
+            deliveries.add_part(conn, delivery_id=delivery["id"], message=x.id, text=text, how=how, now=now)
+            _finish(x, "done", now, reply=text)
+    else:
+        for x in others:
+            _finish(x, d.state, now, d.reason)
+    if active:
+        deliveries.end_delivery(conn, delivery["id"], now)
+
+
+def _judge(cfg, d, row, now, run, text):
     was_starting = d.reason == REASON_STARTING
     if _starting(d, row, now) or (d.startup and row is not None and row.state == State.AWAIT_TRUST):
         d.reason = REASON_STARTING  # wait, do not judge
@@ -602,7 +709,7 @@ def _check(cfg, d, row, now, run=None):
     if d.raw:
         _check_raw(cfg, d, row, now, run)
         return
-    reply = _reply(cfg, row, d.text)
+    reply = _reply(cfg, row, text)
     if reply.found and row.agent == "codex":
         # Codex: only the rollout says the turn is over; idle looks (the screen can be misread mid-turn) never do
         if reply.text and (reply.done or reply.closed):
@@ -825,12 +932,27 @@ def cancel(cfg, did, *, now=None, wait_s=None):
                 return refusal
             was = d.state
             _finish(d, "cancelled", now or _utcnow(), "已取消" if was == "queued" else REASON_STOP_WATCHING)
+            if was == "sent":
+                with dispatch._sqlite_errors(cfg.state_dir):
+                    _leave_delivery(items, d, now or _utcnow())
             result = replace(d)
     except (dispatch.DispatchError, OSError) as e:
         return str(e)
     what = "取消" if was == "queued" else REASON_STOP_WATCHING
     _log(cfg, "cancel", f"派工 {did}：{what}（給 {result.to_name}）")
     return result
+
+
+def _leave_delivery(items, d, now):
+    """d no longer waits for its delivery: its link is archived (the others of it go on), and a delivery nobody waits
+    for any more ends."""
+    delivery = deliveries.delivery_of(items.conn, d.id)
+    if delivery is None or delivery["state"] != deliveries.ACTIVE:
+        return
+    deliveries.archive_member(items.conn, delivery["id"], d.id)
+    ids = set(deliveries.members(items.conn, delivery["id"]))
+    if not any(x.id in ids and x.state == "sent" for x in items):
+        deliveries.end_delivery(items.conn, delivery["id"], now)
 
 
 def cancel_done_text(d):

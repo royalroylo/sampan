@@ -1033,7 +1033,8 @@ class WatchTest(Base):
     def test_watch_once_advances_only_this_callers_dispatches(self):
         mine = send.submit(self.cfg, FakeRunner(strict=True), CALLER_A, "b", "hi", notify=False, now=NOW,
                            status_fn=self.status_fn)
-        other = send.submit(self.cfg, FakeRunner(strict=True), Caller("c", "codex", "codex", "%3"), "b", "yo",
+        # to another target: one queued for the same target would go out with mine (a group paste)
+        other = send.submit(self.cfg, FakeRunner(strict=True), Caller("c", "codex", "codex", "%3"), "a", "yo",
                             notify=False, now=NOW, status_fn=self.status_fn)
         server = mcp_server.Server(self.cfg, tmux_runner(), io.StringIO(), io.StringIO(), caller=CALLER_A,
                                    sleep=lambda _s: None, clock=lambda: 0.0, status_fn=self.status_fn,

@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-from sampan import deliver, dispatch, send, store
+from sampan import deliver, deliveries, dispatch, send, store
 from sampan.send import Caller
 from sampan.status import State
 from tests.fakes import FakeRunner, cp
@@ -1670,12 +1670,15 @@ class BatchTest(BatchBase):
         p = send.submit(self.cfg, FakeRunner(strict=True), CALLER_ME, "a", "plain", notify=True, now=NOW,
                         status_fn=self.status_fn)
         a, c = b.items
+        self.assertEqual(self.advance(tmux_runner(), p.id).state, "queued")  # a has not answered its batch item yet
+        self.transcript(SID_A, [user(self.stored(a.id).text), assistant("from a")])
+        self.transcript(SID_C2, [user(self.stored(c.id).text), assistant("from c")])
+        for x in (a.id, c.id):
+            self.assertEqual(self.advance(FakeRunner(strict=True), x, later(5)).state, "done")
+        self.assertEqual(self.advance(tmux_runner(), p.id, later(5)).state, "sent")
         self.transcript(SID_A, [user(self.stored(a.id).text), assistant("from a"),
                                 user(self.stored(p.id).text), assistant("p")])
-        self.transcript(SID_C2, [user(self.stored(c.id).text), assistant("from c")])
-        self.assertEqual(self.advance(tmux_runner(), p.id).state, "sent")
-        for x in (a.id, c.id, p.id):
-            self.assertEqual(self.advance(FakeRunner(strict=True), x, later(5)).state, "done")
+        self.assertEqual(self.advance(FakeRunner(strict=True), p.id, later(9)).state, "done")
         self.set_row("me", agent_status="idle")
         run = tmux_runner()
         self.advance(run, p.id, later(10))
@@ -1771,3 +1774,204 @@ class CmdSendBatchTest(BatchBase):
     def test_nobody_to_send_is_2(self):
         self.assertEqual(self.cmd(FakeRunner(strict=True), ["b"], wait=False), 2)
         self.assertTrue(self.lines[-1].startswith("❌"))
+
+
+CALLER_Z = Caller("z", "work", "claude", "%9", id="cccccccc-0000-4000-8000-000000000003")
+
+
+class GroupPasteTest(Base):
+    """Every message queued for one target is pasted at once (by created), split back by 〔回覆 id〕 markers."""
+
+    def submit_at(self, seconds, to="b", message="hello", caller=CALLER_A, raw=False):
+        return send.submit(self.cfg, FakeRunner(strict=True), caller, to, message, notify=False, now=later(seconds),
+                           status_fn=self.status_fn, raw=raw)
+
+    def three(self):
+        return [self.submit_at(0, message="from a"), self.submit_at(1, message="from terminal", caller=send.TERMINAL),
+                self.submit_at(2, message="from z", caller=CALLER_Z)]
+
+    def delivery_ids(self, *dids):
+        conn = store.connect(self.cfg.state_dir)
+        self.addCleanup(conn.close)
+        return [deliveries.delivery_of(conn, did)["id"] for did in dids]
+
+    def test_queued_to_one_target_are_pasted_together_in_time_order(self):
+        a, t, z = self.three()
+        run = tmux_runner()
+        got = self.advance(run, z.id, later(3))  # any one of them sends all of them
+        self.assertEqual(got.state, "sent")
+        writes = tmux_writes(run)
+        self.assertEqual([w[2] for w in writes], ["load-buffer", "paste-buffer", "send-keys"])
+        did = self.delivery_ids(a.id, t.id, z.id)
+        self.assertEqual(len(set(did)), 1)
+        outbox = dispatch.outbox_path(self.cfg.state_dir, did[0])
+        self.assertEqual(writes[0], ["tmux", "-u", "load-buffer", "-b", f"sampan-{did[0]}", str(outbox)])
+        text = outbox.read_text()
+        self.assertEqual(text, deliver.compose_group([self.stored(x.id) for x in (a, t, z)]))
+        self.assertLess(text.index(f"【1／3｜派工 {a.id}｜來自 a（alice）"), text.index(f"【2／3｜派工 {t.id}｜來自 終端機｜"))
+        self.assertLess(text.index(f"【2／3｜派工 {t.id}"), text.index(f"【3／3｜派工 {z.id}｜來自 z（work）"))
+        self.assertNotIn("〔sampan 轉送｜來自", text)  # no source line of its own
+        self.assertEqual([self.stored(x.id).state for x in (a, t, z)], ["sent"] * 3)
+        self.assertEqual([self.stored(x.id).status for x in (a, t, z)], [""] * 3)  # derived: pasted
+        conn = store.connect(self.cfg.state_dir)
+        self.addCleanup(conn.close)
+        row = conn.execute("SELECT kind, state, text FROM deliveries WHERE id=?", (did[0],)).fetchone()
+        self.assertEqual(tuple(row), ("paste", "active", text))
+        self.assertEqual(conn.execute("SELECT status FROM messages WHERE id=?", (a.id,)).fetchone()[0], "pasted")
+        self.assertEqual(deliveries.members(conn, did[0]), [a.id, t.id, z.id])
+
+    def test_markers_split_and_missing_ones_get_the_whole(self):
+        a, t, z = self.three()
+        self.advance(tmux_runner(), a.id, later(3))
+        text = dispatch.outbox_path(self.cfg.state_dir, self.delivery_ids(a.id)[0]).read_text()
+        whole = f"〔回覆 {a.id}〕\nanswer for a\n順便說〔回覆 {t.id}〕不算\n〔回覆 zzzz〕 also not a marker"
+        self.transcript(SID_B, [user(text), assistant(whole)])
+        got = self.advance(FakeRunner(strict=True), t.id, later(30))
+        self.assertEqual(got.state, "done")
+        a2, t2, z2 = (self.stored(x.id) for x in (a, t, z))
+        self.assertEqual([x.state for x in (a2, t2, z2)], ["done"] * 3)
+        self.assertEqual(a2.reply, f"answer for a\n順便說〔回覆 {t.id}〕不算\n〔回覆 zzzz〕 also not a marker")
+        self.assertEqual((t2.reply, z2.reply), (whole, whole))
+        conn = store.connect(self.cfg.state_dir)
+        self.addCleanup(conn.close)
+        self.assertEqual([(p["how"], p["latest"]) for p in deliveries.parts(conn, a.id)], [("marker", True)])
+        self.assertEqual([p["how"] for p in deliveries.parts(conn, t.id)], ["whole"])
+        self.assertEqual(conn.execute("SELECT status FROM messages WHERE id=?", (z.id,)).fetchone()[0], "replied")
+        self.assertIsNone(deliveries.active_delivery(conn, ID_B))
+
+    def test_single_message_format_unchanged(self):
+        d = self.submit_at(0, message="only one")
+        run = tmux_runner()
+        self.advance(run, d.id, later(1))
+        outbox = dispatch.outbox_path(self.cfg.state_dir, d.id)
+        self.assertEqual(outbox.read_text(), deliver.compose("a", "alice", d.id, "only one"))
+        self.assertEqual(tmux_writes(run)[0], ["tmux", "-u", "load-buffer", "-b", f"sampan-{d.id}", str(outbox)])
+        self.transcript(SID_B, [user(d.text), assistant("one answer")])
+        d = self.advance(FakeRunner(strict=True), d.id, later(30))
+        self.assertEqual((d.state, d.reply), ("done", "one answer"))
+        conn = store.connect(self.cfg.state_dir)
+        self.addCleanup(conn.close)
+        self.assertEqual([p["how"] for p in deliveries.parts(conn, d.id)], ["whole"])
+
+    def test_raw_keeps_its_place(self):
+        a = self.submit_at(0, message="first")
+        r = self.submit_at(1, message="/compact", raw=True)
+        b = self.submit_at(2, message="after")
+        run = tmux_runner()
+        self.assertEqual(self.advance(run, b.id, later(3)).state, "queued")  # a raw is before it
+        self.assertEqual(self.advance(run, r.id, later(3)).state, "queued")  # a is before it
+        self.assertEqual(tmux_writes(run), [])
+        run = tmux_runner()
+        self.assertEqual(self.advance(run, a.id, later(3)).state, "sent")
+        self.assertEqual(dispatch.outbox_path(self.cfg.state_dir, a.id).read_text(), a.text)  # alone: as it was
+        self.assertEqual(self.stored(b.id).state, "queued")
+        self.assertEqual(self.advance(run, r.id, later(4)).state, "queued")  # a is still being answered
+        self.assertEqual(len(tmux_writes(run)), 3)
+        self.transcript(SID_B, [user(a.text), assistant("done a")])
+        self.assertEqual(self.advance(FakeRunner(strict=True), a.id, later(30)).state, "done")
+        self.assertEqual(self.advance(FakeRunner(strict=True), b.id, later(31)).state, "queued")
+        run = tmux_runner()
+        self.assertEqual(self.advance(run, r.id, later(31)).state, "sent")
+        self.assertEqual(tmux_writes(run)[0][4], f"sampan-{r.id}")
+        self.assertEqual(self.advance(FakeRunner(strict=True), b.id, later(32)).state, "queued")  # r runs
+        self.set_row("b", sid="99999999-2222-3333-4444-555555555555")  # /compact… started a new conversation
+        self.assertEqual(self.advance(FakeRunner(strict=True), r.id, later(60)).state, "done")
+        run = tmux_runner()
+        self.assertEqual(self.advance(run, b.id, later(61)).state, "sent")
+        self.assertEqual(dispatch.outbox_path(self.cfg.state_dir, b.id).read_text(), b.text)
+
+    def test_codex_paste_group(self):
+        a = self.submit_at(0, to="c", message="one")
+        b = self.submit_at(1, to="c", message="two", caller=CALLER_Z)
+        run = FakeRunner(strict=True).on(["codex", "queue"], cp())
+        self.assertEqual(self.advance(run, a.id, later(2)).state, "sent")
+        self.assertEqual(len(run.calls), 1)
+        group = deliver.compose_group([self.stored(a.id), self.stored(b.id)])
+        self.assertEqual(run.calls[0]["args"], ["codex", "queue", "--thread", TID_C, "--message", group])
+        self.assertEqual(self.stored(b.id).state, "sent")
+        self.rollout(TID_C, [codex_item("t1", "UserMessage", group),
+                             codex_item("t1", "AgentMessage", f"〔回覆 {b.id}〕two done", "final_answer"),
+                             codex_done("t1", f"〔回覆 {b.id}〕two done")])
+        self.advance(FakeRunner(strict=True), a.id, later(9))
+        self.assertEqual((self.stored(a.id).reply, self.stored(b.id).reply), (f"〔回覆 {b.id}〕two done", "two done"))
+
+    def test_nothing_pasted_puts_the_group_back_and_forgets_the_delivery(self):
+        a, t, z = self.three()
+        got = self.advance(tmux_runner(DRAFT), a.id, later(3))
+        self.assertEqual((got.state, got.reason), ("queued", "對方輸入框有未送出的字"))
+        self.assertEqual([self.stored(x.id).state for x in (t, z)], ["queued", "queued"])
+        conn = store.connect(self.cfg.state_dir)
+        self.addCleanup(conn.close)
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM deliveries").fetchone()[0], 0)
+
+    def test_group_failure_fails_every_member(self):
+        a, t, z = self.three()
+        self.advance(tmux_runner(), a.id, later(3))
+        self.set_row("b", state=State.STOPPED)
+        self.advance(FakeRunner(strict=True), z.id, later(30))
+        self.assertEqual({self.stored(x.id).reason for x in (a, t, z)}, {send.REASON_STOPPED})
+        self.assertEqual({self.stored(x.id).state for x in (a, t, z)}, {"failed"})
+
+    def test_cancelling_every_member_ends_the_delivery(self):
+        a = self.submit_at(0)
+        self.advance(tmux_runner(), a.id, later(1))
+        b = self.submit_at(2, message="next")
+        self.assertEqual(self.advance(tmux_runner(), b.id, later(3)).state, "queued")
+        self.assertEqual(self.stored(b.id).reason, "對方正在忙")
+        send.cancel(self.cfg, a.id, now=later(4))
+        conn = store.connect(self.cfg.state_dir)
+        self.addCleanup(conn.close)
+        self.assertEqual(conn.execute("SELECT archived FROM delivery_messages WHERE message=?", (a.id,)).fetchone()[0], 1)
+        self.assertIsNone(deliveries.active_delivery(conn, ID_B))
+        self.assertEqual(self.advance(tmux_runner(), b.id, later(5)).state, "sent")
+
+    def test_cancelling_one_member_leaves_the_others_waiting(self):
+        a, t, z = self.three()
+        self.advance(tmux_runner(), a.id, later(3))
+        send.cancel(self.cfg, t.id, now=later(4))
+        conn = store.connect(self.cfg.state_dir)
+        self.addCleanup(conn.close)
+        did = deliveries.active_delivery(conn, ID_B)["id"]
+        self.assertEqual(deliveries.members(conn, did), [a.id, z.id])
+        whole = f"〔回覆 {t.id}〕not for z\n〔回覆 {z.id}〕for z"
+        self.transcript(SID_B, [user(dispatch.outbox_path(self.cfg.state_dir, did).read_text()), assistant(whole)])
+        self.advance(FakeRunner(strict=True), z.id, later(30))
+        self.assertEqual([self.stored(x.id).state for x in (a, t, z)], ["done", "cancelled", "done"])
+        self.assertEqual((self.stored(a.id).reply, self.stored(z.id).reply), (whole, "for z"))
+
+    def test_the_last_member_left_still_gets_its_marked_section(self):
+        a, t, z = self.three()
+        self.advance(tmux_runner(), a.id, later(3))
+        did = self.delivery_ids(a.id)[0]
+        send.cancel(self.cfg, a.id, now=later(4))
+        send.cancel(self.cfg, t.id, now=later(4))
+        whole = f"〔回覆 {a.id}〕x\n〔回覆 {z.id}〕for z"
+        self.transcript(SID_B, [user(dispatch.outbox_path(self.cfg.state_dir, did).read_text()), assistant(whole)])
+        self.assertEqual(self.advance(FakeRunner(strict=True), z.id, later(30)).reply, "for z")
+
+    def test_purge_removes_the_outbox_of_a_group_paste(self):
+        a, t, z = self.three()
+        self.advance(tmux_runner(), a.id, later(3))
+        did = self.delivery_ids(a.id)[0]
+        self.transcript(SID_B, [user(dispatch.outbox_path(self.cfg.state_dir, did).read_text()), assistant("all")])
+        self.advance(FakeRunner(strict=True), a.id, later(30))
+        self.assertTrue(dispatch.outbox_path(self.cfg.state_dir, did).exists())
+        with dispatch.transaction(self.cfg.state_dir) as items:
+            items.conn.execute("DELETE FROM meta WHERE key='purged_at'")
+        with dispatch.transaction(self.cfg.state_dir, keep_days=0):
+            pass
+        self.assertFalse(dispatch.outbox_path(self.cfg.state_dir, did).exists())
+
+    def test_pasted_message_whose_delivery_ended_still_completes(self):  # migrated 0.16 data
+        d = self.submit_at(0)
+        self.advance(tmux_runner(), d.id, later(1))
+        with dispatch.transaction(self.cfg.state_dir) as items:
+            items.conn.execute("UPDATE deliveries SET state='ended'")
+        self.transcript(SID_B, [user(d.text), assistant("still read")])
+        d = self.advance(FakeRunner(strict=True), d.id, later(30))
+        self.assertEqual((d.state, d.reply), ("done", "still read"))
+
+    def test_status_labels(self):
+        self.assertEqual(send.STATUS_LABELS, {
+            "queued": "排隊中", "rung": "已按門鈴", "taken": "已取走", "partial": "已有回覆段落", "pasted": "已貼全文",
+            "replied": "已回覆", "unanswered": "已取走沒回覆", "failed": "失敗", "cancelled": "已取消"})

@@ -249,15 +249,17 @@ def _purge_if_due(conn, state_dir, keep_days):
     if last is not None and now - last < PURGE_EVERY:
         return
     gone = purge(conn, now, keep_days)
+    names = [n for did in gone for n in (did, f"{did}-notice")]  # the outbox of the message and of its failure notice
+    names += sorted({r["delivery"] for did in gone  # and of a group paste it was in
+                     for r in conn.execute("SELECT delivery FROM delivery_messages WHERE message=?", (did,))})
     conn.execute("INSERT INTO meta (key, value) VALUES ('purged_at', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                  (now.isoformat(timespec="seconds"),))
     conn.commit()
-    for did in gone:
-        for name in (did, f"{did}-notice"):  # the outbox of the message and of its failure notice
-            try:
-                outbox_path(state_dir, name).unlink(missing_ok=True)
-            except OSError:
-                pass
+    for name in names:
+        try:
+            outbox_path(state_dir, name).unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 @contextmanager

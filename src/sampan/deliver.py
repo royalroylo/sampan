@@ -6,6 +6,7 @@ into an empty prompt. Codex: `codex queue --thread` takes the text as one argv e
 import os
 import subprocess
 
+from .clock import fmt_local, parse_iso
 from .codex_daemon import CODEX_NOT_FOUND, first_line
 from .launch import codex_env
 from .screens import claude_input_state, claude_prompt_text
@@ -41,6 +42,27 @@ def source_line(from_name, from_profile, did):
 
 def compose(from_name, from_profile, did, message):
     return source_line(from_name, from_profile, did) + "\n" + message
+
+
+GROUP_HEADER = "〔sampan 轉送｜{n} 則，依時間順序；前後衝突時以後面的為準｜每則請用〔回覆 <派工id>〕開頭分段回覆，sampan 會帶回〕"
+
+
+def body(text):
+    """A dispatch's text without its source line (the message as the sender wrote it)."""
+    if text.startswith("〔sampan 轉送｜") and "\n" in text:
+        return text.split("\n", 1)[1]
+    return text
+
+
+def compose_group(items):
+    """One text for several dispatches to one target (in the order given): a header asking for one 〔回覆 <id>〕 section
+    per message, then each message numbered with its id, sender and local time, without its own source line."""
+    n = len(items)
+    blocks = [GROUP_HEADER.format(n=n)]
+    for i, d in enumerate(items, 1):
+        who = f"{d.from_name}（{d.from_profile}）" if d.from_profile else d.from_name
+        blocks.append(f"【{i}／{n}｜派工 {d.id}｜來自 {who}｜{fmt_local(parse_iso(d.created))}】\n{body(d.text)}")
+    return "\n\n".join(blocks)
 
 
 def to_claude(tmux, pane_id, outbox, did, sleep, raw=False):
