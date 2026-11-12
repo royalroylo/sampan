@@ -1858,20 +1858,19 @@ class GroupPasteTest(Base):
         r = self.submit_at(1, message="/compact", raw=True)
         b = self.submit_at(2, message="after")
         run = tmux_runner()
-        self.assertEqual(self.advance(run, b.id, later(3)).state, "queued")  # a raw is before it
-        self.assertEqual(self.advance(run, r.id, later(3)).state, "queued")  # a is before it
-        self.assertEqual(tmux_writes(run), [])
-        run = tmux_runner()
-        self.assertEqual(self.advance(run, a.id, later(3)).state, "sent")
+        got = self.advance(run, b.id, later(3))  # a raw is before it: the head of the line (a) goes instead
+        self.assertEqual((got.state, got.reason), ("queued", send.REASON_BEHIND))
+        self.assertEqual(self.stored(a.id).state, "sent")
+        self.assertEqual(self.stored(r.id).state, "queued")
         self.assertEqual(dispatch.outbox_path(self.cfg.state_dir, a.id).read_text(), a.text)  # alone: as it was
-        self.assertEqual(self.stored(b.id).state, "queued")
+        self.assertEqual(tmux_writes(run)[0][4], f"sampan-{a.id}")
         self.assertEqual(self.advance(run, r.id, later(4)).state, "queued")  # a is still being answered
         self.assertEqual(len(tmux_writes(run)), 3)
         self.transcript(SID_B, [user(a.text), assistant("done a")])
         self.assertEqual(self.advance(FakeRunner(strict=True), a.id, later(30)).state, "done")
-        self.assertEqual(self.advance(FakeRunner(strict=True), b.id, later(31)).state, "queued")
         run = tmux_runner()
-        self.assertEqual(self.advance(run, r.id, later(31)).state, "sent")
+        self.assertEqual(self.advance(run, b.id, later(31)).state, "queued")  # r is next, alone
+        self.assertEqual(self.stored(r.id).state, "sent")
         self.assertEqual(tmux_writes(run)[0][4], f"sampan-{r.id}")
         self.assertEqual(self.advance(FakeRunner(strict=True), b.id, later(32)).state, "queued")  # r runs
         self.set_row("b", sid="99999999-2222-3333-4444-555555555555")  # /compact… started a new conversation
@@ -1948,6 +1947,42 @@ class GroupPasteTest(Base):
         whole = f"〔回覆 {a.id}〕x\n〔回覆 {z.id}〕for z"
         self.transcript(SID_B, [user(dispatch.outbox_path(self.cfg.state_dir, did).read_text()), assistant(whole)])
         self.assertEqual(self.advance(FakeRunner(strict=True), z.id, later(30)).reply, "for z")
+
+    def test_a_pasted_message_nobody_checks_is_settled_by_the_next_sender(self):
+        x = self.submit_at(0, message="from x")
+        self.advance(tmux_runner(), x.id, later(1))  # pasted; its sender never looks again
+        y = self.submit_at(2, message="from y", caller=CALLER_Z)
+        self.transcript(SID_B, [user(x.text), assistant("x answered")])
+        run = tmux_runner()
+        got = self.advance(run, y.id, later(30))  # only y's watcher runs
+        self.assertEqual((self.stored(x.id).state, self.stored(x.id).reply), ("done", "x answered"))
+        self.assertEqual(got.state, "sent")
+        self.assertEqual(dispatch.outbox_path(self.cfg.state_dir, y.id).read_text(), y.text)
+
+    def test_a_pasted_message_nobody_checks_fails_for_the_next_sender_when_unanswered(self):
+        x = self.submit_at(0, message="from x")
+        self.advance(tmux_runner(), x.id, later(1))
+        y = self.submit_at(2, message="from y", caller=CALLER_Z)
+        self.transcript(SID_B, [user("something else"), assistant("other")])
+        self.assertEqual(self.advance(tmux_runner(), y.id, later(30)).state, "queued")  # first look: not seen yet
+        self.assertEqual(self.stored(x.id).reason, send.REASON_NOT_SEEN)
+        self.assertEqual(self.advance(tmux_runner(), y.id, later(40)).state, "sent")
+        self.assertEqual((self.stored(x.id).state, self.stored(x.id).reason), ("failed", send.REASON_NOT_FOUND))
+
+    def test_a_raw_at_the_head_is_sent_by_whoever_advances_the_line(self):
+        r = self.submit_at(0, message="/compact", raw=True)  # its sender never advances it
+        y = self.submit_at(1, message="from y", caller=CALLER_Z)
+        run = tmux_runner()
+        got = self.advance(run, y.id, later(2))
+        self.assertEqual((got.state, got.reason), ("queued", send.REASON_BEHIND))
+        self.assertEqual(self.stored(r.id).state, "sent")
+        self.assertEqual(tmux_writes(run)[0][4], f"sampan-{r.id}")
+        self.assertEqual(Path(tmux_writes(run)[0][5]).read_text(), "/compact")
+        self.assertEqual(self.advance(tmux_runner(), y.id, later(3)).state, "queued")  # the raw still runs
+        self.set_row("b", sid="99999999-2222-3333-4444-555555555555")  # it started a new conversation: done
+        got = self.advance(tmux_runner(), y.id, later(60))
+        self.assertEqual(self.stored(r.id).state, "done")
+        self.assertEqual(got.state, "sent")
 
     def test_purge_removes_the_outbox_of_a_group_paste(self):
         a, t, z = self.three()

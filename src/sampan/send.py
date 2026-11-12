@@ -500,7 +500,9 @@ def _deliver(cfg, run, d, row, sleep, now, save, items):
     process killed in the middle never sends it again (at most once: it later fails as 找不到回覆). It goes back to
     queued only when the step says nothing was sent.
     Every message queued for the same target before its first direct send goes with it, as one paste (deliveries:
-    one active delivery per target at a time); a direct send goes alone, once nothing is before it."""
+    one active delivery per target at a time); a direct send goes alone, once nothing is before it. Whoever advances
+    a message moves the target's whole line: an active delivery is judged first (its own senders may never look
+    again), and the head of the line is sent even when d is behind it (d then stays queued)."""
     if row is None or row.state in GONE:
         d.reason = REASON_NOT_RUNNING
         return
@@ -522,22 +524,20 @@ def _deliver(cfg, run, d, row, sleep, now, save, items):
             d.reason = REASON_NOT_RUNNING
             return
     target = row.id or row.name
-    if _busy_with_delivery(items, target, now):
+    if _busy_with_delivery(cfg, run, items, row, target, now):
         d.reason = BUSY["busy"]
         return
     group = _next_group(items, d, row)
-    if group is None:
-        d.reason = REASON_BEHIND
-        return
-    text = d.text if len(group) == 1 else deliver.compose_group(group)
+    lead = group[0]
+    text = lead.text if len(group) == 1 else deliver.compose_group(group)
     try:
-        did = deliveries.open_delivery(items.conn, kind="raw" if d.raw else "paste", to_id=target, to_name=row.name,
+        did = deliveries.open_delivery(items.conn, kind="raw" if lead.raw else "paste", to_id=target, to_name=row.name,
                                        messages=[x.id for x in group], text=text, conversation=row.sid or None,
                                        cursor=None, now=now)
     except deliveries.ActiveDelivery:
         d.reason = BUSY["busy"]
         return
-    name = d.id if len(group) == 1 else did  # one message: its own outbox and tmux buffer, as before
+    name = lead.id if len(group) == 1 else did  # one message: its own outbox and tmux buffer, as before
     if row.agent != "codex":  # written before the record says 送出中: a failed write leaves it queued
         outbox = dispatch.outbox_path(cfg.state_dir, name)
         if len(group) > 1 or not outbox.exists():
@@ -552,25 +552,32 @@ def _deliver(cfg, run, d, row, sleep, now, save, items):
     if row.agent == "codex":
         why = deliver.to_codex(cfg, run, row.sid, text)  # `codex queue` waits for the turn by itself
     else:
-        why = deliver.to_claude(Tmux(run), row.pane, outbox, name, sleep, raw=d.raw)
+        why = deliver.to_claude(Tmux(run), row.pane, outbox, name, sleep, raw=lead.raw)
     ids = "、".join(x.id for x in group)
+    behind = not any(x is d for x in group)  # d waits for the head of the line, which was sent on its behalf
     if isinstance(why, deliver.Unsure):  # it may have reached the target: never send the same dispatch twice
         for x in group:
             _finish(x, "failed", now, f"{REASON_PASTED}：{why}" if isinstance(why, deliver.Pasted) else str(why))
         deliveries.end_delivery(items.conn, did, now)
-        _log(cfg, "send", f"派工 {ids}：{d.reason}")
+        _log(cfg, "send", f"派工 {ids}：{lead.reason}")
+        if behind:
+            d.reason = REASON_BEHIND
         return
     if why:
         for x in group:
             x.state, x.sent_at, x.reason = "queued", None, why  # nothing was sent: try again later
         deliveries.drop_delivery(items.conn, did)
+        if behind:
+            d.reason = why  # what stops the head stops d too
         return
     for x in group:
         x.reason = ""
+    if behind:
+        d.reason = REASON_BEHIND
     if len(group) == 1:
-        _log(cfg, "send", f"派工 {d.id}：已送到 {d.to_name}")
+        _log(cfg, "send", f"派工 {lead.id}：已送到 {lead.to_name}")
     else:
-        _log(cfg, "send", f"派工 {ids}：一起送到 {d.to_name}（送達 {did}，{len(group)} 則）")
+        _log(cfg, "send", f"派工 {ids}：一起送到 {lead.to_name}（送達 {did}，{len(group)} 則）")
 
 
 def _for_target(x, row):
@@ -579,34 +586,38 @@ def _for_target(x, row):
 
 
 def _next_group(items, d, row):
-    """The dispatches to deliver together with d now, by created: every one still queued for the same target up to
-    (not including) the first direct send, whoever sent it; a direct send alone when nothing is queued before it.
-    None when d has to wait for others before it."""
+    """The head of the target's line (d is in it, queued): every dispatch still queued for the same target, by
+    created, up to (not including) the first direct send, whoever sent it; a direct send alone when it is first.
+    It may not contain d (d is behind it)."""
     line = sorted((x for x in items if x.state == "queued" and (x.status or "queued") == "queued"
                    and x.to_agent == row.agent and _for_target(x, row)), key=_created_key)
+    if line[0].raw:
+        return line[:1]
     group = []
     for x in line:
         if x.raw:
-            if not group and x is d:
-                return [d]
             break
         group.append(x)
-    return group if any(x is d for x in group) else None
+    return group
 
 
 def _created_key(x):
     return parse_iso(x.created) or datetime.max.replace(tzinfo=timezone.utc)
 
 
-def _busy_with_delivery(items, target, now):
-    """Whether target still has an active delivery that a message is waiting on. One whose messages are all finished
-    (none sent any more) is ended here, so it cannot hold the target forever."""
+def _busy_with_delivery(cfg, run, items, row, target, now):
+    """Whether target still has an active delivery that a message is waiting on. It is judged here first (_check on
+    a sent message of it settles them all), so a delivery whose senders never look again does not hold the target;
+    one whose messages are all finished is ended."""
     active = deliveries.active_delivery(items.conn, target)
     if active is None:
         return False
     ids = set(deliveries.members(items.conn, active["id"]))
-    if any(x.id in ids and x.state == "sent" for x in items):
-        return True
+    sent = [x for x in items if x.id in ids and x.state == "sent"]
+    if sent:
+        _check(cfg, sent[0], row, now, run, items)
+        if any(x.state == "sent" for x in sent):
+            return True
     deliveries.end_delivery(items.conn, active["id"], now)
     return False
 
