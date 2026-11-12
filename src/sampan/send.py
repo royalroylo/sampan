@@ -11,7 +11,7 @@ import unicodedata
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
-from . import actionlog, deliver, deliveries, dispatch
+from . import actionlog, deliver, deliveries, dispatch, doorbell, procs
 from .claude_state import Reply, command_reply, find_transcript
 from .claude_state import reply_to as claude_reply_to
 from .clock import fmt_local, parse_iso
@@ -517,6 +517,9 @@ def _deliver(cfg, run, d, row, sleep, now, save, items):
             d.reason = REASON_NO_THREAD
             return
     else:
+        _settle_ring(cfg, run, items, row, now, sleep)  # before the busy check: a permission prompt is "waiting"
+        if d.status == "rung":  # it waits for the target to take it (settle_ring keeps its reason)
+            return
         if row.agent_status not in READY:
             d.reason = BUSY.get(row.agent_status, "看不出對方是否閒著")
             return
@@ -528,6 +531,19 @@ def _deliver(cfg, run, d, row, sleep, now, save, items):
         d.reason = BUSY["busy"]
         return
     group = _next_group(items, d, row)
+    if not group:
+        return
+    behind = not any(x is d for x in group)  # d waits for the head of the line, which goes on its behalf
+    plan = doorbell.plan_for(items.conn, row, now, group, start_of=lambda pid: procs.start_time(pid, run))
+    if plan == "wait":  # a ring is still waiting to be answered: the messages after it go with it
+        d.reason = REASON_BEHIND
+        return
+    if plan == "ring":
+        why = doorbell.ring_for(items, cfg, run, row, group, now, sleep, save=save,
+                                log=lambda line: _log(cfg, "send", line))
+        if behind:
+            d.reason = why or REASON_BEHIND
+        return
     lead = group[0]
     text = lead.text if len(group) == 1 else deliver.compose_group(group)
     try:
@@ -547,14 +563,13 @@ def _deliver(cfg, run, d, row, sleep, now, save, items):
             x.thread_id = row.sid
         elif x.raw:
             x.thread_id = row.sid or None  # the conversation it went to: a /clear changes it
-        x.state, x.sent_at, x.reason = "sent", _iso(now), REASON_SENDING
+        x.state, x.status, x.sent_at, x.reason = "sent", "", _iso(now), REASON_SENDING
     save()
     if row.agent == "codex":
         why = deliver.to_codex(cfg, run, row.sid, text)  # `codex queue` waits for the turn by itself
     else:
         why = deliver.to_claude(Tmux(run), row.pane, outbox, name, sleep, raw=lead.raw)
     ids = "、".join(x.id for x in group)
-    behind = not any(x is d for x in group)  # d waits for the head of the line, which was sent on its behalf
     if isinstance(why, deliver.Unsure):  # it may have reached the target: never send the same dispatch twice
         for x in group:
             _finish(x, "failed", now, f"{REASON_PASTED}：{why}" if isinstance(why, deliver.Pasted) else str(why))
@@ -571,9 +586,11 @@ def _deliver(cfg, run, d, row, sleep, now, save, items):
             d.reason = why  # what stops the head stops d too
         return
     for x in group:
-        x.reason = ""
+        x.reason = plan.reason  # a Claude: why it got the full text, not a ring
     if behind:
         d.reason = REASON_BEHIND
+    if plan.reason:
+        _log(cfg, "send", f"派工 {ids}：{plan.reason}")
     if len(group) == 1:
         _log(cfg, "send", f"派工 {lead.id}：已送到 {lead.to_name}")
     else:
@@ -588,9 +605,11 @@ def _for_target(x, row):
 def _next_group(items, d, row):
     """The head of the target's line (d is in it, queued): every dispatch still queued for the same target, by
     created, up to (not including) the first direct send, whoever sent it; a direct send alone when it is first.
-    It may not contain d (d is behind it)."""
+    It may not contain d (d is behind it), and is empty when nothing is queued (d is rung: it waits for a take)."""
     line = sorted((x for x in items if x.state == "queued" and (x.status or "queued") == "queued"
                    and x.to_agent == row.agent and _for_target(x, row)), key=_created_key)
+    if not line:
+        return []
     if line[0].raw:
         return line[:1]
     group = []
@@ -599,6 +618,16 @@ def _next_group(items, d, row):
             break
         group.append(x)
     return group
+
+
+def _settle_ring(cfg, run, items, row, now, sleep):
+    """Judge the target's ringing ring on everyone's behalf (its messages' own watchers may never look again)."""
+    target = row.id or row.name
+    rung = [x for x in items if x.state == "queued" and x.status == "rung" and _for_target(x, row)]
+    ring = doorbell.ringing(items.conn, target)
+    if ring is not None or rung:
+        doorbell.settle_ring(items.conn, cfg, run, ring, row, rung, now, sleep=sleep,
+                             log=lambda line: _log(cfg, "send", line))
 
 
 def _created_key(x):
@@ -629,6 +658,8 @@ def _expire(cfg, d, now):
     not running, no thread yet) has no limit, as before."""
     created = parse_iso(d.created)
     if d.state != "queued" or created is None or (now - created).total_seconds() <= QUEUE_LIMIT_S:
+        return
+    if d.status == "rung":  # rung: the target has it; settle_ring decides when it goes back in line
         return
     if d.reason in WAITING or d.reason.startswith("對方狀態："):
         return

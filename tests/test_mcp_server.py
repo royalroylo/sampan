@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
-from sampan import codex_approval, dispatch, folders, mcp_server, send
+from sampan import codex_approval, dispatch, doorbell, folders, mcp_server, send
 from sampan.registry import Row, write_rows
 from sampan.send import Caller
 from sampan.status import State
@@ -23,6 +23,7 @@ EMPTY = (FIXTURES / "claude_empty_placeholder.ansi").read_text()
 NOW = datetime(2026, 10, 26, 12, 0, 0, tzinfo=timezone.utc)
 CALLER_A = Caller("a", "alice", "claude", "%1")
 NO_WATCH = None
+NO_MCP = doorbell.REASON_NO_MCP  # a Claude target without a heartbeat gets the full text pasted
 
 
 def req(rid, method, params=None):
@@ -1190,7 +1191,7 @@ class SendBatchToolTest(Base):
                        run=tmux_runner(), confirm=False)
         body = tool_json(c.response(2))
         [d] = self.dispatches()
-        self.assertEqual(body, {"batch": d.batch, "items": [{"session": "d", "dispatch": d.id, "state": "sent"}],
+        self.assertEqual(body, {"batch": d.batch, "items": [{"session": "d", "dispatch": d.id, "state": "sent", "reason": NO_MCP}],
                                 "skipped": [{"session": "b", "reason": "對方正在忙"}]})
         self.assertTrue(d.notify)
 
@@ -1235,7 +1236,7 @@ class SendBatchToolTest(Base):
             first = self.serve(Client([init(1), call(2, "dispatch_result", {"id": b.id})]), run=tmux_runner())
             second = self.serve(Client([init(1), call(3, "dispatch_result", {"id": b.id})]), run=tmux_runner())
         self.assertEqual(tool_json(first.response(2)), {"batch": b.id, "items": [
-            {"session": "d", "dispatch": d.id, "state": "sent"}], "skipped": 1})
+            {"session": "d", "dispatch": d.id, "state": "sent", "reason": NO_MCP}], "skipped": 1})
         self.assertEqual(tool_json(second.response(3)), {"batch": b.id, "items": [
             {"session": "d", "dispatch": d.id, "state": "done", "reply": "答"}], "skipped": 1})
         self.assertFalse(self.dispatches()[0].notify)  # the whole batch was reported: no notice

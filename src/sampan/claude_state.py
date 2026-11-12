@@ -236,6 +236,111 @@ def _reply_to(path, sent):
     return Reply(False, False, "")
 
 
+INBOX_TAKE = "mcp__sampan__inbox_take"
+
+
+@dataclass(frozen=True)
+class TurnInfo:
+    """The turn after a marker (up to the next typed message or the end of the file): found: a user record holds the
+    marker; ended: the assistant spoke and no tool call of it is still waiting for its result; last_text: the last assistant text of that turn;
+    take_seen: inbox_take was called in it."""
+    found: bool
+    ended: bool = False
+    last_text: str = ""
+    take_seen: bool = False
+
+
+def _user_text_anywhere(rec):
+    """Every text of a user record, typed or a tool result (where a 收據 shows up); "" for any other record and for
+    compaction summaries (which may quote a marker)."""
+    if not isinstance(rec, dict) or rec.get("type") != "user":
+        return ""
+    if rec.get("isCompactSummary") or rec.get("isVisibleInTranscriptOnly"):
+        return ""
+    msg = rec.get("message")
+    content = msg.get("content") if isinstance(msg, dict) else None
+    out = []
+
+    def collect(c):
+        if isinstance(c, str):
+            out.append(c)
+        elif isinstance(c, list):
+            for part in c:
+                if isinstance(part, dict):
+                    collect(part.get("text") if part.get("type") == "text" else part.get("content"))
+    collect(content)
+    return "\n".join(out)
+
+
+def _forward_records(path, start):
+    with open(path, "rb") as fh:
+        fh.seek(start)
+        for raw in fh:
+            try:
+                rec = json.loads(raw.decode(errors="replace"))
+            except ValueError:
+                continue
+            if isinstance(rec, dict):
+                yield rec
+
+
+def after_marker(path, marker, start=None):
+    """TurnInfo of the turn after the last user record that contains marker (a doorbell code, or 收據 <id> in an
+    inbox_take tool result). start: a byte offset to read from (a cursor); None reads back from the end of the file
+    only as far as the marker."""
+    try:
+        return _after_marker(path, marker, start)
+    except OSError:
+        return TurnInfo(False)
+
+
+def _after_marker(path, marker, start):
+    after = None  # records after the marker, oldest first
+    if start is None:
+        later = []
+        for line in reverse_lines(path):
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(rec, dict):
+                continue
+            if marker in _user_text_anywhere(rec):
+                after = list(reversed(later))
+                break
+            later.append(rec)
+    else:
+        for rec in _forward_records(path, start):
+            if marker in _user_text_anywhere(rec):
+                after = []
+            elif after is not None:
+                after.append(rec)
+    if after is None:
+        return TurnInfo(False)
+    last_text, pending, take_seen, spoke = "", set(), False, False
+    for rec in after:
+        if _user_content(rec, join=True) is not None:
+            break  # the next typed message: the turn is over
+        msg = rec.get("message")
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if rec.get("type") == "user" and isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "tool_result":
+                    pending.discard(part.get("tool_use_id"))
+        if rec.get("type") != "assistant" or rec.get("isSidechain"):
+            continue
+        spoke = True
+        for part in content if isinstance(content, list) else [{"type": "text", "text": content}]:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "tool_use":
+                pending.add(part.get("id"))
+                take_seen = take_seen or part.get("name") == INBOX_TAKE
+            elif part.get("type") == "text" and isinstance(part.get("text"), str) and part["text"].strip():
+                last_text = part["text"]
+    return TurnInfo(True, spoke and not pending, last_text, take_seen)
+
+
 def command_reply(path, sent, after):
     """The reply to a direct send (sent: one line starting with /, typed as is so Claude runs it): bound to the last
     record at or after the datetime after that is either a user record whose text is sent, or a user record or a

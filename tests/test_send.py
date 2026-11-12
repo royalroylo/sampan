@@ -1172,7 +1172,7 @@ class TwoPhaseDeliveryTest(Base):
             return cp()
         self.advance(tmux_runner().on(["tmux", "-u", "paste-buffer"], paste), d.id)
         self.assertEqual(seen, [("sent", "送出中")])
-        self.assertEqual(self.stored(d.id).reason, "")
+        self.assertEqual(self.stored(d.id).reason, "對方沒有可用的 sampan MCP，改用貼全文")  # no heartbeat: no ring
 
     def test_killed_mid_delivery_is_never_pasted_again(self):
         d = self.submit()
