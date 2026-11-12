@@ -578,7 +578,7 @@ def _dispatch(cfg, args):
             return mcp_install.install(cfg, run, out, sampan_path=current_sampan(), dry_run=args.dry_run, profiles=args.profile)
         return mcp_install.uninstall(cfg, run, out, dry_run=args.dry_run, profiles=args.profile)
     if cmd == "mcp":
-        from . import mcp_server
+        from . import mcp_server, procs
         from .runner import no_stdin
         run = no_stdin(run)  # a child must never read the JSON-RPC stream on our stdin
         ppid = os.getppid()
@@ -588,7 +588,8 @@ def _dispatch(cfg, args):
         sys.stdout = sys.stderr  # stdout carries only protocol messages: anything printed by accident goes to stderr
         try:
             return mcp_server.serve(cfg, run, sys.stdin.buffer, proto, caller=caller,
-                                    resolve=lambda: mcp_server.lookup_caller(cfg, run, ppid), parent_agent=parent_agent)
+                                    resolve=lambda: mcp_server.lookup_caller(cfg, run, ppid), parent_agent=parent_agent,
+                                    start_of=lambda pid: procs.start_time(pid, run))
         finally:
             sys.stdout = proto
     if cmd == "machine":

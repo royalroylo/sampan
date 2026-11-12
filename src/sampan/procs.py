@@ -2,7 +2,10 @@ import os
 import re
 from collections import deque
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
+
+from . import runner
 
 UUID_RE = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 RESUME_RE = re.compile(rf"--(?:resume|session-id)[ =]({UUID_RE})")
@@ -40,6 +43,17 @@ def list_procs(run):
         pid, ppid = int(parts[0]), int(parts[1])
         procs[pid] = Proc(pid, ppid, parts[2], os.path.basename(parts[3]), parts[4] if len(parts) > 4 else "")
     return procs
+
+
+def start_time(pid, run=runner.run):
+    """When pid started, as a local ISO-8601 string (second resolution; same for a given live process on every call,
+    so it tells a pid reused by another process apart). None when the process is gone or ps cannot say."""
+    r = run(["ps", "-o", "lstart=", "-p", str(pid)], env={**os.environ, "LC_ALL": "C"})
+    text = r.stdout.strip() if r.returncode == 0 else ""
+    try:
+        return datetime.strptime(" ".join(text.split()), "%a %b %d %H:%M:%S %Y").isoformat(timespec="seconds")
+    except ValueError:
+        return None
 
 
 def claude_pids(procs):

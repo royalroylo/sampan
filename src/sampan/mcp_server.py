@@ -10,6 +10,7 @@ every 3 seconds while the server is alive. Every write to stdout holds one lock.
 import copy
 import json
 import os
+import secrets
 import sys
 import threading
 import time
@@ -17,7 +18,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import dispatch, folders, ids, machine, send, session_run
+from . import dispatch, folders, heartbeat, ids, machine, send, session_run
 from .procs import list_procs
 from .prompts import SKIP
 from .registry import RegistryError, load_rows
@@ -218,13 +219,16 @@ def _batch_item(d):
 
 class Server:
     def __init__(self, cfg, run, stdin, stdout, *, caller, sleep=time.sleep, clock=time.monotonic, status_fn=None,
-                 snapshot_fn=None, now_fn=_utcnow, resolve=None, parent_agent=False):
+                 snapshot_fn=None, now_fn=_utcnow, resolve=None, parent_agent=False, start_of=None):
         self.cfg, self.run, self.stdin, self.stdout, self.caller = cfg, run, stdin, stdout, caller
         self.parent_agent = parent_agent  # started by claude / codex (parent_is_agent); False refuses the acting tools
         self.resolve = resolve  # () -> Caller, asked again before every tool that acts or reads a dispatch
         self.sleep, self.clock, self.now_fn = sleep, clock, now_fn
         self.status_fn, self.snapshot_fn = status_fn or status_rows, snapshot_fn
         self.client_name = None  # clientInfo.name from initialize
+        self.start_of = start_of  # pid -> start time (procs.start_time); None writes no heartbeat
+        self.nonce = secrets.token_hex(8)  # this instance's key in the inboxes table
+        self.started = None
         self.mine = set()  # dispatch ids created by this server (an unregistered caller's have no from_name to match)
         self._write_lock = threading.Lock()
         self._threads = []
@@ -249,6 +253,7 @@ class Server:
 
     def serve(self, watch_interval=WATCH_S):
         watcher = None
+        self.beat()
         if watch_interval is not None:
             watcher = threading.Thread(target=self._watch, args=(watch_interval,), daemon=True, name="sampan-mcp-watch")
             watcher.start()
@@ -264,6 +269,7 @@ class Server:
             self._stop.set()
             if watcher is not None:
                 watcher.join()
+            self.forget()
         return 0
 
     def _handle_line(self, line):
@@ -623,8 +629,38 @@ class Server:
 
     # --- watcher ---------------------------------------------------------------------------------------------
 
+    def beat(self):
+        """Tell senders which session and conversation this server serves. Never raises: a heartbeat that cannot
+        be written is logged and skipped."""
+        caller = self.caller
+        if self.start_of is None or not caller.id or not caller.agent:
+            return
+        try:
+            if self.started is None:
+                self.started = self.start_of(os.getpid())
+            row = next((r for r in self.status_fn(self.cfg, self.run, snapshot_fn=self.snapshot_fn)
+                        if r.id == caller.id), None)
+            if self.started is None or row is None or not row.sid:
+                return
+            with dispatch.transaction(self.cfg.state_dir, wait_s=2) as items:
+                heartbeat.beat(items.conn, session_id=caller.id, agent=caller.agent, conversation=row.sid,
+                               nonce=self.nonce, pid=os.getpid(), started=self.started, version=current_version(),
+                               now=self.now_fn())
+        except (dispatch.DispatchError, OSError, RegistryError) as e:
+            _log(f"心跳寫不進去：{e}")
+
+    def forget(self):
+        if self.start_of is None or not self.caller.id:
+            return
+        try:
+            with dispatch.transaction(self.cfg.state_dir, wait_s=2) as items:
+                heartbeat.forget(items.conn, self.nonce)
+        except (dispatch.DispatchError, OSError) as e:
+            _log(f"心跳刪不掉：{e}")
+
     def watch_once(self):
         """Advance this caller's pending dispatches (and the ones this server created) once."""
+        self.beat()
         try:
             owed = set(send.pending(self.cfg))
             items = dispatch.load(self.cfg.state_dir)
@@ -646,10 +682,11 @@ class Server:
 
 
 def serve(cfg, run, stdin, stdout, *, caller, sleep=time.sleep, clock=time.monotonic, status_fn=None,
-          snapshot_fn=None, now_fn=_utcnow, watch_interval=WATCH_S, resolve=None, parent_agent=False):
+          snapshot_fn=None, now_fn=_utcnow, watch_interval=WATCH_S, resolve=None, parent_agent=False, start_of=None):
     """Serve MCP on stdin/stdout until stdin closes. Returns 0. resolve: () -> Caller, to look the caller up again
     before each tool that acts or reads a dispatch (`caller` is the identity found at start). parent_agent: the
-    server's parent is claude / codex (parent_is_agent, found once at start)."""
+    server's parent is claude / codex (parent_is_agent, found once at start). start_of: pid -> start time; given, the
+    server writes heartbeats."""
     return Server(cfg, run, stdin, stdout, caller=caller, sleep=sleep, clock=clock, status_fn=status_fn,
                   snapshot_fn=snapshot_fn, now_fn=now_fn, resolve=resolve,
-                  parent_agent=parent_agent).serve(watch_interval)
+                  parent_agent=parent_agent, start_of=start_of).serve(watch_interval)

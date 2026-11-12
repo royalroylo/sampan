@@ -568,7 +568,7 @@ class CliTest(unittest.TestCase):
         caller = Caller("x", "alice", "claude", "%1")
         seen = {}
 
-        def fake_serve(cfg, run, stdin, stdout, *, caller, resolve, parent_agent):
+        def fake_serve(cfg, run, stdin, stdout, *, caller, resolve, parent_agent, start_of):
             seen.update(stdin=stdin, stdout=stdout, caller=caller, sys_stdout=sys.stdout, again=resolve(),
                         parent_agent=parent_agent)
             run(["tmux", "-u", "list-panes"])
@@ -603,7 +603,7 @@ class CliTest(unittest.TestCase):
         caller = Caller(None, "", "claude", None, kind="unregistered")
         seen = {}
 
-        def fake_serve(cfg, run, stdin, stdout, *, caller, resolve, parent_agent):
+        def fake_serve(cfg, run, stdin, stdout, *, caller, resolve, parent_agent, start_of):
             seen["parent_agent"] = parent_agent
             return 0
 
