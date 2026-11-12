@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
 
-from . import actionlog, codex_approval, codex_daemon, launchd, mcp_install, migrate
+from . import actionlog, codex_approval, codex_daemon, heartbeat, launchd, mcp_install, migrate, procs, store
 from . import deps as deps_mod
 from . import update as update_mod
 from .claude_state import stale_session_files
@@ -25,6 +25,7 @@ from .observe import PROC_ROOT, SPLIT_HINT, live_by_pane, multi_agent_sessions
 from .plugins import read_state
 from .procs import claude_pids, list_procs
 from .registry import RegistryError, load_rows
+from .status import State, status_rows
 from .tmux import Tmux, unreadable_message
 
 ICON = {"ok": "✅", "info": "ℹ️ ", "warn": "⚠️ ", "fail": "❌"}
@@ -292,6 +293,30 @@ def _data_format(cfg):
     return [Check("info", title, "降版到 0.16 前先跑 sampan migrate --revert")]
 
 
+def _dispatch_store(cfg, run, now, rows_fn, alive, start_of):
+    """The state dir must not be on a Windows drive (/mnt under WSL); and the registered, running Claude sessions that
+    have no valid heartbeat (their sampan MCP is not up for this conversation) are listed."""
+    problem = store.mnt_problem(cfg.state_dir)
+    if problem:
+        return [Check("fail", problem, "派工的資料庫（dispatches.db）要在 Linux 檔案系統上；sampan 不會在這裡送派工")]
+    if not (Path(cfg.state_dir) / store.DB_FILE).exists():
+        return []
+    try:
+        rows = [r for r in rows_fn(cfg, run) if r.state == State.RUNNING and r.agent == "claude" and r.id]
+        conn = store.connect(cfg.state_dir)
+    except (RegistryError, store.StoreError, OSError):
+        return []
+    try:
+        stale = [r.name for r in rows
+                 if heartbeat.valid(conn, session_id=r.id, conversation=r.sid, now=now, alive=alive, start_of=start_of) is None]
+    finally:
+        conn.close()
+    if not stale:
+        return [Check("ok", "執行中的 Claude session 都有有效的心跳")]
+    return [Check("warn", "沒有有效心跳的 Claude session：" + "、".join(stale),
+                  "它們收不到門鈴，派工會改貼全文；sampan MCP 沒載入、版本低於 0.17，或換了對話都會這樣（重開那個 session 試試）")]
+
+
 def _save_log(cfg, now):
     label = launchd.LABEL
     try:
@@ -529,13 +554,15 @@ def _detach_key(cfg, run):
 
 
 def run_checks(cfg, run, *, now, uid, sampan_path=None, proc_root=PROC_ROOT, which=shutil.which, env=None,
-               current=None, latest_fn=None, platform=sys.platform, daemon_fn=None):
+               current=None, latest_fn=None, platform=sys.platform, daemon_fn=None, rows_fn=status_rows, alive=os.kill,
+               start_of=procs.start_time):
     """latest_fn by default uses the run passed in to look up the latest version (honouring the cache); cmd_doctor passes a version with a timeout."""
     sampan_path = sampan_path or current_sampan()
     current = current or update_mod.current_version()
     latest_fn = latest_fn or (lambda: update_mod.check(cfg.state_dir, run=run)[0])
     return (_version(current, latest_fn) + _deps(cfg, which, env, platform) + _profile_dirs(cfg) + _owners(cfg, uid) + _plugins(cfg) + _auth(cfg, run) + _two_logins(cfg, run, platform) + _stale(cfg, run)
             + _hooks(cfg) + _statusline(cfg, now) + _codex(cfg) + _codex_daemon(cfg, run, daemon_fn) + _mcp(cfg) + _detach_key(cfg, run) + _tmux_conf(cfg, run) + _multi_agent(cfg, run, proc_root) + _action_log(cfg) + _data_format(cfg)
+            + _dispatch_store(cfg, run, now, rows_fn, alive, start_of)
             + (_launchd(cfg, run, sampan_path) + _save_log(cfg, now) if platform == "darwin" else
                [Check("info", "這台不是 macOS，沒有自動存檔排程（需要時自己跑 sampan save，或用 cron／systemd timer）")]))
 

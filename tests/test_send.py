@@ -2113,3 +2113,145 @@ class GroupPasteTest(Base):
         self.assertEqual(send.STATUS_LABELS, {
             "queued": "排隊中", "rung": "已按門鈴", "taken": "已取走", "partial": "已有回覆段落", "pasted": "已貼全文",
             "replied": "已回覆", "unanswered": "已取走沒回覆", "failed": "失敗", "cancelled": "已取消"})
+
+
+class SearchAndInboxTest(Base):
+    STARTED = "2026-10-26T08:00:00"
+
+    def keep(self, text, created=None, **cols):
+        d = self.submit(message=text)
+        self.assertNotIsInstance(d, str)
+        self.set(d.id, created=created, **cols)
+        return d.id
+
+    def set(self, did, created=None, **cols):
+        if created:
+            cols["created"] = created
+        if not cols:
+            return
+        with dispatch.transaction(self.cfg.state_dir) as items:
+            items.conn.execute(f"UPDATE messages SET {', '.join(f'{k}=?' for k in cols)} WHERE id=?", (*cols.values(), did))
+
+    def conn(self):
+        conn = store.connect(self.cfg.state_dir)
+        self.addCleanup(conn.close)
+        return conn
+
+    def run_cmd(self, fn, *args, **kw):
+        lines = []
+        rc = fn(self.cfg, lines.append, *args, **kw)
+        return rc, "\n".join(lines)
+
+    def test_search_chinese_backslash_and_wildcards_are_literal(self):
+        ids = {t: self.keep(t) for t in ("請看中文", "path a\\b", "100 50% done", "x_y ok", "中", "aXb", "5000", "xzy")}
+        conn = self.conn()
+        for keyword, hit in (("中文", "請看中文"), ("a\\b", "path a\\b"), ("50%", "100 50% done"), ("x_y", "x_y ok")):
+            found = [m["id"] for m in send.search(conn, keyword=keyword)]
+            self.assertEqual(found, [ids[hit]], keyword)
+        self.assertEqual([m["id"] for m in send.search(conn, keyword="%")], [ids["100 50% done"]])
+        self.assertEqual([m["id"] for m in send.search(conn, keyword="_")], [ids["x_y ok"]])
+
+    def test_search_looks_in_replies_too(self):
+        did = self.keep("question")
+        self.set(did, reply="the answer 42", state="done")
+        self.assertEqual([m["id"] for m in send.search(self.conn(), keyword="answer 42")], [did])
+
+    def test_search_purged_matches_metadata_only(self):
+        did = self.keep("secret words")
+        self.set(did, text=None, reply=None, purged=1)
+        conn = self.conn()
+        self.assertEqual(send.search(conn, keyword="secret"), [])
+        self.assertEqual([m["id"] for m in send.search(conn, to_ids=("b",), from_ids=("a",), state="queued")], [did])
+        rc, text = self.run_cmd(send.cmd_search, None, to=("b",))
+        self.assertEqual(rc, 0)
+        self.assertIn(did, text)
+        self.assertIn("（本文已清除）", text)
+
+    def test_search_dates_are_taipei_days(self):
+        late = self.keep("late", created="2026-11-12T16:30:00+00:00")  # 11/13 00:30 in Taipei
+        early = self.keep("early", created="2026-11-12T15:30:00+00:00")  # 11/12 23:30 in Taipei
+        conn = self.conn()
+        ids = lambda **kw: [m["id"] for m in send.search(conn, **kw)]  # noqa: E731
+        self.assertEqual(ids(since="2026-11-13"), [late])
+        self.assertEqual(ids(until="2026-11-12"), [early])  # until includes that whole day
+        self.assertEqual(ids(since="2026-11-12", until="2026-11-12"), [early])
+        self.assertEqual(ids(since="2026-11-12", until="2026-11-13"), [late, early])  # newest first
+        self.assertEqual(ids(limit=1), [late])
+
+    def test_cmd_search_without_db_and_bad_date(self):
+        rc, text = self.run_cmd(send.cmd_search, "x")
+        self.assertEqual((rc, text), (0, "沒有派工"))
+        self.keep("hello")
+        rc, text = self.run_cmd(send.cmd_search, "x", since="2026/11/13")
+        self.assertEqual(rc, 2)
+        rc, text = self.run_cmd(send.cmd_search, "nothing like this")
+        self.assertEqual((rc, text), (0, "沒有符合的派工"))
+        rc, text = self.run_cmd(send.cmd_search, "hello")
+        self.assertIn("排隊中", text)
+        self.assertIn("hello", text)
+
+    def register_b(self):
+        from sampan.registry import Row, write_rows
+        write_rows(self.cfg.registry_path, [Row("b", "claude", "alice", SID_B, "/c")], "t", self.cfg.history_dir)
+        from sampan.registry import load_rows
+        return load_rows(self.cfg.registry_path)[0]
+
+    def test_inbox_view(self):
+        row = self.register_b()
+        queued = self.keep("first waiting", to_id=row.id)
+        rung = self.keep("rung one", to_id=row.id, status="rung", state="queued")
+        taken = self.keep("taken one", to_id=row.id, status="taken", state="sent")
+        other = self.keep("for someone else", to_id="zzz")
+        conn = self.conn()
+        conn.execute("INSERT INTO inboxes (session_id, nonce, agent, conversation, pid, started, version, at) "
+                     "VALUES (?, 'n1', 'claude', ?, ?, ?, '0.17.0', ?)",
+                     (row.id, SID_B, os.getpid(), self.STARTED, (NOW - timedelta(seconds=30)).isoformat(timespec="seconds")))
+        conn.execute("INSERT INTO rings (id, to_id, conversation, messages, at, result, delivery) "
+                     "VALUES ('r001', ?, ?, '[]', ?, 'taken', NULL)", (row.id, SID_B, NOW.isoformat(timespec="seconds")))
+        conn.commit()
+        rc, text = self.run_cmd(send.cmd_inbox, "b", now_fn=lambda: NOW, alive=lambda pid, sig: None,
+                                start_of=lambda pid: self.STARTED)
+        self.assertEqual(rc, 0)
+        self.assertIn("排隊中 1 則", text)
+        self.assertIn("已按門鈴等取信 1 則", text)
+        self.assertIn("已取走沒回覆 1 則", text)
+        self.assertIn("心跳 30 秒前", text)
+        self.assertIn("最後一次門鈴", text)
+        self.assertIn("已取信", text)
+        for did in (queued, rung, taken):
+            self.assertIn(did, text)
+        self.assertNotIn(other, text)
+        self.assertIn("first waiting", text)
+
+    def test_inbox_without_heartbeat_and_unknown_session(self):
+        row = self.register_b()
+        self.keep("hi", to_id=row.id)
+        rc, text = self.run_cmd(send.cmd_inbox, "b", now_fn=lambda: NOW)
+        self.assertIn("沒有心跳", text)
+        self.assertIn("還沒按過門鈴", text)
+        rc, text = self.run_cmd(send.cmd_inbox, "nobody")
+        self.assertEqual(rc, 2)
+        self.assertIn("找不到", text)
+
+    def test_by_target(self):
+        row = self.register_b()
+        self.keep("one", to_id=row.id)
+        self.keep("two", to_id=row.id)
+        done = self.keep("finished", to_id=row.id, state="done")
+        rc, text = self.run_cmd(send.cmd_dispatches, all_=False, by_target=True, now_fn=lambda: NOW)
+        self.assertEqual(rc, 0)
+        self.assertIn("排隊 2、等回覆 0", text)
+        self.assertIn("沒有心跳", text)
+        self.assertNotIn(done, text)
+
+
+class MntRefusalTest(Base):
+    def test_send_refused_under_mnt(self):
+        problem = "state 在 /mnt 底下（測試）"
+        with mock.patch("sampan.store.mnt_problem", return_value=problem):
+            self.assertEqual(self.submit(), problem)
+            self.assertEqual(send.submit_batch(self.cfg, FakeRunner(strict=True), CALLER_A, ["b"], "hi", raw=False,
+                                               notify=False, now=NOW, status_fn=self.status_fn), problem)
+            self.assertEqual(send.submit_new(self.cfg, CALLER_A, "n", "claude", "alice", "hi", notify=False, now=NOW), problem)
+        self.assertFalse((self.cfg.state_dir / "dispatches.db").exists())
+        self.assertNotIsInstance(self.submit(), str)  # a normal path is fine

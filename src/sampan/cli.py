@@ -96,14 +96,24 @@ def build_parser():
                     help="直接送：不加轉送標頭，讓對方的 Claude 當作指令執行（例如 /compact）；只限 Claude，一行、以 / 開頭")
     mh = sub.add_parser("machine", help="這台機器的 id 與名稱（--name 改名；id 不變）")
     mh.add_argument("--name", help="新的機器名稱")
-    ds = sub.add_parser("dispatches", usage="sampan dispatches [--all] | sampan dispatches show <編號> [--wait 秒] | "
-                                            "sampan dispatches cancel <編號> | sampan dispatches resend <編號>",
+    ds = sub.add_parser("dispatches", usage="sampan dispatches [--all] [--by-target] | sampan dispatches show <編號> [--wait 秒] | "
+                                            "sampan dispatches cancel <編號> | sampan dispatches resend <編號> | "
+                                            "sampan dispatches search [關鍵字] [--from 名稱] [--to 名稱] [--since 日期] [--until 日期] "
+                                            "[--state 狀態] [--limit 筆數] | sampan dispatches inbox <session>",
                         help="列派工（預設只列排隊中與等回覆的）；show <編號> 看狀態、每段回覆與每次送達；cancel <編號> 取消排隊中的、"
-                             "或不再等已送出的；resend <編號> 重送失敗、已取消或已回覆的")
-    ds.add_argument("action", nargs="?", choices=["cancel", "show", "resend"], help=argparse.SUPPRESS)
-    ds.add_argument("id", nargs="?", help=argparse.SUPPRESS)
+                             "或不再等已送出的；resend <編號> 重送失敗、已取消或已回覆的；search 依關鍵字、寄件者、收件者、日期（台北時間）、狀態找；"
+                             "inbox <session> 看某個 session 收到什麼")
+    ds.add_argument("action", nargs="?", choices=["cancel", "show", "resend", "search", "inbox"], help=argparse.SUPPRESS)
+    ds.add_argument("id", nargs="?", help=argparse.SUPPRESS)  # an id, a search keyword or a session name, by action
     ds.add_argument("--all", action="store_true", help="也列已完成、失敗、取消的")
     ds.add_argument("--wait", type=int, default=None, metavar="秒", help="show：最多等幾秒等它做完（逾時結束碼 124）")
+    ds.add_argument("--by-target", action="store_true", help="依收件者分組，顯示排隊數與心跳")
+    ds.add_argument("--from", dest="from_", action="append", metavar="名稱", help="search：寄件者（名稱、別名、id 或 id 前綴）")
+    ds.add_argument("--to", action="append", metavar="名稱", help="search：收件者")
+    ds.add_argument("--since", metavar="日期", help="search：這天以後（YYYY-MM-DD，台北時間）")
+    ds.add_argument("--until", metavar="日期", help="search：到這天為止（含當天）")
+    ds.add_argument("--state", metavar="狀態", help="search：queued、sent、done、failed、cancelled，或細分狀態（rung、taken、unanswered…）")
+    ds.add_argument("--limit", type=int, default=50, metavar="筆數", help="search：最多幾筆（預設 50，0 = 全部）")
     fd = sub.add_parser("folder", usage="sampan folder list | add <路徑> | rename <路徑> <新名稱> | rm <路徑> | move <名稱或路徑>... <目的|/>",
                         help="session 資料夾：list 看樹、add 建、rename 改名、rm 刪（裡面的搬上一層）、move 搬（/ 是最外層）；只動 folders.json，不動任何 session")
     fd.add_argument("action", choices=["list", "add", "rename", "rm", "move"])
@@ -554,10 +564,18 @@ def _dispatch(cfg, args):
         return cmd_send_batch(cfg, run, out, names, message, raw=args.raw, wait=args.wait, timeout=args.timeout,
                               caller=caller)
     if cmd == "dispatches":
-        from .send import cmd_cancel, cmd_dispatches, cmd_resend, cmd_show
+        from .send import cmd_cancel, cmd_dispatches, cmd_inbox, cmd_resend, cmd_search, cmd_show
         if args.wait is not None and args.action != "show":
             out("❌ --wait 只能跟 show 一起用：sampan dispatches show <編號> --wait 秒")
             return 2
+        if args.action == "search":
+            return cmd_search(cfg, out, args.id, from_=args.from_ or [], to=args.to or [], since=args.since,
+                              until=args.until, state=args.state, limit=args.limit)
+        if args.action == "inbox":
+            if not args.id:
+                out("❌ 用法：sampan dispatches inbox <session>")
+                return 2
+            return cmd_inbox(cfg, out, args.id)
         if args.action in ("cancel", "show", "resend"):
             if not args.id:
                 out(f"❌ 用法：sampan dispatches {args.action} <編號>")
@@ -570,7 +588,7 @@ def _dispatch(cfg, args):
             if args.action == "resend":
                 return cmd_resend(cfg, run, out, args.id)
             return cmd_cancel(cfg, out, args.id)
-        return cmd_dispatches(cfg, out, all_=args.all)
+        return cmd_dispatches(cfg, out, all_=args.all, by_target=args.by_target)
     if cmd == "folder":
         from .folder_cmd import cmd_folder
         return cmd_folder(cfg, out, args.action, list(args.args), merge=args.merge)

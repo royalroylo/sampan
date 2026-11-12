@@ -670,3 +670,45 @@ class TmuxConfDoctorTest(unittest.TestCase):
     def test_xdg_conf_is_read_too(self):
         [c] = self.checks("set -s extended-keys-format csi-u\n", where=".config/tmux/tmux.conf")
         self.assertIn("tmux.conf:1", c.detail)
+
+
+class DispatchStoreDoctorTest(DoctorTest):
+    def rows(self, *rows):
+        return lambda cfg, run, snapshot_fn=None: list(rows)
+
+    def seed(self, session_id, conversation, at):
+        from sampan import store
+        conn = store.connect(self.cfg.state_dir, create=True)
+        conn.execute("INSERT INTO inboxes (session_id, nonce, agent, conversation, pid, started, version, at) "
+                     "VALUES (?, ?, 'claude', ?, 1, 'S', '0.17.0', ?)", (session_id, "n" + session_id, conversation, at))
+        conn.commit()
+        conn.close()
+
+    def test_doctor_reports_mnt_and_stale_heartbeats(self):
+        from sampan.status import State
+        from tests.helpers import status_row
+        fresh = status_row("alpha-dev", sid="s1", id="id1")
+        stale = status_row("beta-dev", sid="s2", id="id2")
+        stopped = status_row("gamma-dev", state=State.STOPPED, sid="s3", id="id3")
+        codex = status_row("delta-dev", agent="codex", profile="codex", sid="s4", id="id4")
+        self.seed("id1", "s1", NOW.isoformat(timespec="seconds"))
+        self.seed("id2", "s-old", NOW.isoformat(timespec="seconds"))  # a heartbeat for another conversation
+        checks = self.checks(rows_fn=self.rows(fresh, stale, stopped, codex), alive=lambda pid, sig: None,
+                             start_of=lambda pid: "S")
+        stale_checks = [c for c in checks if "心跳" in c.title]
+        self.assertEqual(len(stale_checks), 1)
+        self.assertEqual(stale_checks[0].level, "warn")
+        self.assertIn("beta-dev", stale_checks[0].title)
+        for name in ("alpha-dev", "gamma-dev", "delta-dev"):
+            self.assertNotIn(name, stale_checks[0].title)
+        self.assertFalse([c for c in checks if "/mnt" in c.title])
+        problem = "state 在 /mnt 底下（測試）"
+        with mock.patch("sampan.store.mnt_problem", return_value=problem):
+            checks = self.checks(rows_fn=self.rows(fresh))
+        mnt = [c for c in checks if c.title == problem]
+        self.assertEqual([c.level for c in mnt], ["fail"])
+
+    def test_no_stale_line_without_a_db(self):
+        from tests.helpers import status_row
+        checks = self.checks(rows_fn=self.rows(status_row("alpha-dev", sid="s1", id="id1")))
+        self.assertFalse([c for c in checks if "心跳" in c.title and c.level == "warn"])

@@ -547,6 +547,27 @@ class CliTest(unittest.TestCase):
             cli.main(["send", "api", "-"])
         self.assertEqual(cs.call_args.args[4], "from\nstdin $x `y`\n")
 
+    def test_dispatches_search_inbox_and_by_target(self):
+        with mock.patch("sampan.send.cmd_search", return_value=0) as cs:
+            self.assertEqual(cli.main(["dispatches", "search", "中文", "--from", "a", "--to", "b", "--since", "2026-11-01",
+                                       "--until", "2026-11-13", "--state", "done", "--limit", "5"]), 0)
+        self.assertEqual(cs.call_args.args[2], "中文")
+        self.assertEqual(cs.call_args.kwargs, {"from_": ["a"], "to": ["b"], "since": "2026-11-01", "until": "2026-11-13",
+                                               "state": "done", "limit": 5})
+        with mock.patch("sampan.send.cmd_search", return_value=0) as cs:
+            cli.main(["dispatches", "search"])
+        self.assertEqual((cs.call_args.args[2], cs.call_args.kwargs["limit"]), (None, 50))
+        with mock.patch("sampan.send.cmd_inbox", return_value=0) as ci:
+            self.assertEqual(cli.main(["dispatches", "inbox", "b"]), 0)
+        self.assertEqual(ci.call_args.args[2], "b")
+        with mock.patch("sampan.send.cmd_dispatches", return_value=0) as cd:
+            cli.main(["dispatches", "--by-target"])
+        self.assertTrue(cd.call_args.kwargs["by_target"])
+        buf = io.StringIO()
+        with mock.patch("sampan.send.cmd_inbox") as ci, redirect_stdout(buf):
+            self.assertEqual(cli.main(["dispatches", "inbox"]), 2)
+        self.assertEqual(ci.call_count, 0)
+
     def test_dispatches_list_and_cancel(self):
         with mock.patch("sampan.send.cmd_dispatches", return_value=0) as cd:
             self.assertEqual(cli.main(["dispatches"]), 0)

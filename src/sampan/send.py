@@ -8,10 +8,11 @@ direct send to Claude: the conversation it went to, so a /clear that starts a ne
 import os
 import time
 import unicodedata
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
-from . import actionlog, deliver, deliveries, dispatch, doorbell, procs
+from . import actionlog, deliver, deliveries, dispatch, doorbell, heartbeat, procs, store
 from .claude_state import Reply, TurnInfo, after_marker, command_reply, find_transcript
 from .claude_state import reply_to as claude_reply_to
 from .clock import fmt_local, parse_iso
@@ -253,6 +254,8 @@ def raw_problem(message):
 def submit(cfg, run, caller, to, message, *, notify, now, snapshot_fn=None, status_fn=None, raw=False, batch=None):
     """Check the target and create a queued dispatch (outbox written, actions.log line). Dispatch, or why not (str).
     raw: send the stripped message as is, with no source line (Claude only; see raw_problem)."""
+    if problem := store.mnt_problem(cfg.state_dir):
+        return problem
     if not message.strip():
         return "訊息是空的"
     if raw:
@@ -357,6 +360,8 @@ def submit_batch(cfg, run, caller, names, message, *, raw, notify, now, snapshot
     batch id); the others are skipped with why, never queued. A name given twice counts once. Batch, or why not
     (str: a bad message, or nobody to send to; nothing is recorded). notify: one notice for the whole batch, when
     every item is finished (see _owes_notice)."""
+    if problem := store.mnt_problem(cfg.state_dir):
+        return problem
     if not message.strip():
         return "訊息是空的"
     if raw:
@@ -416,6 +421,8 @@ def submit_new(cfg, caller, to, to_agent, to_profile, message, *, notify, now):
     """Record the dispatch for `sampan new --message`: the message is the new session's startup prompt, so it is
     `sent` at once (the session does not exist yet to be checked) and the outbox file is what `$(cat …)` reads.
     Dispatch, or why not (str)."""
+    if problem := store.mnt_problem(cfg.state_dir):
+        return problem
     if not message.strip():
         return "訊息是空的"
     r = _create(cfg, caller, to, to_agent, to_profile, message, "sent", now, notify=notify, strip=True, startup=True)
@@ -1396,7 +1403,211 @@ def _ljust(text, width):
     return text + " " * max(0, width - text_width(text))
 
 
-def cmd_dispatches(cfg, out, *, all_):
+TAIPEI = timezone(timedelta(hours=8))  # search days are Taipei days whatever the machine's timezone is (no DST there)
+PREVIEW_CHARS = 60
+PURGED_TEXT = "（本文已清除）"
+INBOX_RECENT = 20
+MESSAGE_COLUMNS = "id, created, from_name, to_name, state, status, text, purged"
+
+
+def _day_start_utc(day):
+    """The UTC instant a Taipei day starts, as the 'YYYY-MM-DD HH:MM:SS' text sqlite's datetime() gives."""
+    if isinstance(day, str):
+        day = date.fromisoformat(day)
+    return datetime(day.year, day.month, day.day, tzinfo=TAIPEI).astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _like_literal(keyword):
+    """keyword as a LIKE pattern that matches it literally: backslash, % and _ escaped (ESCAPE '\\'), wrapped in %...%."""
+    return "%" + keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+
+
+def search(conn, *, keyword=None, from_ids=(), to_ids=(), since=None, until=None, state=None, limit=50):
+    """Messages (newest first, at most limit; None = all) matching every given filter. keyword is literal text looked
+    for in the text and the reply (a purged message has neither: only metadata finds it); from_ids / to_ids are
+    session ids or names (any one matches); since / until are Taipei days (a date or YYYY-MM-DD), until included;
+    state is a state or a fine status."""
+    where, args = [], []
+    if keyword:
+        where.append("(text LIKE ? ESCAPE '\\' OR reply LIKE ? ESCAPE '\\')")
+        args += [_like_literal(keyword)] * 2
+    for column, values in (("from", from_ids), ("to", to_ids)):
+        if values:
+            marks = ",".join("?" * len(values))
+            where.append(f"({column}_id IN ({marks}) OR {column}_name IN ({marks}))")
+            args += [*values, *values]
+    if since:
+        where.append("datetime(created) >= ?")
+        args.append(_day_start_utc(since))
+    if until:
+        last = date.fromisoformat(until) if isinstance(until, str) else until
+        where.append("datetime(created) < ?")
+        args.append(_day_start_utc(last + timedelta(days=1)))
+    if state:
+        where.append("(state = ? OR status = ?)")
+        args += [state, state]
+    sql = (f"SELECT {MESSAGE_COLUMNS} FROM messages" + (" WHERE " + " AND ".join(where) if where else "")
+           + " ORDER BY created DESC, rowid DESC")
+    if limit is not None:
+        sql += " LIMIT ?"
+        args.append(limit)
+    return conn.execute(sql, args).fetchall()
+
+
+def _message_line(m):
+    flat = " ".join(deliver.body(m["text"] or "").split())
+    body = PURGED_TEXT if m["purged"] or m["text"] is None else (flat if len(flat) <= PREVIEW_CHARS else flat[:PREVIEW_CHARS] + "…")
+    state = STATUS_LABELS.get(m["status"]) or STATE_LABELS.get(m["state"], m["state"])
+    cells = (m["id"], fmt_local(parse_iso(m["created"])), m["from_name"] or "", m["to_name"] or "", state)
+    return " ".join(_ljust(c, w) for c, w in zip(cells, (5, 11, 16, 16, 12))) + f" {body}"
+
+
+@contextmanager
+def _read_db(cfg):
+    """The db opened for reading (never created): the connection, or None when there are no dispatches yet."""
+    conn = dispatch._open(cfg.state_dir, fresh_ok=False)
+    try:
+        with dispatch._sqlite_errors(cfg.state_dir):
+            yield conn
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def _registry_rows(cfg):
+    try:
+        return load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)
+    except RegistryError:
+        return []
+
+
+def _ids_of(cfg, names):
+    """Each name as given plus, when it names a registered session (name, alias, id or id prefix), its id and name."""
+    rows, out = _registry_rows(cfg), []
+    for n in names:
+        out.append(n)
+        for r in rows:
+            if n in (r.tmux, r.alias, r.id) or (len(n) >= 4 and r.id.startswith(n)):
+                out += [r.id, r.tmux]
+    return tuple(dict.fromkeys(out))
+
+
+def cmd_search(cfg, out, keyword=None, *, from_=(), to=(), since=None, until=None, state=None, limit=50):
+    """`sampan dispatches search`: one line per message (id, time, from, to, state, first 60 characters). rc 0, 2 on a
+    bad date or an unreadable db. limit 0 = all."""
+    try:
+        for day in (since, until):
+            if day:
+                date.fromisoformat(day)
+    except ValueError:
+        out("❌ 日期要寫成 YYYY-MM-DD（台北時間）")
+        return 2
+    try:
+        with _read_db(cfg) as conn:
+            if conn is None:
+                out("沒有派工")
+                return 0
+            found = search(conn, keyword=keyword, from_ids=_ids_of(cfg, from_), to_ids=_ids_of(cfg, to), since=since,
+                           until=until, state=state, limit=limit or None)
+    except dispatch.DispatchError as e:
+        out(f"❌ {e}")
+        return 2
+    if not found:
+        out("沒有符合的派工")
+        return 0
+    for m in found:
+        out(_message_line(m))
+    return 0
+
+
+def _ago(seconds):
+    seconds = max(0, int(seconds))
+    if seconds < 120:
+        return f"{seconds} 秒前"
+    return f"{seconds // 60} 分鐘前" if seconds < 7200 else f"{seconds // 3600} 小時前"
+
+
+def _beat_text(conn, row, now, alive, start_of):
+    """The target's heartbeat in words: valid (its newest beat), expired / not matching, none, or Codex (has none)."""
+    if row is None:
+        return "不在登記表"
+    if row.agent == "codex":
+        return "Codex 沒有心跳（一律貼全文）"
+    ok = heartbeat.valid(conn, session_id=row.id, conversation=row.session_id, now=now, alive=alive, start_of=start_of)
+    if ok is not None:
+        return f"心跳 {_ago((now - parse_iso(ok['at'])).total_seconds())}"
+    last = conn.execute("SELECT at FROM inboxes WHERE session_id=? ORDER BY at DESC LIMIT 1", (row.id,)).fetchone()
+    at = parse_iso(last["at"]) if last else None
+    return f"心跳已失效（最後一次 {_ago((now - at).total_seconds())}）" if at else "沒有心跳"
+
+
+def _find_session(cfg, name):
+    """The registered session `name` means (name, alias, id or a unique id prefix), or a str saying why not."""
+    rows = _registry_rows(cfg)
+    hits = [r for r in rows if name in (r.tmux, r.alias, r.id)] or [r for r in rows if len(name) >= 4 and r.id.startswith(name)]
+    if len(hits) == 1:
+        return hits[0]
+    return f"找不到 session「{name}」：不在 sampan 登記表裡" if not hits else f"「{name}」對到不只一個 session，請寫完整名稱"
+
+
+def cmd_inbox(cfg, out, name, *, now_fn=_utcnow, alive=os.kill, start_of=procs.start_time):
+    """`sampan dispatches inbox <session>`: what that session was sent: how many are queued, rung and waiting for the
+    pick-up, taken without a reply; its last heartbeat and last doorbell; the INBOX_RECENT newest messages. Read only."""
+    row = _find_session(cfg, name)
+    if isinstance(row, str):
+        out(f"❌ {row}")
+        return 2
+    now = now_fn()
+    mine = "(to_id = :id OR (to_id = '' AND to_name = :name))"
+    who = {"id": row.id, "name": row.tmux}
+    try:
+        with _read_db(cfg) as conn:
+            if conn is None:
+                out(f"{row.tmux}：沒有收到過派工")
+                return 0
+            n = dict(conn.execute(f"SELECT SUM(status = 'queued') AS queued, SUM(status = 'rung') AS rung, "
+                                  f"SUM(status IN ('taken', 'partial')) AS taken FROM messages WHERE {mine}", who).fetchone())
+            out(f"{row.tmux}（{row.agent}）的收件匣")
+            out(f"排隊中 {n['queued'] or 0} 則、已按門鈴等取信 {n['rung'] or 0} 則、已取走沒回覆 {n['taken'] or 0} 則")
+            out(_beat_text(conn, row, now, alive, start_of))
+            ring = doorbell.latest_ring(conn, row.id)
+            out(f"最後一次門鈴：{fmt_local(parse_iso(ring['at']))}，{RING_LABELS.get(ring['result'], ring['result'])}"
+                if ring else "還沒按過門鈴")
+            recent = conn.execute(f"SELECT {MESSAGE_COLUMNS} FROM messages WHERE {mine} "
+                                  f"ORDER BY created DESC, rowid DESC LIMIT {INBOX_RECENT}", who).fetchall()
+    except dispatch.DispatchError as e:
+        out(f"❌ {e}")
+        return 2
+    if recent:
+        out(f"最近 {len(recent)} 則：")
+        for m in recent:
+            out("  " + _message_line(m))
+    return 0
+
+
+def _by_target(cfg, out, now, alive, start_of):
+    """`sampan dispatches --by-target`: the targets with queued or sent messages, how many, and their heartbeat."""
+    try:
+        with _read_db(cfg) as conn:
+            groups = [] if conn is None else conn.execute(
+                "SELECT to_id, to_name, SUM(state = 'queued') AS queued, SUM(state = 'sent') AS sent FROM messages "
+                "WHERE state IN ('queued', 'sent') GROUP BY to_id, to_name ORDER BY to_name").fetchall()
+            if not groups:
+                out("沒有進行中的派工")
+                return 0
+            registered = {r.id: r for r in _registry_rows(cfg)}
+            for g in groups:
+                out(f"{_ljust(g['to_name'], 24)} 排隊 {g['queued']}、等回覆 {g['sent']}；"
+                    + _beat_text(conn, registered.get(g["to_id"]), now, alive, start_of))
+    except dispatch.DispatchError as e:
+        out(f"❌ {e}")
+        return 2
+    return 0
+
+
+def cmd_dispatches(cfg, out, *, all_, by_target=False, now_fn=_utcnow, alive=os.kill, start_of=procs.start_time):
+    if by_target:
+        return _by_target(cfg, out, now_fn(), alive, start_of)
     try:
         items = dispatch.load(cfg.state_dir)
     except dispatch.DispatchError as e:
