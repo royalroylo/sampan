@@ -208,11 +208,21 @@ def load(state_dir):
         conn.close()
 
 
+@contextmanager
+def _sqlite_errors(state_dir):
+    """A sqlite error (locked, corrupt, schema) is a DispatchError, which the callers report instead of crashing."""
+    try:
+        yield
+    except sqlite3.Error as e:
+        raise DispatchError(f"{Path(state_dir) / store.DB_FILE} 無法使用（{e}）。不會覆蓋它。") from e
+
+
 def checkpoint(state_dir, items):
     """Commit items now, in the middle of a transaction (the caller holds the lock): a state that must survive a crash
     of this process before the transaction ends ("being sent" before any key is pressed)."""
-    items.flush()
-    items.conn.commit()
+    with _sqlite_errors(state_dir):
+        items.flush()
+        items.conn.commit()
 
 
 def purge(conn, now, keep_days):
@@ -275,16 +285,21 @@ def transaction(state_dir, *, wait_s=None, keep_days=KEEP_DAYS):
                     time.sleep(0.02)
         conn = None
         try:
-            conn = _open(state_dir, fresh_ok=True)
-            _purge_if_due(conn, state_dir, keep_days)
-            rows, taken = _read(conn)
+            with _sqlite_errors(state_dir):
+                conn = _open(state_dir, fresh_ok=True)
+                _purge_if_due(conn, state_dir, keep_days)
+                rows, taken = _read(conn)
             items = Items(conn, rows, taken)
-            yield items
-            items.flush()
-            conn.commit()
+            yield items  # whatever the caller's block raises passes through as itself
+            with _sqlite_errors(state_dir):
+                items.flush()
+                conn.commit()
         except BaseException:
             if conn is not None:
-                conn.rollback()
+                try:
+                    conn.rollback()
+                except sqlite3.Error:
+                    pass
             raise
         finally:
             if conn is not None:

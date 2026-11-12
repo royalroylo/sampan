@@ -1,5 +1,6 @@
 import dataclasses
 import json
+import sqlite3
 import stat
 import tempfile
 import unittest
@@ -178,6 +179,33 @@ class StoreTest(unittest.TestCase):
                 raise RuntimeError("boom")
         [d] = dispatch.load(self.dir)
         self.assertEqual((d.id, d.state), ("aaaa", "queued"))
+
+    def test_sqlite_errors_surface_as_dispatch_error_and_write_nothing(self):
+        self.put(mk("aaaa"))
+        conn = store.connect(self.dir)
+        self.addCleanup(conn.close)
+        conn.execute("CREATE TRIGGER no_update BEFORE UPDATE ON messages BEGIN SELECT RAISE(ABORT, 'no'); END")
+        conn.commit()
+        with self.assertRaises(DispatchError):  # the upsert fails
+            with dispatch.transaction(self.dir) as cur:
+                cur[0].reason = "x"
+        with self.assertRaises(DispatchError):  # and so does a checkpoint
+            with dispatch.transaction(self.dir) as cur:
+                cur[0].reason = "x"
+                dispatch.checkpoint(self.dir, cur)
+        conn.execute("DROP TRIGGER no_update")
+        conn.execute("DROP TABLE meta")  # the purge on the way in fails
+        conn.commit()
+        with self.assertRaises(DispatchError):
+            with dispatch.transaction(self.dir):
+                pass
+        self.assertEqual(dispatch.load(self.dir)[0].reason, "")
+
+    def test_callers_own_sqlite_error_is_not_wrapped(self):
+        self.put(mk("aaaa"))
+        with self.assertRaises(sqlite3.OperationalError):
+            with dispatch.transaction(self.dir) as cur:
+                cur.conn.execute("SELECT * FROM no_such_table")
 
     def test_second_transaction_sees_first(self):
         self.put(mk("aaaa"))
