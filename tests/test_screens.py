@@ -7,6 +7,8 @@ from sampan.screens import (
     bottom_trust_path,
     claude_box_text,
     claude_input_state,
+    claude_prompt_box_text,
+    claude_prompt_text,
     codex_activity,
     trust_path,
 )
@@ -139,6 +141,13 @@ class ClaudeInputStateTest(unittest.TestCase):
         screen = f"❯ 〔sampan 轉送〕 echoed above\n{rule}\n❯\xa0〔sampan 轉送｜派工 ab12〕\n{rule}\n  footer"
         self.assertEqual(claude_box_text(screen), "❯\xa0〔sampan 轉送｜派工 ab12〕")
         self.assertIsNone(claude_box_text("no box"))
+
+    def test_prompt_box_text_joins_wrapped_rows(self):
+        rule = "─" * 40
+        screen = "\n".join([rule, "❯\xa0〔sampan 門鈴 ab12〕你有 1", "  則新訊息（來自 a", "  1）。", rule, "  ? for shortcuts"])
+        self.assertEqual(claude_prompt_box_text(screen), "〔sampan 門鈴 ab12〕你有 1則新訊息（來自 a1）。")
+        self.assertEqual(claude_prompt_text(screen), "〔sampan 門鈴 ab12〕你有 1")  # unchanged: the prompt row only
+        self.assertIsNone(claude_prompt_box_text("no box"))
 
     def test_dim_numbered_option_is_still_blocked(self):
         rule = "─" * 40

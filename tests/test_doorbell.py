@@ -10,7 +10,8 @@ from pathlib import Path
 
 from sampan import deliver, deliveries, dispatch, doorbell, send, store
 from sampan.claude_state import after_marker
-from sampan.screens import claude_prompt_text
+from sampan.screens import PROMPT_PREFIX, claude_input_state, claude_prompt_text
+from sampan.textwidth import text_width
 from tests import test_send as ts
 from tests.fakes import FakeRunner, cp
 
@@ -34,6 +35,22 @@ def runner(screen=ts.EMPTY):
 def ring_screen(text):
     """The draft fixture with text typed on the prompt line instead of its draft."""
     return ts.DRAFT.replace(claude_prompt_text(ts.DRAFT).strip(), text)
+
+
+def wrapped_screen(text, cols):
+    """The draft fixture with text typed into the box as Claude wraps it at cols columns: the prompt row (❯ NBSP)
+    then continuation rows indented by two, split wherever the width runs out (also inside a word)."""
+    rows, row = [], ""
+    for ch in text:
+        if text_width(row + ch) > cols - 2:
+            rows.append(row)
+            row = ""
+        row += ch
+    rows.append(row)
+    lines = ts.DRAFT.split("\n")
+    i = next(k for k, ln in enumerate(lines) if PROMPT_PREFIX in ln)
+    lines[i:i + 1] = ["\x1b[39m" + PROMPT_PREFIX + rows[0]] + ["  " + r for r in rows[1:]]
+    return "\n".join(lines)
 
 
 def tool_use(name, uid="t1"):
@@ -136,6 +153,36 @@ class FixRoundOneTest(DoorbellBase):
         self.advance(run, a.id, later(40))
         self.assertEqual(run.sent_keys(), [])
         self.assertEqual(self.rings()[0]["result"], "no_answer")
+
+    def test_wrapped_ring_line_gets_one_enter(self):
+        for cols in (80, 120):
+            with self.subTest(cols=cols):
+                a = self.submit_at(0, message=f"to wrap at {cols}")
+                ring = self.ring(a)
+                screen = wrapped_screen(self.ring_line(ring), cols)
+                self.assertGreaterEqual(screen.count("\n  "), 1)  # really over several rows
+                self.assertEqual(claude_input_state(screen), "draft")
+                run = runner(screen)
+                got = self.advance(run, a.id, later(40))
+                self.assertEqual(run.sent_keys(), [["-t", "%2", "Enter"]])
+                self.assertEqual((got.status, self.rings()[-1]["result"]), ("rung", "ringing"))
+                send.cancel(self.cfg, a.id, now=later(41))
+
+    def test_wrapped_ring_line_plus_typed_text_never_gets_enter(self):
+        a = self.submit_at(0)
+        ring = self.ring(a)
+        run = runner(wrapped_screen(self.ring_line(ring) + "我自己補的字", 80))
+        self.advance(run, a.id, later(40))
+        self.assertEqual(run.sent_keys(), [])
+        self.assertEqual(self.rings()[0]["result"], "no_answer")
+
+    def test_users_own_multi_row_draft_never_gets_enter(self):
+        a = self.submit_at(0)
+        self.heartbeat(at=later(1))
+        run = runner(wrapped_screen("這是我自己打的一大段草稿，還沒打完。" * 8, 80))
+        got = self.advance(run, a.id, later(1))
+        self.assertEqual(run.sent_keys(), [])
+        self.assertEqual((got.reason, self.rings()[0]["result"]), (deliver.REASON_DRAFT, "paste_failed"))
 
     def test_ringing_too_long_with_an_idle_target_is_no_answer(self):
         a = self.submit_at(0)

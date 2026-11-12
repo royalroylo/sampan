@@ -12,7 +12,7 @@ from typing import Protocol
 from . import deliver, deliveries, dispatch, heartbeat, store
 from .claude_state import TurnInfo, after_marker, find_transcript
 from .clock import parse_iso
-from .screens import claude_input_state, claude_prompt_text
+from .screens import claude_input_state, claude_prompt_box_text
 from .tmux import Tmux
 
 RINGING, TAKEN, NO_ANSWER, PASTE_FAILED, SUPERSEDED = "ringing", "taken", "no_answer", "paste_failed", "superseded"
@@ -34,11 +34,12 @@ def marker(code):
 
 
 def ring_pending(screen, line):
-    """The prompt holds exactly this ring's line as typed text (trailing whitespace aside). Never a paste mark (a
-    user's own paste looks the same) and never the line with more typed after it: Enter would send the user's words."""
+    """The input box holds exactly this ring's line as typed text, however Claude wrapped it over rows (compared
+    without whitespace: a word wrap may drop the space it breaks at). Never a paste mark (a user's own paste looks the
+    same) and never the line with more typed after it: Enter would send the user's words."""
     if claude_input_state(screen) != "draft":
         return False
-    return (claude_prompt_text(screen) or "").strip() == line.strip()
+    return "".join((claude_prompt_box_text(screen) or "").split()) == "".join(line.split())
 
 
 def ring_text(code, counts, n):

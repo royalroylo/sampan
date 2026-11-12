@@ -428,6 +428,27 @@ def claude_prompt_text(screen):
     return None if prompt is None else plain[prompt][len(PROMPT_PREFIX):]
 
 
+WRAP_INDENT = "  "  # Claude indents the rows of a draft after the prompt row by two columns, under the text
+
+
+def claude_prompt_box_text(screen):
+    """The whole draft in the input box: the prompt row after ❯ NBSP, then every row under it up to the bottom rule
+    without its wrap indent, joined with nothing in between (a wrap may split a line anywhere, even inside a word or
+    a full-width character's run). None when there is no box or prompt row. A draft typed over several lines joins
+    the same way, so this is for comparing with a known one-line text, not for showing."""
+    lines = screen.rstrip("\n").split("\n")
+    box = _box(lines)
+    if box is None:
+        return None
+    plain = [ANSI_RE.sub("", ln).rstrip(" ") for ln in lines]
+    prompt = next((i for i in range(box[1] - 1, box[0], -1) if plain[i].startswith(PROMPT_PREFIX)), None)
+    if prompt is None:
+        return None
+    rows = [plain[prompt][len(PROMPT_PREFIX):]]
+    rows += [ln[len(WRAP_INDENT):] if ln.startswith(WRAP_INDENT) else ln for ln in plain[prompt + 1:box[1]]]
+    return "".join(rows)
+
+
 def claude_input_state(screen):
     """"empty" only for an input box whose prompt is empty or shows Claude's placeholder or suggestion (dim or grey,
     possibly with its cursor cell first); "draft" when the user typed something; "blocked" for everything else
