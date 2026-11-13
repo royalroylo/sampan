@@ -153,6 +153,28 @@ class ClaudeInputStateTest(unittest.TestCase):
         rule = "─" * 40
         self.assertEqual(claude_input_state(f"{rule}\n❯\xa0\x1b[2m1. Yes\x1b[0m\n{rule}\n  footer"), "blocked")
 
+    def test_word_by_word_dim_placeholder_is_empty(self):
+        # Claude 2.1.309 draws the placeholder one dim word at a time, with plain spaces between the words
+        screen = fixture("claude_empty_placeholder_words.ansi")
+        self.assertIn("\x1b[2mTry\x1b[0m \x1b[2m", screen)
+        self.assertEqual(claude_input_state(screen), "empty")
+
+    def test_is_placeholder_ignores_blank_cells(self):
+        from sampan.screens import _is_placeholder
+        raw = ('\x1b[2mTry\x1b[0m \x1b[2m"write\x1b[0m \x1b[2ma\x1b[0m \x1b[2mtest\x1b[0m \x1b[2mfor\x1b[0m '
+               '\x1b[2m<filepath>"\x1b[0m')
+        self.assertTrue(_is_placeholder(raw))
+        self.assertTrue(_is_placeholder("\x1b[7mT\x1b[0m\x1b[2mry\x1b[0m \x1b[2mit\x1b[0m"))  # cursor on the first cell
+        self.assertFalse(_is_placeholder(raw.replace("\x1b[2mtest\x1b[0m", "test")))  # one plain word
+        self.assertFalse(_is_placeholder('Try "write a test"'))
+        self.assertFalse(_is_placeholder("   "))
+
+    def test_word_placeholder_typed_in_normal_text_is_a_draft(self):
+        rule = "─" * 40
+        for line in ('Try "write a test"', '\x1b[2mTry\x1b[0m \x1b[2m"write\x1b[0m a \x1b[2mtest"\x1b[0m'):
+            with self.subTest(line=line):
+                self.assertEqual(claude_input_state(f"{rule}\n❯\xa0{line}\n{rule}\n  footer"), "draft")
+
     def test_placeholder_text_in_normal_intensity_is_a_draft(self):
         screen = fixture("claude_empty_placeholder.ansi").replace("\x1b[2m", "")
         self.assertIn("Try", screen)

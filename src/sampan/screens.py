@@ -384,8 +384,9 @@ def _cells(text):
 
 
 def _is_placeholder(after):
-    """The prompt line's text (after ❯ NBSP, with escapes) is only Claude's suggestion: every visible cell faint, or
-    the first one inverse (Claude's cursor) and every other one faint. Trailing blanks do not count."""
+    """The prompt line's text (after ❯ NBSP, with escapes) is only Claude's suggestion: every non-blank visible cell
+    faint, or the first one inverse (Claude's cursor) and every other non-blank one faint. Blanks never decide: Claude
+    draws the placeholder word by word, with plain spaces between the dim words."""
     cells = _cells(after)
     while cells and not cells[-1][0].strip():
         cells.pop()
@@ -393,7 +394,7 @@ def _is_placeholder(after):
         return False
     if cells[0][2] and len(cells) > 1:
         cells = cells[1:]
-    return all(faint for _, faint, _ in cells)
+    return all(faint for ch, faint, _ in cells if ch.strip())
 
 
 def _box(lines):
