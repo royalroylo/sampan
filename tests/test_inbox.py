@@ -1,16 +1,18 @@
 """The inbox a doorbelled Claude uses through MCP: inbox_take hands it every queued message at once, reply answers each;
 the turn after the take ending fills the unanswered ones from its last text and tells each sender once."""
+import io
 import json
 import re
 import unittest
+from unittest import mock
 
-from sampan import deliveries, dispatch, inbox, send, store
+from sampan import deliveries, dispatch, doorbell, inbox, mcp_server, send, store
 from sampan.clock import fmt_local
 from sampan.send import Caller
 from tests import test_send as ts
 from tests.fakes import FakeRunner
 from tests.helpers import status_row
-from tests.test_doorbell import ID_B, SID_B, DoorbellBase, later, runner, tool_use
+from tests.test_doorbell import ID_B, SID_B, DoorbellBase, later, ring_screen, runner, tool_use
 
 CALLER_B = Caller("b", "alice", "claude", "%2", id=ID_B)
 ID_Z = ts.CALLER_Z.id
@@ -545,6 +547,94 @@ class CancelResendTest(InboxBase):
         send.cmd_show(self.cfg, FakeRunner(strict=True), lines.append, a2.id, status_fn=self.status_fn,
                       now_fn=lambda: later(42))
         self.assertIn(f"  {did} 取信，{fmt_local(later(5))}，一起送的：{a1.id}（已封存）", lines)
+
+
+class ReceiverWatchTest(InboxBase):
+    """A terminal `sampan send` (no --wait) advances once and exits: only the receiver's own MCP watcher looks again.
+    It settles its mail (an unanswered ring, an inbox turn that ended) but never types into its own pane."""
+
+    def tick(self, run, at):
+        server = mcp_server.Server(self.cfg, run, io.StringIO(), io.StringIO(), caller=CALLER_B,
+                                   sleep=lambda _s: None, clock=lambda: 0.0, status_fn=self.status_fn,
+                                   now_fn=lambda: later(at))
+        server.watch_once()
+        return run
+
+    def test_unanswered_ring_is_no_answer_and_left_for_another_advancer_to_paste(self):
+        t = self.send_at(0, "from the terminal", caller=send.TERMINAL)
+        self.rung(t)  # the CLI's one advance rang, then it exited
+        self.append([ts.assistant("not now")])  # the turn after the ring ended without a take
+        run = self.tick(runner(), 40)
+        self.assertEqual(self.rings()[0]["result"], "no_answer")
+        s = self.stored(t.id)
+        self.assertEqual((s.state, s.reason), ("queued", doorbell.REASON_NO_ANSWER))
+        self.assertNotEqual(s.status, "rung")
+        self.assertEqual(ts.tmux_writes(run), [])  # b's watcher never pastes into b
+        got = self.advance(runner(), t.id, later(43))  # any advancer that is not b pastes it in full
+        self.assertEqual((got.state, got.reason), ("sent", doorbell.REASON_NO_ANSWER))
+
+    def test_taken_and_replied_closes_after_two_idle_looks(self):
+        t = self.send_at(0, "from the terminal", caller=send.TERMINAL)
+        did = self.taken(t)
+        self.reply(t.id, "the answer", did)
+        self.append([tool_use("mcp__sampan__reply", "rp"), _result("ok", "rp"), ts.assistant("done")])
+        run = self.tick(runner(), 30)
+        s = self.stored(t.id)
+        self.assertEqual((s.state, s.reason), ("sent", "已有回覆段落，對方還在做"))  # one idle look is not enough
+        self.tick(run, 33)
+        s = self.stored(t.id)
+        self.assertEqual((s.state, s.reply), ("done", "the answer"))
+        self.assertIsNone(deliveries.active_delivery(self.conn(), ID_B))
+        self.assertEqual(ts.tmux_writes(run), [])
+
+    def test_a_session_sender_gets_its_notice_from_the_receivers_watcher(self):
+        a = self.send_at(0, "from a")
+        did = self.taken(a)
+        self.reply(a.id, "the answer", did)
+        self.append([ts.assistant("done")])
+        run = runner()
+        self.tick(run, 30)
+        self.tick(run, 33)
+        self.assertEqual(self.stored(a.id).state, "done")
+        self.assertEqual(self.notices(run, "%1"),
+                         [f"〔sampan：給 b 的派工 {a.id} 已回覆；用 sampan 工具 dispatch_result 看內容〕"])
+        self.assertEqual(ts.tmux_writes(run, "%2"), [])
+
+    def test_never_presses_a_key_in_its_own_pane(self):
+        t = self.send_at(0, "from the terminal", caller=send.TERMINAL)
+        ring = self.ring(t)
+        line = dispatch.outbox_path(self.cfg.state_dir, f"ring-{ring['id']}").read_text()
+        run = self.tick(runner(ring_screen(line)), 40)  # a sender's advance would press Enter again here
+        self.assertEqual(ts.tmux_writes(run), [])
+        self.assertEqual((self.rings()[0]["result"], self.stored(t.id).status), ("ringing", "rung"))
+        run = self.tick(runner(ring_screen(line)), doorbell.RING_LIMIT_S + 10)  # too old: no_answer, still no key
+        self.assertEqual(ts.tmux_writes(run), [])
+        self.assertEqual(self.rings()[0]["result"], "no_answer")
+        q = self.send_at(doorbell.RING_LIMIT_S + 20, "queued, never rung", caller=send.TERMINAL)
+        self.heartbeat(at=later(doorbell.RING_LIMIT_S + 20))
+        run = self.tick(runner(), doorbell.RING_LIMIT_S + 30)  # b's queued mail is never rung or pasted by b
+        self.assertEqual(ts.tmux_writes(run), [])
+        self.assertEqual({self.stored(x.id).state for x in (t, q)}, {"queued"})
+
+    def test_reads_only_the_live_mail(self):
+        old = [dispatch.Dispatch(f"f{n:03x}", "a", "", "claude", "b", "claude", "alice", "hi", "done",
+                                 later(0).isoformat(), done_at=later(0).isoformat(), from_id=ts.ID_A, to_id=ID_B)
+               for n in range(40)]
+        with dispatch.transaction(self.cfg.state_dir) as cur:
+            cur.extend(old)
+        t = self.send_at(0, "from the terminal", caller=send.TERMINAL)
+        self.rung(t)
+        self.append([ts.assistant("not now")])
+        seen = []
+        real = dispatch._from_row
+
+        def count(r):
+            seen.append(r["id"])
+            return real(r)
+        with mock.patch.object(dispatch, "_from_row", count):
+            self.tick(runner(), 40)
+        self.assertEqual(set(seen), {t.id})  # the finished mail to b is never loaded
+        self.assertEqual(self.rings()[0]["result"], "no_answer")
 
 
 if __name__ == "__main__":

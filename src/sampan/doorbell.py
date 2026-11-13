@@ -183,12 +183,13 @@ def ring_for(items, cfg, run, target_row, group, now, sleep, *, save, log, bell=
     return None
 
 
-def settle_ring(conn, cfg, run, ring, target_row, rung, now, *, sleep, log, bell=None):
+def settle_ring(conn, cfg, run, ring, target_row, rung, now, *, sleep, log, bell=None, keys=True):
     """Judge the target's ringing ring (rung: the target's messages whose status is rung). A new conversation
     supersedes it; a permission prompt for inbox_take is noted (no key is pressed); once the target is idle and the
     turn after the ring ended without a take (or the ring never showed up after SEEN_GRACE_S and is not in the box
     either), it is `no_answer` and the messages go back in line to be pasted. A ring left in the box gets Enter
-    again. Rung messages no ringing ring holds go back in line."""
+    again, unless keys is False (the target's own watcher: it waits for another advancer or RING_LIMIT_S). Rung
+    messages no ringing ring holds go back in line."""
     members = [x for x in rung if ring is not None and x.id in _ids(ring)]
     _back_in_line([x for x in rung if x not in members])
     if ring is None:
@@ -224,6 +225,8 @@ def settle_ring(conn, cfg, run, ring, target_row, rung, now, *, sleep, log, bell
             return
         text = _ring_outbox(cfg, code)
         if text and target_row.pane and ring_pending(tmux.capture(target_row.pane, escapes=True), text):
+            if not keys:
+                return
             why = (bell or PasteDoorbell(cfg, run, sleep)).ring(target_row, text)
             log(f"門鈴 {code}：還在輸入框，再按一次 Enter" + (f"（{why}）" if why else ""))
             return

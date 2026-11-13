@@ -665,14 +665,47 @@ def _next_group(items, d, row):
     return group
 
 
-def _settle_ring(cfg, run, items, row, now, sleep):
+def _settle_ring(cfg, run, items, row, now, sleep, keys=False):
     """Judge the target's ringing ring on everyone's behalf (its messages' own watchers may never look again)."""
     target = row.id or row.name
     rung = [x for x in items if x.state == "queued" and x.status == "rung" and _for_target(x, row)]
     ring = doorbell.ringing(items.conn, target)
     if ring is not None or rung:
         doorbell.settle_ring(items.conn, cfg, run, ring, row, rung, now, sleep=sleep,
-                             log=lambda line: _log(cfg, "send", line))
+                             log=lambda line: _log(cfg, "send", line), keys=keys)
+
+
+def needs_settling(d, target_id):
+    """Whether d is mail to target_id that its receiver's watcher settles: rung (its ring waits to be judged) or sent
+    (its delivery waits for the turn to end)."""
+    return bool(target_id) and d.to_id == target_id and (d.state == "sent" or (d.state == "queued"
+                                                                               and d.status == "rung"))
+
+
+def settle_mail(cfg, run, target_id, ids, *, sleep, snapshot_fn=None, status_fn=None, now=None):
+    """The receiving side of advance, for the watcher of target_id's own session (ids: its mail that needs_settling):
+    a sender that advanced once and exited (a terminal `sampan send`) never looks again. Its ringing ring is judged
+    (no_answer once the turn after it ended without a take, or after RING_LIMIT_S) and its active delivery is judged
+    (an inbox one ends after two idle looks once its turn is over); the original senders get their notices as from
+    advance. No key is ever pressed into target_id's own pane: a ring left in the box gets no Enter, and messages that
+    go back in line are left for an advancer that is not the target (a sender's watcher, the ui, the next send)."""
+    now = now or _utcnow()
+    with dispatch.transaction(cfg.state_dir, keep_days=cfg.keep_days, ids=ids) as items:
+        rows = _rows(cfg, run, snapshot_fn, status_fn)
+        row = _row_of(rows, target_id, "")
+        if row is None or row.state != State.RUNNING:
+            return
+
+        def save():
+            dispatch.checkpoint(cfg.state_dir, items)
+        with dispatch._sqlite_errors(cfg.state_dir):
+            if row.agent != "codex":
+                _settle_ring(cfg, run, items, row, now, sleep, keys=False)
+            _busy_with_delivery(cfg, run, items, row, target_id, now)
+            for x in [x for x in items if x.to_id == target_id and x.state in dispatch.FINISHED]:
+                owed = x if x.batch is None else _group(items, x.batch)[0]
+                if owed.from_id != target_id and _owes_notice(owed, items):
+                    notify_caller(cfg, run, owed, sleep, rows=rows, save=save, items=items)
 
 
 def _created_key(x):

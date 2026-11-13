@@ -738,7 +738,8 @@ class Server:
             _log(f"心跳刪不掉：{e!r}")
 
     def watch_once(self):
-        """Advance this caller's pending dispatches (and the ones this server created) once."""
+        """Advance this caller's pending dispatches (and the ones this server created) once, then settle the mail
+        addressed to the caller (send.settle_mail: its sender may never look again; no key into its own pane)."""
         self.beat()
         try:
             items = dispatch.load(self.cfg.state_dir, ids=())  # the live ones only: every 3 s in every server
@@ -754,6 +755,13 @@ class Server:
                                  status_fn=self.status_fn, now=self.now_fn())
                 except (dispatch.DispatchError, RegistryError, OSError) as e:
                     _log(f"派工 {d.id}：{e}")
+        inbound = [d.id for d in items if send.needs_settling(d, self.caller.id)]
+        if inbound:
+            try:
+                send.settle_mail(self.cfg, self.run, self.caller.id, inbound, sleep=self.sleep,
+                                 snapshot_fn=self.snapshot_fn, status_fn=self.status_fn, now=self.now_fn())
+            except (dispatch.DispatchError, RegistryError, OSError) as e:
+                _log(f"收件 {'、'.join(inbound)}：{e}")
 
     def _watch(self, interval):
         while not self._stop.wait(interval):
