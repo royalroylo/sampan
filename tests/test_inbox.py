@@ -616,6 +616,15 @@ class ReceiverWatchTest(InboxBase):
         self.assertEqual(ts.tmux_writes(run), [])
         self.assertEqual({self.stored(x.id).state for x in (t, q)}, {"queued"})
 
+    def test_a_sender_still_presses_enter_on_a_ring_left_in_the_box(self):
+        t = self.send_at(0, "from the terminal", caller=send.TERMINAL)
+        ring = self.ring(t)
+        line = dispatch.outbox_path(self.cfg.state_dir, f"ring-{ring['id']}").read_text()
+        run = runner(ring_screen(line))
+        got = self.advance(run, t.id, later(40))  # an advancer that is not b, after the grace
+        self.assertEqual(ts.tmux_writes(run), [["tmux", "-u", "send-keys", "-t", "%2", "Enter"]])
+        self.assertEqual((got.status, self.rings()[0]["result"]), ("rung", "ringing"))
+
     def test_reads_only_the_live_mail(self):
         old = [dispatch.Dispatch(f"f{n:03x}", "a", "", "claude", "b", "claude", "alice", "hi", "done",
                                  later(0).isoformat(), done_at=later(0).isoformat(), from_id=ts.ID_A, to_id=ID_B)

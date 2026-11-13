@@ -665,7 +665,7 @@ def _next_group(items, d, row):
     return group
 
 
-def _settle_ring(cfg, run, items, row, now, sleep, keys=False):
+def _settle_ring(cfg, run, items, row, now, sleep, keys=True):
     """Judge the target's ringing ring on everyone's behalf (its messages' own watchers may never look again)."""
     target = row.id or row.name
     rung = [x for x in items if x.state == "queued" and x.status == "rung" and _for_target(x, row)]
