@@ -5,6 +5,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-11-16
+
+Upgrading: restart the Claude sessions after updating, so each one runs the new `sampan mcp serve`.
+
 ### Fixed
 - Claude's prompt suggestion (the next reply it guesses, in dim) that starts with a number, such as 「1. 要 2. 下一個PR做 3. 隨時」, was read as a numbered option of a menu, so a send to that idle session waited and failed with 「對方畫面停在選單或提示」. A dim numbered line alone in the input box now counts as an empty prompt; a numbered line in normal text, or with other lines in the box, is still a menu.
 
