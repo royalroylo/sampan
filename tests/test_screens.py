@@ -149,9 +149,32 @@ class ClaudeInputStateTest(unittest.TestCase):
         self.assertEqual(claude_prompt_text(screen), "〔sampan 門鈴 ab12〕你有 1")  # unchanged: the prompt row only
         self.assertIsNone(claude_prompt_box_text("no box"))
 
-    def test_dim_numbered_option_is_still_blocked(self):
+    def test_numbered_dim_suggestion_is_empty(self):
+        # Claude's prompt suggestion (the next reply it guesses, in dim) may itself be a numbered list
+        screen = fixture("claude_numbered_suggestion.ansi")
+        self.assertIn("❯\xa0\x1b[2m1. ", screen)
+        self.assertEqual(claude_input_state(screen), "empty")
         rule = "─" * 40
-        self.assertEqual(claude_input_state(f"{rule}\n❯\xa0\x1b[2m1. Yes\x1b[0m\n{rule}\n  footer"), "blocked")
+        self.assertEqual(claude_input_state(f"{rule}\n❯\xa0\x1b[7m1\x1b[27m\x1b[2m. Yes\x1b[0m\n{rule}\n  footer"), "empty")
+
+    def test_numbered_option_that_is_not_a_lone_dim_line_is_blocked(self):
+        rule = "─" * 40
+        for box in ("❯\xa01. Yes",  # normal intensity
+                    "❯\xa0\x1b[2m1. Yes\x1b[0m\n  2. No",  # more options under it
+                    "  Pick one\n❯\xa0\x1b[2m1. Yes\x1b[0m",  # a question above it
+                    "❯\xa0\x1b[2m1. Yes\x1b[0m typed"):  # not all dim
+            with self.subTest(box=box):
+                self.assertEqual(claude_input_state(f"{rule}\n{box}\n{rule}\n  footer"), "blocked")
+
+    def test_permission_dialog_is_blocked(self):
+        screen = fixture("claude_permission_dialog.ansi")
+        self.assertIn("Do you want to proceed?", screen)
+        self.assertEqual(claude_input_state(screen), "blocked")
+
+    def test_typed_numbered_text_is_not_empty(self):
+        # typing over the suggestion replaces it: the box then holds the user's own words
+        screen = fixture("claude_numbered_suggestion.ansi").replace("\x1b[2m1. 要 2. 下一個PR做 3. 隨時\x1b[0m", "好的，照做")
+        self.assertEqual(claude_input_state(screen), "draft")
 
     def test_word_by_word_dim_placeholder_is_empty(self):
         # Claude 2.1.309 draws the placeholder one dim word at a time, with plain spaces between the words

@@ -467,10 +467,11 @@ def claude_input_state(screen):
     text = plain[prompt][len(PROMPT_PREFIX):].strip()
     after = lines[prompt].split(PROMPT_PREFIX, 1)[1] if PROMPT_PREFIX in lines[prompt] else ""
     suggestion = _is_placeholder(after)
-    if re.match(r"\d+\.\s", text) or (text.startswith("/") and not suggestion):
-        return "blocked"  # a numbered option of a dialog, or a typed slash command with its menu (a faint one is
-        # Claude suggesting the last command again in an empty box)
-    if any(plain[i].strip() for i in range(top + 1, bottom) if i != prompt):
+    others = any(plain[i].strip() for i in range(top + 1, bottom) if i != prompt)
+    if (re.match(r"\d+\.\s", text) and (others or not suggestion)) or (text.startswith("/") and not suggestion):
+        return "blocked"  # a numbered option of a dialog, or a typed slash command with its menu (a faint one alone
+        # in the box is Claude's suggestion: the last command again, or a next reply such as "1. yes 2. later")
+    if others:
         return "draft"  # another line inside the box (e.g. a draft that starts with a blank line) is not empty
     if not text:
         return "empty"

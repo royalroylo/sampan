@@ -5,6 +5,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Claude's prompt suggestion (the next reply it guesses, in dim) that starts with a number, such as 「1. 要 2. 下一個PR做 3. 隨時」, was read as a numbered option of a menu, so a send to that idle session waited and failed with 「對方畫面停在選單或提示」. A dim numbered line alone in the input box now counts as an empty prompt; a numbered line in normal text, or with other lines in the box, is still a menu.
+
 ## [0.17.0] - 2026-11-13
 
 Upgrading: the first 0.17 command moves your dispatches into `dispatches.db` by itself and keeps a backup (`backup-0.17-<time>/`); `sampan migrate --revert` goes back to the 0.16 format. Then run `sampan mcp install --allow-inbox` and restart the sessions sampan lists, so each one runs the new `sampan mcp serve` and can take mail without a permission prompt. This release also fixes a 0.16.1 bug: a freshly started Claude's grey placeholder was read as unsent text, so sends to it waited in the queue.
