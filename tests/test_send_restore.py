@@ -238,6 +238,16 @@ class RestoreLimitTest(RestoreBase):
         self.assertEqual(self.start.call_count, 3)
         self.assertEqual(self.start.call_args.args[2], "e")
 
+    def test_a_place_held_by_an_abandoned_phase_is_freed(self):
+        ds = {n: self.restore_submit(to=n) for n in "bde"}
+        for n in "bd":
+            self.advance(FakeRunner(strict=True), ds[n].id)  # both places taken; nobody ever looks at them again
+        self.assertEqual(self.start.call_count, 2)
+        far = later(send_restore.HOLD_MAX_S + 1)
+        self.advance(FakeRunner(strict=True), ds["e"].id, far)
+        self.assertEqual(self.start.call_count, 3)
+        self.assertEqual(self.start.call_args.args[2], "e")
+
     def test_a_batch_of_stopped_sessions_is_queued_and_reattached_a_few_at_a_time(self):
         self.set_row("b", state=State.RUNNING, agent_status="idle", pane="%2", tmux_alive=True)
         b = send.submit_batch(self.cfg, FakeRunner(strict=True), send.TERMINAL, ["b", "d", "e", "f"], "hi", raw=False,
@@ -305,6 +315,42 @@ class RestoreFailureTest(RestoreBase):
         self.assertEqual(d.state, "failed")
         self.assertIn("不重複開", d.reason)
         self.start.assert_not_called()
+
+    def test_a_target_retired_after_the_send_fails_the_dispatch_instead_of_waiting_forever(self):
+        d = self.restore_submit()
+        self.set_row("b", state=State.RETIRED)
+        d = self.advance(FakeRunner(strict=True), d.id)
+        self.assertEqual(d.state, "failed")
+        self.assertIn("sampan activate b", d.reason)
+        self.start.assert_not_called()
+
+    def test_a_claim_whose_dispatches_were_all_cancelled_is_not_carried_out(self):
+        a = self.restore_submit()
+        real = send._restore_work
+
+        def cancel_first(cfg, run, job, **kw):  # cancelled between the claim and the work
+            send.cancel(cfg, a.id)
+            return real(cfg, run, job, **kw)
+        with mock.patch("sampan.send._restore_work", cancel_first):
+            self.advance(FakeRunner(strict=True), a.id)
+        self.start.assert_not_called()
+        self.assertEqual(self.stored(a.id).state, "cancelled")
+
+    def test_a_target_that_keeps_going_down_is_launched_only_twice(self):
+        d = self.restore_submit()
+        t = 0
+        for _ in range(send_restore.MAX_LAUNCHES):
+            t += 1
+            d = self.advance(FakeRunner(strict=True), d.id, later(t))
+            self.assertEqual(self.phase(d.id), "starting")
+            self.up()
+            t += 1
+            self.advance(tmux_runner(DRAFT), d.id, later(t))  # up and idle but someone is typing: ready, not sent
+            self.set_row("b", state=State.STOPPED, agent_status="-", pane=None, tmux_alive=False)
+        d = self.advance(FakeRunner(strict=True), d.id, later(t + 1))
+        self.assertEqual(self.start.call_count, send_restore.MAX_LAUNCHES)
+        self.assertEqual(d.state, "failed")
+        self.assertIn("還是起不來", d.reason)
 
     def test_resend_starts_the_reattach_over(self):
         self.start.return_value = "目錄不存在 /gone"

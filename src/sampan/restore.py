@@ -289,18 +289,21 @@ def _watch(cfg, run, launched, timeout, sleep, out=lambda _l: None, relay=None):
     return resumed, at_trust, [row.tmux for row in pending.values()]
 
 
-def start_one(cfg, run, name, *, sleep, out=lambda _l: None, alive=os.kill):
+def start_one(cfg, run, name, *, sleep, out=lambda _l: None, alive=os.kill, target_id=""):
     """Reattach one stopped session for a send that asked for it (`send --restore`): the same checks and the same launch
     line as `sampan restore <name>`, but it only starts the agent: it neither waits for it nor does the Remote Control
     reset (the caller looks again later, and steps.rc_step runs when it is up). Never a key beyond the launch line.
-    Returns None when the agent was started (or is already running), else why it was not (a plain reason)."""
+    target_id: the registry id the sender addressed; the row is found by it (a rename since the claim does not matter,
+    and a name that now belongs to another session is never launched). Returns None when the agent was started (or
+    is already running), else why it was not (a plain reason)."""
     try:
         rows = load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)
     except RegistryError as e:
         return str(e)
-    row = next((r for r in rows if r.tmux == name), None)
+    row = next((r for r in rows if (r.id == target_id if target_id else r.tmux == name)), None)
     if row is None:
         return f"找不到 session：{name}（登記表沒有）"
+    name = row.tmux
     if row.state == "retired":
         return f"{name} 是 retired；先 sampan activate {name}"
     try:

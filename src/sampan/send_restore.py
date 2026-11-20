@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from .status import State
 
 RESTORE = "restore"  # extra key: the sender asked for the stopped target to be reattached first
+LAUNCHES = "restore_launches"  # extra key: how many times the launch line was claimed for this dispatch
 PHASE = "restore_phase"  # extra key: "", launching, starting, rc or ready
 PHASE_AT = "restore_at"  # extra key: when the phase began (UTC ISO)
 LAUNCHING, STARTING, RC, READY_PHASE = "launching", "starting", "rc", "ready"
@@ -27,6 +28,8 @@ RESTORE_AT_ONCE = 2  # targets being reattached at the same time on one machine 
 LAUNCH_STALE_S = 60  # a launch claim with no result after this long: the process that made it is gone
 START_LIMIT_S = 120  # from the claim until the target is up and idle
 DIED_GRACE_S = 15  # right after the launch line tmux may not show the session yet: not "died" before this
+MAX_LAUNCHES = 2  # a dispatch's target is launched at most this often (up, then down again before the message left)
+HOLD_MAX_S = START_LIMIT_S + 120  # a place held by a phase older than this is an orphan (nobody advances it): free it
 RC_STALE_S = 120  # a Remote Control reset claim with no result after this long: carry on to the delivery
 
 REASON_NOT_CLAIMED = "對方已停止，等接回"  # restore asked, but this look may not start anything (a tool result's own look)
@@ -39,6 +42,8 @@ FAIL_TIMEOUT = "接回逾時：{n} 秒內沒有閒下來（可能停在提示或
 FAIL_INTERRUPTED = "接回中斷（送出接回指令時 sampan 結束了），不重複開；sampan status 看過 {name} 後用 resend 重送"
 FAIL_DIED = "接回後 {name} 的 agent 又結束了；sampan status 看過後用 resend 重送"
 FAIL_STATE = "接回後 {name} 的狀態是「{state}」，不送；sampan status 看過後用 resend 重送"
+FAIL_RETIRED = "對方 {name} 已是 retired，不接回；要的話先 sampan activate {name}，再用 resend 重送"
+FAIL_AGAIN = "接回 {n} 次，{name} 還是起不來又停了；到 tmux attach -t {name} 看過，再用 resend 重送"
 FAIL_START = "接回失敗：{why}"
 # queued reasons that clear by themselves or end in a failure of their own: the 30-minute queue limit does not apply
 WAIT_PREFIXES = ("對方已停止，等接回", "對方已停止，接回中", "對方接回中", "排隊等接回", "對方已接回")

@@ -884,6 +884,18 @@ class StartOneTest(Base):
         self.assertEqual(r.called(["tmux", "-u", "new-session"]), [])
         self.assertEqual(self.keys(), [])
 
+    def test_the_row_is_found_by_id_so_a_rename_does_not_matter_and_a_reused_name_is_never_launched(self):
+        self.transcript(A)
+        self.transcript(B)
+        self.registry([Row("renamed", "claude", "alice", A, str(self.cwd), id="id-a"),
+                       Row("old-name", "claude", "alice", B, str(self.cwd), id="id-b")])
+        r = self.runner()
+        self.assertIsNone(self.start(r, "old-name", target_id="id-a"))  # the sender addressed id-a, once "old-name"
+        lines = [k[1] for k in self.keys() if len(k) > 1 and k[1] != "Enter"]
+        self.assertEqual(len(lines), 1)
+        self.assertIn(f"--resume {A}", lines[0])
+        self.assertIn("登記表沒有", self.start(self.runner(), "x", target_id="id-gone"))
+
     def test_an_agent_that_already_runs_is_not_started_twice(self):
         self.transcript(A)
         self.registry([Row("x", "claude", "alice", A, str(self.cwd))])

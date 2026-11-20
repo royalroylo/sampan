@@ -765,6 +765,7 @@ class Server:
         name = self.caller.name
         for d in items:
             if d.id in owed and (d.id in self.mine or send.from_session(d, name, self.caller.id)):
+                self.beat()  # a reattach inside an advance takes a minute: keep the heartbeat fresh between dispatches
                 try:
                     send.advance(self.cfg, self.run, d.id, sleep=self.sleep, snapshot_fn=self.snapshot_fn,
                                  status_fn=self.status_fn, now=self.now_fn())

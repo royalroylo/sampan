@@ -528,8 +528,10 @@ def advance(cfg, run, did, *, sleep, snapshot_fn=None, status_fn=None, now=None,
                 notify_caller(cfg, run, owed, sleep, rows=rows(), save=save, items=items)
         result = replace(d)
     if work:  # claimed inside the lock above, done outside it; then one more look (the delivery, or the failure's notice)
+        began = time.monotonic()
         for job in work:
             _restore_work(cfg, run, job, sleep=sleep, snapshot_fn=snapshot_fn, status_fn=status_fn, now=now)
+        now += timedelta(seconds=time.monotonic() - began)
         return advance(cfg, run, did, sleep=sleep, snapshot_fn=snapshot_fn, status_fn=status_fn, now=now, report=report,
                        report_batch=report_batch, restore=False)
     return result
@@ -671,11 +673,24 @@ def _set_phase(group, phase, now, reason=""):
         x.reason = reason
 
 
+def _orphan(x, now):
+    """A phase nobody has advanced for so long that its sender is gone (a Ctrl-C'd command, a dead session): it no
+    longer holds one of the places, so it cannot keep every later reattach waiting for ever."""
+    at = parse_iso(x.extra.get(send_restore.PHASE_AT))
+    return at is not None and (now - at).total_seconds() > send_restore.HOLD_MAX_S
+
+
 def _restoring(cfg, d, row, now, save, items, work):
     """The reattach step of a dispatch sent with restore, judged inside the lock (send_restore.decide). True: d goes no
     further now (it waits, failed, or a job was claimed for after the lock); False: deliver as usual (nothing to
     reattach, or it is done)."""
     group = _restore_group(items, row) or [d]
+    if row.state == State.RETIRED:  # retired after it was sent (or while it was up): never reattached, never left waiting
+        why = send_restore.FAIL_RETIRED.format(name=row.name)
+        for x in group:
+            _finish(x, "failed", now, why)
+        _log(cfg, "send", f"派工 {'、'.join(x.id for x in group)}：{why}")
+        return True
     first = next((x for x in group if x.extra.get(send_restore.PHASE)), None)
     phase = first.extra[send_restore.PHASE] if first else ""
     if phase == send_restore.READY_PHASE and row.state == State.STOPPED:
@@ -686,7 +701,8 @@ def _restoring(cfg, d, row, now, save, items, work):
     at = parse_iso(first.extra.get(send_restore.PHASE_AT)) if first and phase else None
     age = (now - at).total_seconds() if at else 0
     held = {x.to_id or x.to_name for x in items if x.state == "queued"
-            and x.extra.get(send_restore.PHASE) in send_restore.ACTIVE and not _for_target(x, row)}
+            and x.extra.get(send_restore.PHASE) in send_restore.ACTIVE and not _for_target(x, row)
+            and not _orphan(x, now)}
     step = send_restore.decide(row, phase, age, others_active=len(held), rc=steps.rc_wanted(cfg, row))
     if step.kind == "ready":
         _set_phase(group, send_restore.READY_PHASE, now)
@@ -704,7 +720,16 @@ def _restoring(cfg, d, row, now, save, items, work):
         d.reason = send_restore.REASON_NOT_CLAIMED
         return True
     if step.kind == "launch":
+        n = max(x.extra.get(send_restore.LAUNCHES, 0) for x in group)
+        if n >= send_restore.MAX_LAUNCHES:  # up and down again, twice: not a thing to keep launching
+            why = send_restore.FAIL_AGAIN.format(n=n, name=row.name)
+            for x in group:
+                _finish(x, "failed", now, why)
+            _log(cfg, "send", f"派工 {'、'.join(x.id for x in group)}：{why}")
+            return True
         _set_phase(group, send_restore.LAUNCHING, now, send_restore.REASON_RESTORING)
+        for x in group:
+            x.extra = {**x.extra, send_restore.LAUNCHES: n + 1}
     else:
         _set_phase(group, send_restore.RC, now, send_restore.REASON_RC)
     save()  # the claim is on record before anything is pressed: a second look never starts the same thing again
@@ -720,9 +745,19 @@ def _restore_work(cfg, run, job, *, sleep, snapshot_fn, status_fn, now):
     logs what it could not do)."""
     kind, name, target_id, ids = job
     why = None
+    began = time.monotonic()
+    try:
+        with dispatch.transaction(cfg.state_dir, keep_days=cfg.keep_days, ids=ids) as items:
+            wanted = any(x.id in ids and x.state == "queued" for x in items)
+        if not wanted:  # every dispatch of the claim was cancelled meanwhile: nobody wants it any more
+            _log(cfg, "send", f"派工 {'、'.join(ids)}：接回（{kind}）前都已取消，沒做")
+            return
+    except (dispatch.DispatchError, OSError) as e:
+        _log(cfg, "send", f"派工 {'、'.join(ids)}：接回前讀不到派工，沒做：{e}")
+        return
     try:
         if kind == "launch":
-            why = restore_mod.start_one(cfg, run, name, sleep=sleep)
+            why = restore_mod.start_one(cfg, run, name, sleep=sleep, target_id=target_id)
         else:
             row = _row_of(_rows(cfg, run, snapshot_fn, status_fn), target_id, name)
             reg = next((r for r in load_rows(cfg.registry_path, codex_profile=cfg.codex.profile) if r.tmux == name), None)
@@ -731,6 +766,7 @@ def _restore_work(cfg, run, job, *, sleep, snapshot_fn, status_fn, now):
     except Exception as e:  # noqa: BLE001  (a tmux or registry failure is a reason like any other)
         why = f"{type(e).__name__}：{e}" if kind == "launch" else None
         _log(cfg, "send", f"派工 {'、'.join(ids)}：接回（{kind}）出錯：{e!r}")
+    now = now + timedelta(seconds=time.monotonic() - began)  # the work took a while: ages count from when it ended
     try:
         with dispatch.transaction(cfg.state_dir, keep_days=cfg.keep_days, ids=ids) as items:
             group = [x for x in items if x.id in ids and x.state == "queued"]
