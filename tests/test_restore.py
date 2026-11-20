@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sampan.registry import Row, write_rows
-from sampan.restore import Candidate, candidates, cmd_restore
+from sampan.restore import Candidate, candidates, cmd_restore, start_one
 from tests.fakes import FakeRunner, cp, pane_line, ps_line
 from tests.helpers import make_env
 from tests.test_claude_state import write_session
@@ -850,6 +850,48 @@ class CliTest(unittest.TestCase):
                 else:
                     os.environ[k] = v
         self.assertIn("已改名為 sampan restore", "\n".join(msgs))
+
+
+
+class StartOneTest(Base):
+    """restore.start_one: what `send --restore` uses: the launch line only, no waiting and no Remote Control reset."""
+
+    def start(self, r, name="x", **kw):
+        kw.setdefault("alive", dead)
+        return start_one(self.cfg, r, name, sleep=self.sleep, out=self.msgs.append, **kw)
+
+    def test_it_sends_the_launch_line_for_the_recorded_conversation_and_returns_without_waiting(self):
+        self.transcript(A)
+        self.registry([Row("x", "claude", "alice", A, str(self.cwd))])
+        r = self.runner()
+        self.assertIsNone(self.start(r))
+        self.assertEqual(len(r.called(["tmux", "-u", "new-session"])), 1)
+        lines = [k[1] for k in self.keys() if len(k) > 1 and k[1] != "Enter"]
+        self.assertEqual(len(lines), 1)
+        self.assertIn(f"--resume {A}", lines[0])
+        self.assertFalse(any("remote-control" in " ".join(k) for k in self.keys()))
+        self.assertIn("接回：x", self.text())
+
+    def test_the_reasons_it_cannot(self):
+        self.transcript(A)
+        self.registry([Row("x", "claude", "alice", A, str(self.cwd)),
+                       Row("gone", "claude", "alice", B, str(self.cwd)),
+                       Row("old", "claude", "alice", A, str(self.cwd), state="retired")])
+        r = self.runner()
+        self.assertIn("找不到逐字稿", self.start(r, "gone"))
+        self.assertIn("sampan activate old", self.start(r, "old"))
+        self.assertIn("登記表沒有", self.start(r, "nope"))
+        self.assertEqual(r.called(["tmux", "-u", "new-session"]), [])
+        self.assertEqual(self.keys(), [])
+
+    def test_an_agent_that_already_runs_is_not_started_twice(self):
+        self.transcript(A)
+        self.registry([Row("x", "claude", "alice", A, str(self.cwd))])
+        self.panes = [pane_line("x", "%7", 4242, "claude", str(self.cwd))]
+        self.procs = [ps_line(4242, 1, "claude", "claude")]
+        r = self.runner()
+        self.assertIsNone(self.start(r))
+        self.assertEqual(self.keys(), [])
 
 
 if __name__ == "__main__":

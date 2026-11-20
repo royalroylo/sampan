@@ -83,8 +83,11 @@ def build_parser():
     sd.add_argument("--timeout", type=int, default=600, help="--wait 最多等幾秒（預設 600；逾時結束碼 124，派工照樣留著）")
     sd.add_argument("--raw", action="store_true",
                     help="直接送：不加轉送標頭，讓對方的 Claude 當作指令執行（例如 /compact）；只限 Claude，一行、以 / 開頭")
+    sd.add_argument("--restore", action="store_true",
+                    help="對方已停止時先接回它再送（接回會多吃記憶體，所以預設不做；retired 的不接回）；"
+                         "指令會等到訊息送出或接回失敗才結束，不能跟 --raw 一起用")
     sb = sub.add_parser("send-batch",
-                        usage="sampan send-batch <名稱>... -m 訊息 [--raw] [--wait] [--timeout 秒] | "
+                        usage="sampan send-batch <名稱>... -m 訊息 [--raw] [--restore] [--wait] [--timeout 秒] | "
                               "sampan send-batch --folder <路徑> -m 訊息 [...]",
                         help="同一則訊息送給多個 session：只送給執行中而且閒著的，其他的跳過並列出（不排隊）")
     sb.add_argument("names", nargs="*", metavar="name")
@@ -94,6 +97,9 @@ def build_parser():
     sb.add_argument("--timeout", type=int, default=600, help="--wait 最多等幾秒（預設 600；逾時結束碼 124，派工照樣留著）")
     sb.add_argument("--raw", action="store_true",
                     help="直接送：不加轉送標頭，讓對方的 Claude 當作指令執行（例如 /compact）；只限 Claude，一行、以 / 開頭")
+    sb.add_argument("--restore", action="store_true",
+                    help="已停止的也送：排隊、接回後再送（同時最多接回 2 個，會多吃記憶體；retired 的跳過）；"
+                         "指令會等到都送出或接回失敗才結束，不能跟 --raw 一起用")
     mh = sub.add_parser("machine", help="這台機器的 id 與名稱（--name 改名；id 不變）")
     mh.add_argument("--name", help="新的機器名稱")
     ds = sub.add_parser("dispatches", usage="sampan dispatches [--all] [--by-target] | sampan dispatches show <編號> [--wait 秒] | "
@@ -618,7 +624,7 @@ def _dispatch(cfg, args):
             return 2
         message = sys.stdin.read() if args.message == "-" else args.message
         return cmd_send(cfg, run, out, to, message, wait=args.wait, timeout=args.timeout, caller=caller,
-                        raw=args.raw)
+                        raw=args.raw, restore=args.restore)
     if cmd == "send-batch":
         from .send import cmd_send_batch, command_caller
         if bool(args.names) == (args.folder is not None):
@@ -635,7 +641,7 @@ def _dispatch(cfg, args):
             return 2
         message = sys.stdin.read() if args.message == "-" else args.message
         return cmd_send_batch(cfg, run, out, names, message, raw=args.raw, wait=args.wait, timeout=args.timeout,
-                              caller=caller)
+                              caller=caller, restore=args.restore)
     if cmd == "dispatches":
         from .send import cmd_cancel, cmd_dispatches, cmd_inbox, cmd_resend, cmd_search, cmd_show
         if args.wait is not None and args.action != "show":

@@ -220,7 +220,7 @@ Claude Code 只在狀態列指令的輸入裡提供 5h／週額度，所以要�
 | 把沒在跑的 session 從登記表移除 | `sampan forget <名稱>… [--dry-run]`（或 ui 按 X；可一次給多個名稱，逐一處理，有一個失敗其他照做）：只限已停止或 retired 的（還在 tmux 裡的先 `sampan stop`）；ui 裡會先問確定。移除後印出手動接回的指令；對話紀錄永遠不刪，移除前的登記表留在 `history/` |
 | 整理 session 的資料夾 | `sampan folder list｜add <路徑>｜rename <路徑> <新名稱>｜rm <路徑>｜move <名稱或路徑>... <目的｜/>`，見「資料夾」 |
 | 傳訊息給一個 session | `sampan send <名稱> <訊息｜-> [--raw] [--wait] [--timeout 秒]`，見「傳訊息給 session」 |
-| 同一則訊息送給好幾個 session | `sampan send-batch <名稱…｜--folder 路徑> -m <訊息｜-> [--raw] [--wait] [--timeout 秒]`，見「傳訊息給 session」 |
+| 同一則訊息送給好幾個 session | `sampan send-batch <名稱…｜--folder 路徑> -m <訊息｜-> [--raw] [--restore] [--wait] [--timeout 秒]`，見「傳訊息給 session」 |
 | 看／找／取消／重送派工 | `sampan dispatches [--all] [--by-target]`、`sampan dispatches show <編號> [--wait 秒]`、`sampan dispatches search [關鍵字] [--from 名稱] [--to 名稱] [--since 日期] [--until 日期] [--state 狀態] [--limit 筆數]`、`sampan dispatches inbox <session>`、`sampan dispatches cancel <編號>`、`sampan dispatches resend <編號>`，見「傳訊息給 session」 |
 | 讓 agent 用工具傳訊息 | `sampan mcp serve`（MCP server，由 agent 啟動），見「讓 agent 用 sampan」 |
 | 看各 profile 的 plugin 版本 | `sampan plugins status`（互動管理在 ui 按 `p`） |
@@ -284,7 +284,8 @@ session 可以放進資料夾（多層用 `/`，例如 `客戶/甲`）。資料�
 - **直接送（`--raw`、MCP `send` 的 `raw=true`）**：不加「〔sampan 轉送…〕」標頭，原文照送，所以 Claude 的內建指令（例如 `/compact`、`/context`）會當指令執行（帶標頭的訊息不會）。限制：只限 Claude（給 Codex 的拒絕：「直接送目前只支援 Claude」）；必須單行、以 `/` 開頭、最長 500 字、不能有控制字元（Tab、Esc…）。每次都要核准，規則跟 `send` 一樣（MCP 每次問、Codex `approval_mode = "prompt"`、`confirm` 開著時 agent 從 Bash 跑會被拒絕）。sampan 不替它按任何鍵，只貼上再按 Enter。
   - 怎麼算做完：對方回到閒著、逐字稿裡看得到這個指令之後，有回覆文字（例如 skill）就帶回；沒有就是「指令已執行（沒有文字回覆）」，派工 `done`。`/clear` 之後對方換了新對話 → `done`，回覆「對方換成新對話（編號前 8 碼）」，不算找不到。
   - 指令打開了選單（例如不帶參數的 `/model`）→ 派工 `failed`：「指令打開了選單，請自己到那個 session 處理」。sampan 不按 Esc 或方向鍵，選單留給你處理。
-- **批次送**：`sampan send-batch 甲 乙 丙 -m 訊息`（或 `--folder 客戶/甲`，含子資料夾；名稱與 `--folder` 擇一，訊息寫 `-` 從 stdin 讀）把同一則訊息送給好幾個 session，也可加 `--raw`、`--wait`（等整批做完，逐筆印出回覆）、`--timeout`。只送給「執行中而且閒著」的；忙的、等人的、已停止的、找不到的，還有 `--raw` 給 Codex 的，一律**不排隊**，列在「跳過」並附原因（單一 `send` 遇到忙的才排隊；批次是一次掃過去，排隊的反而會在對方做完後突然插進來）。每筆各是一筆派工，共用批次編號 `b` 加 4 碼，例如 `b7f3a`。`sampan dispatches show` 不收批次編號，看各筆要用各自的派工編號。
+- **對方已停止時先接回（`--restore`、MCP `send`／`send_batch` 的 `restore=true`，0.18）**：預設照舊，不是執行中就拒絕。帶了 `--restore`，對方是「已停止」（不是 retired、不是停在信任提示）時，派工照樣建立，排隊；接回由背景做，呼叫端立刻拿到派工編號：先照 `sampan restore` 的規則接回**同一段對話**（登記表原本的 profile，不換；對話或目錄找不到就失敗，不開新對話），等它啟動、閒下來，Remote Control 的 profile 再做一次名稱校正，然後才照一般派工送出。接回會多吃記憶體，所以**同時最多接回 2 個 session**，其餘寫「排隊等接回（同時最多 2 個）」，輪到才開（這種等待沒有 30 分鐘上限）。同一個停著的對方有好幾則 `--restore` 的派工只接回一次。接回出狀況，派工標「失敗」並寫明原因：接回後停在信任提示（sampan 不替你按，到 `tmux attach -t <名稱>` 處理後用 `resend` 重送）、120 秒內沒閒下來、agent 又結束了、接回指令送出時 sampan 被結束了（不重複開）、找不到逐字稿等。retired 的不接回，提示先 `sampan activate`；`--restore` 不能跟 `--raw` 一起用。接回後第一則訊息通常沒有門鈴（心跳還沒有），會貼全文。MCP 的 `send` 馬上回傳；接回與等待由寄件者那邊的 `sampan mcp serve` 背景推進（`wait=true` 也一樣）。終端機下指令 `sampan send --restore`／`send-batch --restore` 沒有背景可以接手，所以指令會**等到訊息送出或接回失敗**（最久約 5 分鐘）才結束，期間印出在等什麼。
+- **批次送**：`sampan send-batch 甲 乙 丙 -m 訊息`（或 `--folder 客戶/甲`，含子資料夾；名稱與 `--folder` 擇一，訊息寫 `-` 從 stdin 讀）把同一則訊息送給好幾個 session，也可加 `--raw`、`--restore`（已停止的也送：排隊、接回後再送，見上面「對方已停止時先接回」）、`--wait`（等整批做完，逐筆印出回覆）、`--timeout`。只送給「執行中而且閒著」的；忙的、等人的、已停止的（帶 `--restore` 除外）、找不到的，還有 `--raw` 給 Codex 的，一律**不排隊**，列在「跳過」並附原因（單一 `send` 遇到忙的才排隊；批次是一次掃過去，排隊的反而會在對方做完後突然插進來）。每筆各是一筆派工，共用批次編號 `b` 加 4 碼，例如 `b7f3a`。`sampan dispatches show` 不收批次編號，看各筆要用各自的派工編號。
 - 送出、送達、取消都記在 `actions.log`（`[send]`、`[cancel]`），每行最後標出是哪個 sampan 寫的（`〔sampan 0.13.3，pid 12345〕`，版本是那個 process 啟動時載入的；畫面、每個 agent 的 MCP server 和指令都會推進派工，升級後還在跑舊版的也看得出來）。排程的 `sampan save` 永遠不送、不推進派工。
 
 ## 讓 agent 用 sampan
@@ -298,8 +299,9 @@ session 可以放進資料夾（多層用 `/`，例如 `客戶/甲`）。資料�
 - 改 `[mcp] confirm` 之後：Claude 在 MCP server 重啟時才讀到（開新 session，或 `/mcp` 重新連線）；Codex 要再跑一次 `sampan mcp install`。
 - 做不到的事：這擋不住自己對 tmux pane 打字的 agent（`tmux send-keys`）。Claude Code 的 sandbox 可以擋，但 sampan 不替你設定。上層行程檢查只看名稱，擋得住單純灌 JSON-RPC 的 agent，但名稱可以假冒（`exec -a claude`、叫 claude 的連結），所以跟 `tmux send-keys`、改 `[mcp] confirm` 一樣，擋不住刻意繞過 sampan 的 agent。
 - `send` 不等的話馬上回派工編號；對方做完時 sampan 往呼叫者的 session 送一行通知（`〔sampan：<對方> 已回覆派工 <編號>，用 sampan 工具 dispatch_result 看內容〕`，會按 Enter），失敗時也送一行（`〔sampan：給 <對方> 的派工 <編號> 失敗：<原因>〕`），同意派工就算同意這則通知。同一個呼叫者同時有好幾則通知要收時，合成一行送（`〔sampan：b 已回覆派工 a1b2、c3d4；給 d 的派工 e5f6 失敗：<原因>；批次 b7f3a 完成：…；用 sampan 工具 dispatch_result 看內容〕`），不會一則一則各開一輪。對方 Claude 的狀態是 `shell`（這輪結束了、背景還有 shell 工作在跑）時照樣送。`wait=true` 最多等 60 秒，等到就連回覆一起回。
+- `send` 的 `restore=true`：對方已停止時先接回再送（預設 `false`，接回會多吃記憶體）；核准畫面看得到 `restore`。接回與等待在背景做，工具馬上回派工編號；失敗時派工標 `failed` 並寫原因。不能跟 `raw` 一起用。
 - `send` 的 `raw=true` 是直接送（上面「直接送」的規則：只限 Claude、單行、`/` 開頭、最長 500 字），所以 agent 現在可以請另一個 session 執行 `/compact`；核准畫面看得到 `raw` 和完整指令。
-- `send_batch`：參數 `sessions`（名稱清單，核准時看得到每個收件人）、`message`、`raw`、`wait`（最多 60 秒）。只收名稱，要依資料夾挑就先用 `list_sessions` 看每個 session 的 `folder`。一次呼叫只核准一次。跳過的（不是執行中而且閒著、`raw` 給 Codex）不排隊，列在結果的 `skipped`（每筆 `session`、`reason`）。整批都做完（成功、失敗或取消）才往呼叫者送**一則**通知（`〔sampan：批次 b7f3a 完成：2 完成、0 失敗、1 跳過，用 dispatch_result 看〕`），不再各筆通知。`dispatch_result` 的 `id` 也收批次編號，回整批；那裡的 `skipped` 是**數字**（跳過幾個），`send_batch` 回的 `skipped` 才是清單。`cancel_dispatch` 不收批次編號，要取消請逐筆用派工編號。
+- `send_batch`：參數 `sessions`（名稱清單，核准時看得到每個收件人）、`message`、`raw`、`restore`（已停止的也送，規則見上面「對方已停止時先接回」）、`wait`（最多 60 秒）。只收名稱，要依資料夾挑就先用 `list_sessions` 看每個 session 的 `folder`。一次呼叫只核准一次。跳過的（不是執行中而且閒著、`raw` 給 Codex）不排隊，列在結果的 `skipped`（每筆 `session`、`reason`）。整批都做完（成功、失敗或取消）才往呼叫者送**一則**通知（`〔sampan：批次 b7f3a 完成：2 完成、0 失敗、1 跳過，用 dispatch_result 看〕`），不再各筆通知。`dispatch_result` 的 `id` 也收批次編號，回整批；那裡的 `skipped` 是**數字**（跳過幾個），`send_batch` 回的 `skipped` 才是清單。`cancel_dispatch` 不收批次編號，要取消請逐筆用派工編號。
 - 呼叫者不是 sampan 管的 session（例如不在 tmux 裡）→ 工具照樣能用，只是收不到完成通知，自己用 `dispatch_result` 查。
 - 工具的參數與回傳見 [reference](reference.md#sampan-mcp-serve-的工具)。
 

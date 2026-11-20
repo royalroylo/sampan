@@ -58,18 +58,22 @@ TOOLS = [
     {"name": "send",
      "description": "傳一則訊息給另一個執行中的 sampan session（對方閒著才送，忙就排隊）。回傳派工編號；"
                     "wait=true 時最多等 60 秒，做完就連回覆一起回。沒等到的，完成或失敗時會在你的 session 送出一則通知，"
-                    "或用 dispatch_result 查。",
+                    "或用 dispatch_result 查。對方已停止時，restore=true 會先接回它再送（預設不接回）。",
      "inputSchema": {"type": "object", "properties": {
          "session": _str("對方的 session 名稱或 id（前 8 碼以上；list_sessions 看）"),
          "message": _str("要送的訊息"),
          "wait": {"type": "boolean", "description": "等回覆（最多 60 秒）", "default": False},
          "raw": {"type": "boolean", "default": False,
                  "description": "直接送：不加 sampan 的轉送標頭，讓對方的 Claude 當作指令執行（例如 /compact）；"
-                                "只限 Claude，一行、以 / 開頭、最多 500 字"}},
+                                "只限 Claude，一行、以 / 開頭、最多 500 字"},
+         "restore": {"type": "boolean", "default": False,
+                     "description": "對方已停止（不是 retired）時，先照 sampan restore 接回同一段對話、等它閒下來再送；接回會多吃記憶體"
+                                "（Mac 16G 同時最多接回 2 個，其餘排隊），所以預設 false。retired 的照舊拒絕，要先 sampan activate。"
+                                "接回與等待都在背景做，呼叫會立刻回派工編號；接回失敗（停在信任提示、逾時…）派工標 failed 並寫原因。不能跟 raw 一起用"}},
          "required": ["session", "message"]}},
     {"name": "send_batch",
      "description": "同一則訊息一次送給多個 session。只送給執行中而且閒著的；忙的、沒在跑的（還有 raw 給 Codex 的）"
-                    "不排隊，列在 skipped 附原因。回傳批次編號與每一筆派工；wait=true 時最多等 60 秒等整批做完。"
+                    "不排隊，列在 skipped 附原因（restore=true 時，已停止的不跳過：排隊、接回後再送，同時最多接回 2 個）。回傳批次編號與每一筆派工；wait=true 時最多等 60 秒等整批做完。"
                     "沒等到的，整批做完時會在你的 session 送出一則通知，或用 dispatch_result 帶批次編號查。",
      "inputSchema": {"type": "object", "properties": {
          "sessions": {"type": "array", "items": {"type": "string"}, "minItems": 1,
@@ -78,7 +82,11 @@ TOOLS = [
          "raw": {"type": "boolean", "default": False,
                  "description": "直接送：不加 sampan 的轉送標頭，讓對方的 Claude 當作指令執行（例如 /compact）；"
                                 "只限 Claude，一行、以 / 開頭、最多 500 字"},
-         "wait": {"type": "boolean", "description": "等整批做完（最多 60 秒）", "default": False}},
+         "wait": {"type": "boolean", "description": "等整批做完（最多 60 秒）", "default": False},
+         "restore": {"type": "boolean", "default": False,
+                     "description": "對方已停止（不是 retired）時，先照 sampan restore 接回同一段對話、等它閒下來再送；接回會多吃記憶體"
+                                "（Mac 16G 同時最多接回 2 個，其餘排隊），所以預設 false。retired 的照舊拒絕，要先 sampan activate。"
+                                "接回與等待都在背景做，呼叫會立刻回派工編號；接回失敗（停在信任提示、逾時…）派工標 failed 並寫原因。不能跟 raw 一起用"}},
          "required": ["sessions", "message"]}},
     {"name": "new_session",
      "description": "開一個新的 sampan session，並把 message 當作它的第一個 prompt。回傳派工編號，之後用 dispatch_result 看回覆。",
@@ -428,7 +436,8 @@ class Server:
         """One round for a tool that returns the result: a finished dispatch owes no notice any more (report)."""
         try:
             return send.advance(self.cfg, self.run, did, sleep=self.sleep, snapshot_fn=self.snapshot_fn,
-                                status_fn=self.status_fn, now=self.now_fn(), report=True)
+                                status_fn=self.status_fn, now=self.now_fn(), report=True,
+                                restore=False)  # a tool result returns at once: the watcher does the reattaching
         except (dispatch.DispatchError, RegistryError) as e:
             raise ToolError(str(e)) from e
 
@@ -447,7 +456,7 @@ class Server:
         while True:
             try:
                 items = send.advance_batch(self.cfg, self.run, bid, sleep=self.sleep, snapshot_fn=self.snapshot_fn,
-                                           status_fn=self.status_fn, now=self.now_fn(), report=True)
+                                           status_fn=self.status_fn, now=self.now_fn(), report=True, restore=False)
             except (dispatch.DispatchError, RegistryError) as e:
                 raise ToolError(str(e)) from e
             if all(d.state in dispatch.FINISHED for d in items) or self.clock() - start >= seconds:
@@ -503,11 +512,15 @@ class Server:
 
     def tool_send(self, args):
         to, message = _arg_str(args, "session"), _arg_str(args, "message")
-        wait, raw = args.get("wait", False), args.get("raw", False)
+        wait, raw, restore = args.get("wait", False), args.get("raw", False), args.get("restore", False)
         if not isinstance(wait, bool):
             raise ToolError("參數 wait 要是 true 或 false")
         if not isinstance(raw, bool):
             raise ToolError("參數 raw 要是 true 或 false")
+        if not isinstance(restore, bool):
+            raise ToolError("參數 restore 要是 true 或 false")
+        if restore and raw:
+            raise ToolError(send.REASON_RESTORE_RAW)
         if session_run.has_control(to):
             raise ToolError(f"session 名稱不能含換行或控制字元：{to!r}")
         status = self._rows()
@@ -517,11 +530,11 @@ class Server:
         if caller.name is not None and caller.name == to:
             raise ToolError(f"不能送給自己（{to}）")
         row = next((r for r in status if r.name == to), None)
-        problem = send.target_problem(row, to)
+        problem = send.target_problem(row, to, restore)
         if problem:
             raise ToolError(problem)
         d = send.submit(self.cfg, self.run, caller, to, message, notify=not wait, now=self.now_fn(),
-                        snapshot_fn=self.snapshot_fn, status_fn=self.status_fn, raw=raw)
+                        snapshot_fn=self.snapshot_fn, status_fn=self.status_fn, raw=raw, restore=restore)
         if isinstance(d, str):
             raise ToolError(d)
         self.mine.add(d.id)
@@ -550,14 +563,16 @@ class Server:
         for n in names:
             if session_run.has_control(n):
                 raise ToolError(f"session 名稱不能含換行或控制字元：{n!r}")
-        wait, raw = args.get("wait", False), args.get("raw", False)
+        wait, raw, restore = args.get("wait", False), args.get("raw", False), args.get("restore", False)
         if not isinstance(wait, bool):
             raise ToolError("參數 wait 要是 true 或 false")
         if not isinstance(raw, bool):
             raise ToolError("參數 raw 要是 true 或 false")
+        if not isinstance(restore, bool):
+            raise ToolError("參數 restore 要是 true 或 false")
         caller = self._refresh_caller()
         b = send.submit_batch(self.cfg, self.run, caller, names, message, raw=raw, notify=not wait, now=self.now_fn(),
-                              snapshot_fn=self.snapshot_fn, status_fn=self.status_fn)
+                              snapshot_fn=self.snapshot_fn, status_fn=self.status_fn, restore=restore)
         if isinstance(b, str):
             raise ToolError(b)
         self.mine.update([b.id] + [d.id for d in b.items])

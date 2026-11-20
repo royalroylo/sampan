@@ -1415,3 +1415,87 @@ class SendBatchToolTest(Base):
         self.assertTrue(c.response(2)["result"]["isError"])
         self.assertIn("逐筆", tool_text(c.response(2)))
         self.assertEqual(self.dispatches()[0].state, "queued")
+
+
+class RestoreToolTest(Base):
+    """`restore` on send and send_batch: a stopped target is queued, and a watcher (not the tool result) reattaches it."""
+
+    def setUp(self):
+        super().setUp()
+        self.rows["b"] = status_row("b", State.STOPPED, sid="sb", agent_status="-", id="bbbbbbbb-0000-4000-8000-000000000002")
+        self.rows["d"] = status_row("d", State.STOPPED, sid="sd", agent_status="-", id="dddddddd-0000-4000-8000-000000000004")
+        self.rows["e"] = status_row("e", State.RETIRED, sid="se", agent_status="-")
+        p = mock.patch("sampan.send.restore_mod.start_one", return_value=None)
+        self.start = p.start()
+        self.addCleanup(p.stop)
+
+    def test_both_tools_describe_the_parameter(self):
+        tools = {t["name"]: t for t in mcp_server.tools_list(True)}
+        for name in ("send", "send_batch"):
+            prop = tools[name]["inputSchema"]["properties"]["restore"]
+            self.assertEqual((prop["type"], prop["default"]), ("boolean", False))
+            for word in ("接回", "記憶體", "retired", "背景", "raw"):
+                self.assertIn(word, prop["description"], (name, word))
+            self.assertNotIn("restore", tools[name]["inputSchema"]["required"])
+
+    def test_a_stopped_target_is_refused_without_restore(self):
+        c = self.serve(Client([init(1), call(2, "send", {"session": "b", "message": "hi"})]), confirm=False)
+        self.assertTrue(c.response(2)["result"]["isError"])
+        self.assertIn("不是執行中", tool_text(c.response(2)))
+        self.assertEqual(self.dispatches(), [])
+
+    def test_restore_queues_it_and_the_tool_returns_at_once_without_starting_anything(self):
+        c = self.serve(Client([init(1), call(2, "send", {"session": "b", "message": "hi", "restore": True})]),
+                       run=FakeRunner(strict=True), confirm=False)
+        body = tool_json(c.response(2))
+        [d] = self.dispatches()
+        self.assertEqual(body, {"dispatch": d.id, "state": "queued", "reason": "對方已停止，等接回"})
+        self.assertIs(d.extra["restore"], True)
+        self.start.assert_not_called()
+
+    def test_waiting_in_the_tool_still_leaves_the_reattach_to_the_watcher_thread(self):
+        t = [0.0]
+
+        def sleep(s):
+            t[0] += s
+        c = self.serve(Client([init(1), call(2, "send", {"session": "b", "message": "hi", "restore": True,
+                                                         "wait": True})]),
+                       run=FakeRunner(strict=True), confirm=False, sleep=sleep, clock=lambda: t[0])
+        self.assertEqual(tool_json(c.response(2))["state"], "queued")
+        self.assertGreaterEqual(t[0], 60)
+        self.start.assert_not_called()
+
+    def test_the_watcher_reattaches_the_callers_stopped_target(self):
+        self.serve(Client([init(1), call(2, "send", {"session": "b", "message": "hi", "restore": True})]),
+                   run=FakeRunner(strict=True), confirm=False)
+        server = mcp_server.Server(self.cfg, FakeRunner(strict=True), io.StringIO(), io.StringIO(), caller=CALLER_A,
+                                   sleep=lambda _s: None, clock=lambda: 0.0, status_fn=self.status_fn,
+                                   now_fn=lambda: NOW)
+        server.mine.update(d.id for d in self.dispatches())  # as the tool call that made them did
+        server.watch_once()
+        self.start.assert_called_once()
+        self.assertEqual(self.start.call_args.args[2], "b")
+        [d] = self.dispatches()
+        self.assertEqual((d.state, d.extra["restore_phase"]), ("queued", "starting"))
+
+    def test_bad_arguments(self):
+        bad = [{"session": "b", "message": "hi", "restore": "yes"},
+               {"session": "b", "message": "/compact", "raw": True, "restore": True},
+               {"session": "e", "message": "hi", "restore": True}]
+        c = self.serve(Client([init(1)] + [call(i + 2, "send", a) for i, a in enumerate(bad)]), confirm=False)
+        for i in range(len(bad)):
+            self.assertTrue(c.response(i + 2)["result"]["isError"], bad[i])
+        self.assertIn("sampan activate e", tool_text(c.response(4)))
+        self.assertEqual(self.dispatches(), [])
+
+    def test_send_batch_with_restore_queues_the_stopped_and_still_skips_retired(self):
+        c = self.serve(Client([init(1), call(2, "send_batch", {"sessions": ["b", "d", "e"], "message": "hi",
+                                                               "restore": True}),
+                               call(3, "send_batch", {"sessions": ["b"], "message": "hi", "restore": 1})]),
+                       run=FakeRunner(strict=True), confirm=False)
+        body = tool_json(c.response(2))
+        self.assertEqual([(i["session"], i["state"]) for i in body["items"]], [("b", "queued"), ("d", "queued")])
+        self.assertEqual([s["session"] for s in body["skipped"]], ["e"])
+        self.assertIn("sampan activate e", body["skipped"][0]["reason"])
+        self.assertTrue(c.response(3)["result"]["isError"])
+        self.start.assert_not_called()

@@ -91,6 +91,7 @@ session 資料夾，只給畫面和 `sampan folder` 用；`save`、`restore`、�
 | `thread_id` | 對話識別，或 `null` |
 | `startup` | `sampan new --message` 的開場訊息（新 session 可能還沒登記）；沒有這欄的舊紀錄視為 `false` |
 | `raw` | 直接送（`send --raw`、MCP `raw=true`）：`text` 是原文，沒有來源行；預設 `false` |
+| `extra.restore`、`extra.restore_phase`、`extra.restore_at` | `send --restore`（MCP `restore=true`，0.18）：`restore` 為 `true` 表示寄件者要先接回已停止的對方；`restore_phase`（`launching`、`starting`、`rc`、`ready`）與 `restore_at`（UTC）是同一個對方的這類派工共用的接回進度，`resend` 會清掉進度、留著 `restore` |
 | `batch` | 批次編號（`b` 加 4 個小寫 hex），不是批次送出的是 `null`。同一批的派工共用它 |
 | `to_id`、`from_id` | 目標與呼叫者在登記表裡的 `id`；改名後仍靠它找到對方，所以途中改名不會漏掉回覆與通知。舊紀錄是 `""`（改靠名稱）|
 | `machine` | 派工發生的那台機器的 id |
@@ -155,7 +156,7 @@ session 資料夾，只給畫面和 `sampan folder` 用；`save`、`restore`、�
 
 其他看派工的指令（都唯讀）：`sampan dispatches [--all] [--by-target]`（預設只列排隊中與等回覆的；`--by-target` 依收件者分組，列排隊數、等回覆數與心跳）、`sampan dispatches search [關鍵字] [--from 名稱] [--to 名稱] [--since 日期] [--until 日期] [--state 狀態] [--limit 筆數]`（關鍵字是字面比對，找 `text` 與 `reply`，本文已清除的只找得到欄位；`--from`、`--to` 可重複，認名稱、別名、id 或 id 前綴；日期 `YYYY-MM-DD` 用台北時間，`--until` 含當天；`--state` 認五個 `state` 或細分 `status`；最新的在前，預設 50 筆，`--limit 0` 全部；一則一行：編號、時間、從、給、狀態、前 60 字）、`sampan dispatches inbox <session>`（某個 session 的收件匣：排隊中、已按門鈴、已取走沒回覆各幾則，心跳，最後一次門鈴，最近 20 則）。`sampan dispatches resend <編號>` 重送（上面）；它跟 `cancel` 一樣，agent 在 `[mcp] confirm` 開著時從 Bash 跑會被拒絕。
 
-`sampan send-batch NAME… -m 訊息 [--raw] [--wait] [--timeout 秒]`、`sampan send-batch --folder 路徑 -m 訊息`（含子資料夾；名稱與 `--folder` 擇一）：結束碼同 `sampan send`；`--wait` 等整批做完、逐筆印出；有跳過的會列出（不影響結束碼）。
+`sampan send-batch NAME… -m 訊息 [--raw] [--restore] [--wait] [--timeout 秒]`、`sampan send-batch --folder 路徑 -m 訊息`（含子資料夾；名稱與 `--folder` 擇一）：結束碼同 `sampan send`；`--wait` 等整批做完、逐筆印出；有跳過的會列出（不影響結束碼）。
 
 `sampan send`／`sampan new --message` 的呼叫者也從上層行程找（跟 MCP 一樣）：agent 用它的 shell 工具跑的，記成那個 sampan session（或「未登記的 session」），送給自己會拒絕；只有上層沒有 claude／codex 行程時才是「終端機」。這兩個指令不發完成通知，用 `sampan dispatches show` 看回覆。
 

@@ -289,6 +289,34 @@ def _watch(cfg, run, launched, timeout, sleep, out=lambda _l: None, relay=None):
     return resumed, at_trust, [row.tmux for row in pending.values()]
 
 
+def start_one(cfg, run, name, *, sleep, out=lambda _l: None, alive=os.kill):
+    """Reattach one stopped session for a send that asked for it (`send --restore`): the same checks and the same launch
+    line as `sampan restore <name>`, but it only starts the agent: it neither waits for it nor does the Remote Control
+    reset (the caller looks again later, and steps.rc_step runs when it is up). Never a key beyond the launch line.
+    Returns None when the agent was started (or is already running), else why it was not (a plain reason)."""
+    try:
+        rows = load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)
+    except RegistryError as e:
+        return str(e)
+    row = next((r for r in rows if r.tmux == name), None)
+    if row is None:
+        return f"找不到 session：{name}（登記表沒有）"
+    if row.state == "retired":
+        return f"{name} 是 retired；先 sampan activate {name}"
+    try:
+        live = _observe(cfg, run)
+    except TmuxUnreadable as e:
+        return f"{e}；不知道 {name} 是否已在執行，沒有開"
+    if name in live.running:
+        return None
+    why = _blocker(cfg, row, live, alive)
+    if why:
+        return why
+    out = actionlog.tee(cfg, "接回", out)
+    out(f"接回：{name}（送訊息時指定 --restore）")
+    return None if _launch(cfg, Tmux(run), row, live, out, sleep, False) is not None else "tmux new-session 失敗"
+
+
 def cmd_restore(cfg, run, out, ask, *, names=(), select_all=False, dry_run=False, interval=3, sleep=time.sleep,
                 picker_fn=None, now_fn=lambda: datetime.now(timezone.utc), timeout=10, alive=os.kill,
                 confirm=True, opened=None, on_prompt=None, wait=True, interactive=True):

@@ -5,6 +5,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `sampan send --restore`, `sampan send-batch --restore` and the MCP parameter `restore` of `send` / `send_batch`: when the target is stopped (not retired) its conversation is reattached first, the Remote Control name is reset like after `sampan restore`, and the message goes out once the target is idle. Off by default, because a reattach costs memory. The reattach runs in the background (the MCP tool still returns the dispatch id at once); at most 2 targets are reattached at a time, the others wait (「排隊等接回（同時最多 2 個）」, no 30-minute limit); several dispatches for one stopped target reattach it once. A failed reattach (trust prompt, 120 seconds without going idle, the agent ended again, a conversation or folder that cannot be found, sampan killed while sending the launch line) marks the dispatches failed with the reason; `resend` starts over. A retired target is refused with a hint to `sampan activate` it, and `--restore` cannot be combined with `--raw`. A terminal command with `--restore` stays until the message is out or the reattach failed (about 5 minutes at most), because a terminal has no watcher to carry on.
+
 ## [0.17.1] - 2026-11-16
 
 Upgrading: restart the Claude sessions after updating, so each one runs the new `sampan mcp serve`.

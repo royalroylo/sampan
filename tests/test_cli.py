@@ -470,16 +470,29 @@ class CliTest(unittest.TestCase):
                 mock.patch("sampan.send.command_caller", return_value=TERMINAL):
             self.assertEqual(cli.main(["send", "api", "多行\n訊息", "--wait", "--timeout", "30"]), 124)
         self.assertEqual(cs.call_args.args[3:], ("api", "多行\n訊息"))
-        self.assertEqual(cs.call_args.kwargs, {"wait": True, "timeout": 30, "caller": TERMINAL, "raw": False})
+        self.assertEqual(cs.call_args.kwargs, {"wait": True, "timeout": 30, "caller": TERMINAL, "raw": False, "restore": False})
         with mock.patch("sampan.send.cmd_send", return_value=0) as cs, \
                 mock.patch("sampan.send.command_caller", return_value=TERMINAL):
             self.assertEqual(cli.main(["send", "api", "hi"]), 0)
-        self.assertEqual(cs.call_args.kwargs, {"wait": False, "timeout": 600, "caller": TERMINAL, "raw": False})
+        self.assertEqual(cs.call_args.kwargs, {"wait": False, "timeout": 600, "caller": TERMINAL, "raw": False, "restore": False})
         with mock.patch("sampan.send.cmd_send", return_value=0) as cs, \
                 mock.patch("sampan.send.command_caller", return_value=TERMINAL):
             self.assertEqual(cli.main(["send", "api", "/compact", "--raw"]), 0)
         self.assertEqual(cs.call_args.args[3:], ("api", "/compact"))
         self.assertIs(cs.call_args.kwargs["raw"], True)
+
+    def test_send_and_send_batch_pass_restore(self):
+        with mock.patch("sampan.send.cmd_send", return_value=0) as cs, \
+                mock.patch("sampan.send.command_caller", return_value=TERMINAL):
+            self.assertEqual(cli.main(["send", "api", "hi", "--restore"]), 0)
+        self.assertIs(cs.call_args.kwargs["restore"], True)
+        with mock.patch("sampan.send.cmd_send_batch", return_value=0) as cb, \
+                mock.patch("sampan.send.command_caller", return_value=TERMINAL), \
+                mock.patch("sampan.cli._resolve_refs", return_value=["a", "b"]):
+            self.assertEqual(cli.main(["send-batch", "a", "b", "-m", "hi", "--restore"]), 0)
+            self.assertIs(cb.call_args.kwargs["restore"], True)
+            self.assertEqual(cli.main(["send-batch", "a", "b", "-m", "hi"]), 0)
+            self.assertIs(cb.call_args.kwargs["restore"], False)
 
     def test_send_run_by_an_agent_is_labelled_as_that_session(self):  # final review 9
         import dataclasses

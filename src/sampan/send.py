@@ -12,7 +12,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 
-from . import actionlog, deliver, deliveries, dispatch, doorbell, heartbeat, procs, store
+from . import actionlog, deliver, deliveries, dispatch, doorbell, heartbeat, procs, send_restore, steps, store
+from . import restore as restore_mod
 from .claude_state import Reply, TurnInfo, after_marker, command_reply, find_transcript
 from .claude_state import reply_to as claude_reply_to
 from .clock import fmt_local, parse_iso
@@ -222,12 +223,16 @@ def _preview(message):
     return line if len(line) <= LOG_PREVIEW else line[:LOG_PREVIEW] + "…"
 
 
-def target_problem(row, to):
-    """Why `to` (its StatusRow, or None) cannot be sent to, or None."""
+def target_problem(row, to, restore=False):
+    """Why `to` (its StatusRow, or None) cannot be sent to, or None. restore: the sender asked for a stopped session to
+    be reattached first, so a stopped one is fine; a retired one is not (it was retired on purpose)."""
     if row is None or row.state in (State.UNREGISTERED, State.NO_AGENT):
         return f"找不到 session「{to}」：不在 sampan 登記表裡（sampan status 看名稱）"
+    if restore and row.state == State.STOPPED:
+        return None
     if row.state != State.RUNNING:
-        return f"「{to}」不是執行中（{row.display}），不送"
+        hint = f"；--restore 不接回 retired 的，先 sampan activate {to}" if restore and row.state == State.RETIRED else ""
+        return f"「{to}」不是執行中（{row.display}），不送{hint}"
     return None
 
 
@@ -251,9 +256,14 @@ def raw_problem(message):
     return None
 
 
-def submit(cfg, run, caller, to, message, *, notify, now, snapshot_fn=None, status_fn=None, raw=False, batch=None):
+REASON_RESTORE_RAW = "--restore 不能跟直接送（raw）一起用：接回之後才送斜線指令沒有意義"
+
+
+def submit(cfg, run, caller, to, message, *, notify, now, snapshot_fn=None, status_fn=None, raw=False, batch=None,
+           restore=False):
     """Check the target and create a queued dispatch (outbox written, actions.log line). Dispatch, or why not (str).
-    raw: send the stripped message as is, with no source line (Claude only; see raw_problem)."""
+    raw: send the stripped message as is, with no source line (Claude only; see raw_problem).
+    restore: a stopped target is reattached first (see send_restore); retired ones are refused."""
     if problem := store.mnt_problem(cfg.state_dir):
         return problem
     if not message.strip():
@@ -262,19 +272,22 @@ def submit(cfg, run, caller, to, message, *, notify, now, snapshot_fn=None, stat
         message = message.strip()
         if problem := raw_problem(message):
             return problem
+    if restore and raw:
+        return REASON_RESTORE_RAW
     if caller.name is not None and caller.name == to:
         return f"不能送給自己（{to}）"
     try:
         row = _rows(cfg, run, snapshot_fn, status_fn).get(to)
     except RegistryError as e:
         return str(e)
-    problem = target_problem(row, to)
+    problem = target_problem(row, to, restore)
     if problem:
         return problem
     if raw and row.agent == "codex":
         return REASON_RAW_CODEX
     r = _create(cfg, caller, to, row.agent, row.profile, message, "queued", now, notify=notify,
-                thread_id=(row.sid or None) if row.agent == "codex" else None, raw=raw, batch=batch, to_id=row.id)
+                thread_id=(row.sid or None) if row.agent == "codex" else None, raw=raw, batch=batch, to_id=row.id,
+                restore=restore)
     if isinstance(r, str):
         return r
     kind = f"{row.agent}，直接送" if raw else row.agent
@@ -287,14 +300,14 @@ def _who(d):
 
 
 def _create(cfg, caller, to, to_agent, to_profile, message, state, now, *, notify, thread_id=None, strip=False,
-            startup=False, raw=False, batch=None, to_id=""):
+            startup=False, raw=False, batch=None, to_id="", restore=False):
     """Write the outbox and record a dispatch under the lock. A copy of it, or why not (str).
     strip: drop trailing newlines from the text (a startup prompt goes through `$(cat …)`, which drops them)."""
     try:
         with dispatch.transaction(cfg.state_dir, keep_days=cfg.keep_days) as items:
             d = _record(cfg, caller, to, to_agent, to_profile, message, state, now, items.ids,
                         notify=notify, thread_id=thread_id, strip=strip, startup=startup, raw=raw, batch=batch,
-                        to_id=to_id)
+                        to_id=to_id, restore=restore)
             _keep(items, [d])
     except (dispatch.DispatchError, OSError) as e:
         return str(e)
@@ -302,7 +315,7 @@ def _create(cfg, caller, to, to_agent, to_profile, message, state, now, *, notif
 
 
 def _record(cfg, caller, to, to_agent, to_profile, message, state, now, taken, *, notify, thread_id=None, strip=False,
-            startup=False, raw=False, batch=None, to_id=""):
+            startup=False, raw=False, batch=None, to_id="", restore=False):
     """A new Dispatch with an id not in taken, its outbox written (call inside dispatch.transaction)."""
     did = dispatch.new_id(taken)
     text = message if raw else deliver.compose(caller_label(caller), caller.profile, did, message)
@@ -315,7 +328,7 @@ def _record(cfg, caller, to, to_agent, to_profile, message, state, now, taken, *
         sent_at=_iso(now) if state == "sent" else None,
         notify=bool(notify and caller.name is not None), thread_id=thread_id, from_kind=caller_kind(caller),
         startup=startup, raw=raw, batch=batch, to_id=to_id, from_id=caller.id if caller.name is not None else "",
-        machine=registry_machine(cfg))
+        machine=registry_machine(cfg), extra={send_restore.RESTORE: True} if restore else {})
 
 
 def _keep(items, new):
@@ -342,30 +355,36 @@ def _new_batch_id(items):
     return "b" + dispatch.new_id(used)
 
 
-def _skip_reason(caller, name, row, raw):
+def _skip_reason(caller, name, row, raw, restore=False):
     """Why a batch does not send to name (its StatusRow, or None) now, or None. Only a running, idle session is sent
-    to: a batch never queues."""
+    to: a batch never queues. The one exception is restore: a stopped session is queued, and reattached (a few at a
+    time, see send_restore) before its message goes."""
     if caller.name is not None and caller.name == name:
         return f"不能送給自己（{name}）"
-    problem = target_problem(row, name)
+    problem = target_problem(row, name, restore)
     if problem:
         return problem
     if raw and row.agent == "codex":
         return REASON_RAW_CODEX
+    if restore and row.state == State.STOPPED:
+        return None
     if row.agent_status not in READY:
         return BUSY.get(row.agent_status, "看不出對方是否閒著")
     return None
 
 
-def submit_batch(cfg, run, caller, names, message, *, raw, notify, now, snapshot_fn=None, status_fn=None):
+def submit_batch(cfg, run, caller, names, message, *, raw, notify, now, snapshot_fn=None, status_fn=None,
+                 restore=False):
     """Send the same message to several sessions: a queued dispatch for each running, idle one (one transaction, one
     batch id); the others are skipped with why, never queued. A name given twice counts once. Batch, or why not
     (str: a bad message, or nobody to send to; nothing is recorded). notify: one notice for the whole batch, when
-    every item is finished (see _owes_notice)."""
+    every item is finished (see _owes_notice). restore: stopped sessions are queued too (see _skip_reason)."""
     if problem := store.mnt_problem(cfg.state_dir):
         return problem
     if not message.strip():
         return "訊息是空的"
+    if restore and raw:
+        return REASON_RESTORE_RAW
     if raw:
         message = message.strip()
         if problem := raw_problem(message):
@@ -376,7 +395,7 @@ def submit_batch(cfg, run, caller, names, message, *, raw, notify, now, snapshot
         return str(e)
     targets, skipped = [], []
     for name in dict.fromkeys(names):
-        why = _skip_reason(caller, name, rows.get(name), raw)
+        why = _skip_reason(caller, name, rows.get(name), raw, restore)
         if why:
             skipped.append((name, why))
         else:
@@ -389,7 +408,7 @@ def submit_batch(cfg, run, caller, names, message, *, raw, notify, now, snapshot
             for row in targets:
                 d = _record(cfg, caller, row.name, row.agent, row.profile, message, "queued", now, taken,
                             notify=notify, thread_id=(row.sid or None) if row.agent == "codex" else None, raw=raw,
-                            batch=bid, to_id=row.id)
+                            batch=bid, to_id=row.id, restore=restore)
                 taken.add(d.id)
                 made.append(d)
             made[0].batch_skipped = len(skipped)
@@ -462,14 +481,19 @@ def _owes_notice(d, items=()):
     return bool(group) and group[0] is d and all(x.state in dispatch.FINISHED for x in group)
 
 
-def advance(cfg, run, did, *, sleep, snapshot_fn=None, status_fn=None, now=None, report=False, report_batch=False):
+def advance(cfg, run, did, *, sleep, snapshot_fn=None, status_fn=None, now=None, report=False, report_batch=False,
+            restore=True):
     """Move one dispatch forward as far as it can go now; returns a copy of it. Finished ones are left alone.
     report: the caller gets the returned copy right away (an MCP tool result): if it is finished, its notice is
     dropped in the same transaction, so the caller is never told twice. For a batch item: report_batch drops the
     batch notice once the whole batch is finished (the caller gets every item); the batch notice is sent from here
     when this advance finishes the batch.
+    restore: a dispatch sent with restore may start reattaching its stopped target here (the claim is made inside the
+    lock, the launch and the Remote Control reset run after it, see _restore_work); False for a caller that must
+    return at once (an MCP tool's result), which then leaves that to a watcher.
     Raises DispatchError for an unknown id or an unreadable dispatches.json, RegistryError for a bad registry."""
     now = now or _utcnow()
+    work = [] if restore else None
     with dispatch.transaction(cfg.state_dir, keep_days=cfg.keep_days, ids=[did]) as items:
         d = next((x for x in items if x.id == did), None)
         if d is None:
@@ -486,7 +510,7 @@ def advance(cfg, run, did, *, sleep, snapshot_fn=None, status_fn=None, now=None,
         # deliveries, rings and the notice's reply parts are read and written through items.conn
         with dispatch._sqlite_errors(cfg.state_dir):
             if d.state == "queued":
-                _deliver(cfg, run, d, _row_of(rows(), d.to_id, d.to_name), sleep, now, save, items)
+                _deliver(cfg, run, d, _row_of(rows(), d.to_id, d.to_name), sleep, now, save, items, work)
                 _expire(cfg, d, now)
             elif d.state == "sent":
                 _check(cfg, d, _row_of(rows(), d.to_id, d.to_name), now, run, items)
@@ -503,31 +527,39 @@ def advance(cfg, run, did, *, sleep, snapshot_fn=None, status_fn=None, now=None,
             if _owes_notice(owed, items):
                 notify_caller(cfg, run, owed, sleep, rows=rows(), save=save, items=items)
         result = replace(d)
+    if work:  # claimed inside the lock above, done outside it; then one more look (the delivery, or the failure's notice)
+        for job in work:
+            _restore_work(cfg, run, job, sleep=sleep, snapshot_fn=snapshot_fn, status_fn=status_fn, now=now)
+        return advance(cfg, run, did, sleep=sleep, snapshot_fn=snapshot_fn, status_fn=status_fn, now=now, report=report,
+                       report_batch=report_batch, restore=False)
     return result
 
 
-def advance_batch(cfg, run, bid, *, sleep, snapshot_fn=None, status_fn=None, now=None, report=False):
+def advance_batch(cfg, run, bid, *, sleep, snapshot_fn=None, status_fn=None, now=None, report=False, restore=True):
     """advance every item of batch bid once (report: report_batch). Copies of the items; DispatchError when the
     batch has none."""
     ids = [d.id for d in batch_items(cfg, bid)]
     if not ids:
         raise dispatch.DispatchError(f"沒有批次 {bid}")
     return [advance(cfg, run, i, sleep=sleep, snapshot_fn=snapshot_fn, status_fn=status_fn, now=now,
-                    report_batch=report) for i in ids]
+                    report_batch=report, restore=restore) for i in ids]
 
 
-def _deliver(cfg, run, d, row, sleep, now, save, items):
+def _deliver(cfg, run, d, row, sleep, now, save, items, work=None):
     """Two-phase: the record is written as `sent` (「送出中」) before any key is pressed or `codex queue` runs, so a
     process killed in the middle never sends it again (at most once: it later fails as 找不到回覆). It goes back to
     queued only when the step says nothing was sent.
     Every message queued for the same target before its first direct send goes with it, as one paste (deliveries:
     one active delivery per target at a time); a direct send goes alone, once nothing is before it. Whoever advances
     a message moves the target's whole line: an active delivery is judged first (its own senders may never look
-    again), and the head of the line is sent even when d is behind it (d then stays queued)."""
+    again), and the head of the line is sent even when d is behind it (d then stays queued).
+    work: where a restore claim puts the job to do after the lock is released (None: this look may not start one)."""
     if d.status == "rung" and (row is None or row.state != State.RUNNING or row.agent != d.to_agent):
         rung = [x for x in items if x.state == "queued" and x.status == "rung"
                 and (x.to_id == d.to_id if d.to_id else x.to_name == d.to_name)]
         doorbell.give_up_if_old(items.conn, d.to_id or d.to_name, rung, now, lambda line: _log(cfg, "send", line))
+    if d.extra.get(send_restore.RESTORE) and row is not None and _restoring(cfg, d, row, now, save, items, work):
+        return
     if row is None or row.state in GONE:
         d.reason = REASON_NOT_RUNNING
         return
@@ -625,6 +657,93 @@ def _deliver(cfg, run, d, row, sleep, now, save, items):
         _log(cfg, "send", f"派工 {lead.id}：已送到 {lead.to_name}")
     else:
         _log(cfg, "send", f"派工 {ids}：一起送到 {lead.to_name}（送達 {did}，{len(group)} 則）")
+
+
+def _restore_group(items, row):
+    """The queued dispatches of row's session that were sent with restore, in line order: they share one phase."""
+    return sorted((x for x in items if x.state == "queued" and x.extra.get(send_restore.RESTORE)
+                   and _for_target(x, row)), key=_created_key)
+
+
+def _set_phase(group, phase, now, reason=""):
+    for x in group:
+        x.extra = {**x.extra, send_restore.PHASE: phase, send_restore.PHASE_AT: _iso(now)}
+        x.reason = reason
+
+
+def _restoring(cfg, d, row, now, save, items, work):
+    """The reattach step of a dispatch sent with restore, judged inside the lock (send_restore.decide). True: d goes no
+    further now (it waits, failed, or a job was claimed for after the lock); False: deliver as usual (nothing to
+    reattach, or it is done)."""
+    group = _restore_group(items, row) or [d]
+    first = next((x for x in group if x.extra.get(send_restore.PHASE)), None)
+    phase = first.extra[send_restore.PHASE] if first else ""
+    if phase == send_restore.READY_PHASE and row.state == State.STOPPED:
+        phase = ""  # it was up and went down again before the message left: reattach it again (a second launch that
+        # fails fails the dispatches, so this cannot loop)
+    if phase in ("", send_restore.READY_PHASE) and row.state != State.STOPPED:
+        return False  # it is up (or was never down), or it is gone for good: the delivery judges that
+    at = parse_iso(first.extra.get(send_restore.PHASE_AT)) if first and phase else None
+    age = (now - at).total_seconds() if at else 0
+    held = {x.to_id or x.to_name for x in items if x.state == "queued"
+            and x.extra.get(send_restore.PHASE) in send_restore.ACTIVE and not _for_target(x, row)}
+    step = send_restore.decide(row, phase, age, others_active=len(held), rc=steps.rc_wanted(cfg, row))
+    if step.kind == "ready":
+        _set_phase(group, send_restore.READY_PHASE, now)
+        save()
+        return False
+    if step.kind == "wait":
+        d.reason = step.reason
+        return True
+    if step.kind == "fail":
+        for x in group:
+            _finish(x, "failed", now, step.reason)
+        _log(cfg, "send", f"派工 {'、'.join(x.id for x in group)}：{step.reason}")
+        return True
+    if work is None:  # launch / rc: only a look that may do the work claims it
+        d.reason = send_restore.REASON_NOT_CLAIMED
+        return True
+    if step.kind == "launch":
+        _set_phase(group, send_restore.LAUNCHING, now, send_restore.REASON_RESTORING)
+    else:
+        _set_phase(group, send_restore.RC, now, send_restore.REASON_RC)
+    save()  # the claim is on record before anything is pressed: a second look never starts the same thing again
+    work.append((step.kind, row.name, row.id, [x.id for x in group]))
+    _log(cfg, "send", f"派工 {'、'.join(x.id for x in group)}：{send_restore.REASON_RESTORING if step.kind == 'launch' else send_restore.REASON_RC}（{row.name}）")
+    return True
+
+
+def _restore_work(cfg, run, job, *, sleep, snapshot_fn, status_fn, now):
+    """Do a claimed reattach job outside the dispatches lock (the launch line, or the Remote Control reset), then record
+    the result in a short transaction of its own. kind: launch → phase starting (the next looks wait for the target to
+    come up and be idle), or the dispatches fail with why; rc → phase ready (the reset never fails a dispatch: it only
+    logs what it could not do)."""
+    kind, name, target_id, ids = job
+    why = None
+    try:
+        if kind == "launch":
+            why = restore_mod.start_one(cfg, run, name, sleep=sleep)
+        else:
+            row = _row_of(_rows(cfg, run, snapshot_fn, status_fn), target_id, name)
+            reg = next((r for r in load_rows(cfg.registry_path, codex_profile=cfg.codex.profile) if r.tmux == name), None)
+            if row is not None and row.pane and reg is not None:
+                steps.rc_step(cfg, Tmux(run), reg, row.pane, actionlog.tee(cfg, "接回", lambda _l: None), sleep=sleep)
+    except Exception as e:  # noqa: BLE001  (a tmux or registry failure is a reason like any other)
+        why = f"{type(e).__name__}：{e}" if kind == "launch" else None
+        _log(cfg, "send", f"派工 {'、'.join(ids)}：接回（{kind}）出錯：{e!r}")
+    try:
+        with dispatch.transaction(cfg.state_dir, keep_days=cfg.keep_days, ids=ids) as items:
+            group = [x for x in items if x.id in ids and x.state == "queued"]
+            if why:
+                for x in group:
+                    _finish(x, "failed", now, send_restore.FAIL_START.format(why=why))
+                _log(cfg, "send", f"派工 {'、'.join(ids)}：{send_restore.FAIL_START.format(why=why)}")
+            elif kind == "launch":
+                _set_phase(group, send_restore.STARTING, now, send_restore.REASON_STARTING)
+            else:
+                _set_phase(group, send_restore.READY_PHASE, now)
+    except (dispatch.DispatchError, OSError) as e:
+        _log(cfg, "send", f"派工 {'、'.join(ids)}：接回的結果寫不進去：{e}")
 
 
 def _transcript_size(cfg, row):
@@ -739,7 +858,7 @@ def _expire(cfg, d, now):
         return
     if d.status == "rung":  # rung: the target has it; settle_ring decides when it goes back in line
         return
-    if d.reason in WAITING or d.reason.startswith("對方狀態："):
+    if d.reason in WAITING or d.reason.startswith("對方狀態：") or send_restore.waiting(d.reason):
         return
     last = f"（最後一次：{d.reason}）" if d.reason else ""
     _finish(d, "failed", now, f"排隊 {QUEUE_LIMIT_S // 60} 分鐘還送不出去{last}")
@@ -1227,7 +1346,10 @@ def resend(cfg, did, *, now=None, notify=None):
                 return refusal
             with dispatch._sqlite_errors(cfg.state_dir):
                 _leave_deliveries(items, d, now)
-            d.state, d.status, d.extra = "queued", "queued", {**d.extra, REQUEUED_AT: _iso(now)}
+            # a resent restore dispatch starts over: whatever its earlier try left (a launch that failed) is no claim
+            d.state, d.status = "queued", "queued"
+            d.extra = {**{k: v for k, v in d.extra.items() if k not in (send_restore.PHASE, send_restore.PHASE_AT)},
+                       REQUEUED_AT: _iso(now)}
             d.reason, d.sent_at, d.done_at, d.reply = "", None, None, None
             d.startup = False  # its session is up by now: an ordinary message
             if notify is not None:
@@ -1294,20 +1416,45 @@ def _advance_until(cfg, run, did, wait_s, *, sleep, clock, snapshot_fn, status_f
         sleep(POLL_S)
 
 
+RESTORE_CLI_S = 300  # `--restore` at a terminal keeps going this long for the reattach (a launch, its start, the reset)
+
+
+def _restore_until_sent(cfg, run, ids, out, *, sleep, clock, snapshot_fn, status_fn, now_fn):
+    """`--restore` from a terminal: once this command exits nobody moves the message along (a terminal has no watcher),
+    and a person is waiting at it anyway, so keep advancing until none of ids is still waiting for a reattach (it went
+    out, failed, or waits for something else) or RESTORE_CLI_S has passed. Each new reason is said once."""
+    start, said = clock(), None
+    while True:
+        queued = [d for d in (advance(cfg, run, i, sleep=sleep, snapshot_fn=snapshot_fn, status_fn=status_fn,
+                                      now=now_fn()) for i in ids) if d.state == "queued"]
+        waiting = [d for d in queued if send_restore.waiting(d.reason)]
+        if not waiting or clock() - start >= RESTORE_CLI_S:
+            return
+        if waiting[0].reason != said:
+            said = waiting[0].reason
+            out(f"… {said}")
+        sleep(POLL_S)
+
+
 def cmd_send(cfg, run, out, to, message, *, wait, timeout=600, sleep=time.sleep, clock=time.monotonic,
-             snapshot_fn=None, status_fn=None, now_fn=_utcnow, caller=TERMINAL, raw=False):
+             snapshot_fn=None, status_fn=None, now_fn=_utcnow, caller=TERMINAL, raw=False, restore=False):
     """`sampan send`. caller: who runs it (command_caller: an agent running it through its shell tool is that session
     or an unregistered agent, never the terminal). Without wait: try once, print the id (rc 0, also when it is only
     queued). With wait: advance every 2 s; done → the reply (rc 0), failed → the reason (rc 1), timeout → rc 124
-    (the dispatch stays), Ctrl-C → rc 130 (the dispatch stays). raw: a direct send (see submit)."""
+    (the dispatch stays), Ctrl-C → rc 130 (the dispatch stays). raw: a direct send (see submit). restore: reattach a
+    stopped target first; this command then stays until the message is out or the reattach failed (my decision: a
+    terminal has no watcher to carry on, and a person is waiting at it), even without wait."""
     r = submit(cfg, run, caller, to, message, notify=False, now=now_fn(), snapshot_fn=snapshot_fn, status_fn=status_fn,
-               raw=raw)
+               raw=raw, restore=restore)
     if isinstance(r, str):
         out(f"❌ {r}")
         return 2
     did = r.id
     try:
         try:
+            if restore:
+                _restore_until_sent(cfg, run, [did], out, sleep=sleep, clock=clock, snapshot_fn=snapshot_fn,
+                                    status_fn=status_fn, now_fn=now_fn)
             d = _advance_until(cfg, run, did, timeout if wait else 0, sleep=sleep, clock=clock,
                                snapshot_fn=snapshot_fn, status_fn=status_fn, now_fn=now_fn)
         except (dispatch.DispatchError, RegistryError) as e:
@@ -1342,13 +1489,14 @@ def _advance_batch_until(cfg, run, bid, wait_s, *, sleep, clock, snapshot_fn, st
 
 
 def cmd_send_batch(cfg, run, out, names, message, *, wait, timeout=600, raw=False, sleep=time.sleep,
-                   clock=time.monotonic, snapshot_fn=None, status_fn=None, now_fn=_utcnow, caller=TERMINAL):
+                   clock=time.monotonic, snapshot_fn=None, status_fn=None, now_fn=_utcnow, caller=TERMINAL,
+                   restore=False):
     """`sampan send-batch`: the same message to every running, idle session of names (the others are skipped and
     listed). Without wait: try once, print each item (rc 0). With wait: advance every 2 s; every item done → the
     replies (rc 0), any failed / cancelled → rc 1, timeout → rc 124, Ctrl-C → rc 130 (the dispatches stay); nobody to
     send to → rc 2."""
     b = submit_batch(cfg, run, caller, names, message, raw=raw, notify=False, now=now_fn(), snapshot_fn=snapshot_fn,
-                     status_fn=status_fn)
+                     status_fn=status_fn, restore=restore)
     if isinstance(b, str):
         out(f"❌ {b}")
         return 2
@@ -1357,6 +1505,9 @@ def cmd_send_batch(cfg, run, out, names, message, *, wait, timeout=600, raw=Fals
         out(f"  跳過 {name}：{why}")
     try:
         try:
+            if restore:
+                _restore_until_sent(cfg, run, [d.id for d in b.items], out, sleep=sleep, clock=clock,
+                                    snapshot_fn=snapshot_fn, status_fn=status_fn, now_fn=now_fn)
             items = _advance_batch_until(cfg, run, b.id, timeout if wait else 0, sleep=sleep, clock=clock,
                                          snapshot_fn=snapshot_fn, status_fn=status_fn, now_fn=now_fn)
         except (dispatch.DispatchError, RegistryError) as e:
