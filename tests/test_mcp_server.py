@@ -834,7 +834,7 @@ class NewSessionToolTest(Base):
                                    call(3, "new_session", self.args(name="n2", model="a b")),
                                    call(4, "new_session", self.args(name="n3", model=7)),
                                    call(5, "new_session", self.args(name="n4"))]), confirm=False, run=new_runner())
-        self.assertEqual(seen, ["sonnet[1m]", None])  # stripped; the two bad ones never reached cmd_new
+        self.assertCountEqual(seen, ["sonnet[1m]", None])  # stripped; the two bad ones never reached cmd_new (the two calls that did run on threads: no order)
         self.assertFalse(c.response(2)["result"]["isError"])
         for rid, text in ((3, "模型不能含空白"), (4, "參數 model 要是字串")):
             self.assertTrue(c.response(rid)["result"]["isError"], rid)
