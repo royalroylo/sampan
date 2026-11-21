@@ -5,6 +5,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-11-21
+
+Upgrading: restart the Claude sessions after updating, so each one runs the new `sampan mcp serve` (the `profile` parameter of `send` / `send_batch` exists only there). Nothing changes unless you pass `--profile` or `--no-launch`.
+
 ### Added
 - `sampan send --restore --profile X`, `sampan send-batch --restore --profile X` and the MCP parameter `profile` of `send` / `send_batch`: reattach a stopped target under another profile. It is the registry change of `sampan switch` (transcript moved where the new profile can see it, row changed for good) followed by the usual reattach; only with `--restore`, only for a stopped, active Claude session (a running one that is not on that profile, a retired one, Codex, an unknown or disabled profile are refused; a batch lists them as skipped). By default nothing changes, and there is no global "profile to reattach with" on purpose: changing accounts needs someone's approval, which the MCP tool's prompt gives. A queued reattach for the same target that wants another profile makes this one refuse.
 - `sampan switch … --no-launch` (also with several names, `--folder`, `--from`): for stopped sessions only, move the transcript and change the registry row without starting anything, so many sessions can be moved to another account without reattaching them all at once.
