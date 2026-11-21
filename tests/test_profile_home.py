@@ -137,6 +137,29 @@ class OldConfigUnchangedTest(unittest.TestCase):
         self.assertEqual(cfg.profiles["work"].claude_json, home / ".claude.json")
 
 
+class SmallFixesTest(unittest.TestCase):
+    def test_profile_for_dir_compares_real_paths(self):
+        tmp = Path(tempfile.mkdtemp())
+        home = tmp / "home"
+        (home / ".claude").mkdir(parents=True)
+        (home / ".claude-profiles").mkdir()
+        (home / ".claude-profiles" / "alias").symlink_to(home / ".claude")
+        (tmp / "config.toml").write_text(HOME_DEFAULT.replace("~/.claude-profiles/work", "~/.claude-profiles/other"))
+        (home / ".claude-profiles" / "other").mkdir()
+        from sampan.config import load_config
+        cfg = load_config(tmp / "config.toml", home=home, state_dir=tmp / "state")
+        self.assertEqual(profile_for_dir(cfg, str(home / ".claude-profiles" / "alias")), "alice")  # the same directory
+
+    def test_forget_resume_line_for_the_profile_in_home_has_no_variable(self):
+        from sampan.profile_ops import _resume_line
+        from sampan.registry import Row
+        cfg = env_of(TEAM_DEFAULT)
+        row = Row("x", "claude", "alice", "aaaaaaaa-0000-4000-8000-000000000001", "/c")
+        self.assertIn("env -u CLAUDE_CONFIG_DIR", _resume_line(cfg, cfg.profiles["alice"], row))
+        self.assertNotIn("CLAUDE_CONFIG_DIR=", _resume_line(cfg, cfg.profiles["alice"], row))
+        self.assertIn(f"CLAUDE_CONFIG_DIR={cfg.profiles['work'].config_dir}", _resume_line(cfg, cfg.profiles["work"], row))
+
+
 class DoctorTest(unittest.TestCase):
     def test_a_default_outside_home_is_explained(self):
         cfg = env_of(TEAM_DEFAULT)

@@ -1,4 +1,5 @@
 """Which agent each tmux pane is running, and which conversation it is in."""
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,7 +31,7 @@ def profile_for_dir(cfg, config_dir):
         return home.name if home is not None else None
     target = Path(config_dir).expanduser()
     for p in cfg.profiles.values():
-        if Path(p.config_dir) == target:
+        if Path(p.config_dir) == target or os.path.realpath(p.config_dir) == os.path.realpath(target):
             return p.name
     return None
 

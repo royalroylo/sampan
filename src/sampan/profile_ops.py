@@ -308,8 +308,9 @@ def _resume_line(cfg, p, row):
                              env_set=env, cwd=row.cwd or None)
     else:
         line = shell_command(claude_argv(p, resume=row.session_id, name=row.tmux,
-                                         remote_control=row.tmux if row.tmux and remote_control_on(p) else None), env_set={"CLAUDE_CONFIG_DIR": str(p.config_dir)},
-                             cwd=row.cwd or None)
+                                         remote_control=row.tmux if row.tmux and remote_control_on(p) else None),
+                             env_set={} if p.uses_home else {"CLAUDE_CONFIG_DIR": str(p.config_dir)},
+                             env_unset=("CLAUDE_CONFIG_DIR",) if p.uses_home else (), cwd=row.cwd or None)
     return f"  對話還在：{line}"
 
 
