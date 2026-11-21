@@ -34,7 +34,7 @@ hub 是中繼站：每台機器主動連它（HTTPS 長輪詢），機器不用�
 **hub 主機：**
 - 建一個專屬的 OS 使用者跑 hub（資料夾 0700），不要和你的 agent 同一個使用者；資料庫與備份排除（hub 資料夾不要進 Time Machine、同步或其他備份）。
 - `sampan hub serve --listen 127.0.0.1:8787 --issuer <issuer> --audience <audience> --jwks-url <jwks>`（`--dev` 只給開發，用測試 token）。
-- 新機器第一次連上是 **pending**，不會收發任何東西。那台機器的 `sampan connect` 會印一組驗證碼；在 hub 主機 `sampan hub machines` 看到同一組，比對相同才 `sampan hub approve <名稱> --code <碼>`。
+- 新機器第一次連上是 **pending**，不會收發任何東西。那台機器的 `sampan connect` 會印一組驗證碼；在 hub 主機 `sampan hub machines` 看到同一組，比對相同才 `sampan hub approve <名稱> --code <碼>`（`--code` 一定要給，不給不核准）。
 - 撤銷：`sampan hub revoke <名稱>` 立刻生效（不等 token 過期），並丟掉等它的訊息；也要停用它的 OAuth client 與 service token。`sampan hub audit` 看稽核紀錄（不含訊息內容）。
 
 ## 用法

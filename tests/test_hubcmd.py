@@ -201,6 +201,14 @@ class HostTest(unittest.TestCase):
         self.assertIn("laptop　pending", text)
         self.assertIn(self.hub.machines()[0]["code"], text)
 
+    def test_approve_without_a_code_does_nothing(self):
+        rc, text = self.run_cmd(hubcmd.cmd_approve, code=None)
+        self.assertEqual(rc, 2)
+        self.assertIn("--code", text)
+        self.assertEqual(self.hub.machines()[0]["state"], "pending")
+        rc, text = self.run_cmd(hubcmd.cmd_approve, code="")
+        self.assertEqual((rc, self.hub.machines()[0]["state"]), (2, "pending"))
+
     def test_approve_with_the_wrong_code_does_nothing_then_the_right_one_works(self):
         rc, text = self.run_cmd(hubcmd.cmd_approve, code="000-000")
         self.assertEqual(rc, 2)
@@ -211,7 +219,7 @@ class HostTest(unittest.TestCase):
         self.assertEqual(rc, 2)
 
     def test_revoke_and_audit(self):
-        self.run_cmd(hubcmd.cmd_approve)
+        self.run_cmd(hubcmd.cmd_approve, code=self.hub.machines()[0]["code"])
         rc, text = self.run_cmd(hubcmd.cmd_revoke)
         self.assertEqual(rc, 0)
         self.assertIn("Keycloak", text)

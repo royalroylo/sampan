@@ -34,7 +34,7 @@ The hub is a relay: every machine connects to it (HTTPS long polling), so no mac
 **The hub host:**
 - Run the hub as its own OS user (directory 0700), not as the user your agents run as, and keep the hub's directory out of Time Machine, syncing and other backups.
 - `sampan hub serve --listen 127.0.0.1:8787 --issuer <issuer> --audience <audience> --jwks-url <jwks>` (`--dev` is for development only and takes test tokens).
-- A new machine is **pending** the first time it connects and sends and receives nothing. Its `sampan connect` prints a verification code; on the hub host `sampan hub machines` shows the same code, and only when they match do you `sampan hub approve <name> --code <code>`.
+- A new machine is **pending** the first time it connects and sends and receives nothing. Its `sampan connect` prints a verification code; on the hub host `sampan hub machines` shows the same code, and only when they match do you `sampan hub approve <name> --code <code>` (`--code` is required; without it nothing is approved).
 - Revoke: `sampan hub revoke <name>` takes effect at once (it does not wait for the token to run out) and drops what waits for that machine; also disable its OAuth client and service token. `sampan hub audit` shows the audit trail (never message text).
 
 ## Use

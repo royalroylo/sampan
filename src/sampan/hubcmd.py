@@ -253,6 +253,11 @@ def cmd_machines(args, out):
 
 
 def cmd_approve(args, out):
+    """Approve a pending machine. The verification code (the one that machine's `sampan connect` printed) is required:
+    approving by name alone would let a stranger's request, or a stolen client, in without anyone having compared anything."""
+    if not args.code:
+        out("❌ 要給 --code：那台機器 sampan connect 印的驗證碼（sampan hub machines 會列出等核准的機器與它們的碼，跟那台機器上的比對相同才核准）")
+        return 2
     core, problem = _open_core(args)
     if core is None:
         out(f"❌ {problem}")
