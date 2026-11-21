@@ -179,9 +179,11 @@ Claude Code 只在狀態列指令的輸入裡提供 5h／週額度，所以要�
 
 **在 tmux 裡要回到清單**：按 `Ctrl-q`（`[ui] detach_key`，只在 sampan 管的 session 裡有效）或 detach（預設 `Ctrl-b d`）就會回到 sampan 的清單；按 `q` 才離開 sampan。也可以在 tmux 裡開一個專門放 sampan 的 session 或 pane：在那裡選了之後會切過去，sampan 留在原處，切回來看到的還是清單。
 
-**Remote Control 的名稱不對（手機 app 的列表顯示舊名稱）**：接回舊對話時，Claude 會沿用舊的 Remote Control 連線和舊名稱。所以只要 profile 開了 Remote Control，sampan 在每次啟動後（接回／`R`、重開／`S`、換帳號、搬目錄、接手）都會做一次「RC 校正」：Claude 回來之後打 `/remote-control`，確認游標停在「Disconnect this session」才按 Enter，再打 `/remote-control <別名>`。每次都做、不先判斷名稱對不對，所以 app 的 RC 列表每次會多一個新項目（舊的消失）。`new` 不做（新對話一開始就是對的名稱）；在 sampan 自己那個 pane 裡原地接回時 sampan 已先結束，也做不了。畫面上單按 Enter 接回一個 session，會等接回與校正做完（通常幾秒，Remote Control 連不上時最多約 20 秒，畫面會顯示「RC 校正中」）才帶你進去；等待時按的鍵不算數。認不得畫面時 sampan 按 Esc 離開，印出 `RC 校正沒做：<原因>`，其他動作不受影響。要修一個現有 session 的名稱：`sampan restart <名稱>`（畫面上 `S`）；agent 也可以在自己的 shell 對**別的** session 跑它（自己的 pane 與忙碌中的會略過）。手動做法：`/remote-control` → Disconnect this session → `/remote-control <名稱>`。
+**Remote Control 的名稱不對（手機 app 的列表顯示舊名稱）**：接回舊對話時，Claude 會沿用舊的 Remote Control 連線和舊名稱。所以只要 profile 開了 Remote Control，sampan 在每次啟動後（接回／`R`、重開／`S`、換帳號、搬目錄、接手）都會做一次「RC 校正」：Claude 回來之後打 `/remote-control`，確認游標停在「Disconnect this session」才按 Enter，再打 `/remote-control <別名>`。每次都做、不先判斷名稱對不對，所以 app 的 RC 列表每次會多一個新項目（舊的消失）。`new` 不做（新對話一開始就是對的名稱）；在 sampan 自己那個 pane 裡原地接回時 sampan 已先結束，也做不了。畫面上單按 Enter 接回一個 session，會等接回與校正做完（通常幾秒，Remote Control 連不上時最多約 20 秒，畫面會顯示「RC 校正中」）才帶你進去；等待時按的鍵不算數。認不得畫面時 sampan 按 Esc 離開，印出 `RC 校正沒做：<原因>`，其他動作不受影響。要修一個現有 session 的名稱：`sampan restart <名稱>`（畫面上 `S`）會重載 context；只想改 Remote Control 名稱、不重開 Claude 的話用 `sampan rc <名稱>`（0.21，見下）。兩個指令 agent 都可以在自己的 shell 對**別的** session 跑（自己的 pane 與忙碌中的會略過）。手動做法：`/remote-control` → Disconnect this session → `/remote-control <名稱>`。
 
 **連線很慢時方向鍵偶爾變成別的鍵（已知限制）**：方向鍵送出的是 Esc、`[`、`A` 三個字元，連線很慢時可能分好幾次到。主畫面上 `[` 不是任何鍵，所以它之後 3 秒內來的 `A`～`D`、`H`、`F` 都還算方向鍵的一部分（等待時畫面照常更新）。其他畫面（勾選清單、外掛、設定）只等 1 秒，再晚才到的 `A`、`D` 會被當成一般鍵：最壞是開了接手（`A`）或派工（`D`）畫面，按 `q` 回去就好。這些畫面不能再等更久，否則真的按 Esc 的時候會覺得卡住。
+
+**只校正 Remote Control 名稱、不重開（0.21）**：`sampan rc <名稱…>`、`sampan rc --all`、`sampan rc --profile <p>`。對**正在跑、閒著、profile 開了 Remote Control** 的 Claude session，直接在它的畫面裡做「斷開 → 以別名重新連線」，不重載 context、不吃額外記憶體；改完別名後用它一次補上（已停止的 session 下次接回就會自動套用，不需要）。忙的、已停止的、Codex、profile 沒開 Remote Control、sampan 自己的 pane 都略過，最後依原因列出名稱。一次一個、依序做，每個動手前再看一次它忙不忙；輸入框裡有字就不按任何鍵，印出 `RC 校正沒做：輸入框有字`。`--all`／`--profile` 先印計畫並在終端機問 `確定？(y/N)`；沒有終端機（agent 執行）要加 `--yes`，agent 只在使用者要求批次時才可以加。`--dry-run` 只列計畫、不按鍵。結尾一行 `校正 a、略過 b、失敗 c`，有任何失敗結束碼 1；認不得的畫面按 Esc 離開，並把最後 40 行畫面寫進本機的 `actions.log`（不印出來）。**注意**：每校正一個，手機 app 的 Remote Control 列表就多一筆新的（舊的那筆變離線），所以只想改幾個就指定名稱，不要整批重跑。
 
 **給 session 一個好認的別名**：`sampan alias <名稱> "RC 校正 一"`（畫面上 `L`），清掉用 `--clear`。別名只在下次啟動時套用，所以改完再 `sampan restart <名稱>` 就會出現在 Remote Control 列表。agent 在 `[mcp] confirm` 開著時不能自己改別名。
 
@@ -209,6 +211,7 @@ Claude Code 只在狀態列指令的輸入裡提供 5h／週額度，所以要�
 | 存下目前每個 session 的對話 id | `sampan save`（排程每 5 分鐘也會跑） |
 | 讓 agent 正常結束（先收起來，要用時再 restore） | `sampan stop [名稱…] [--profile <p>] [--force] [--keep-tmux] [-v]`：結束後若那個 tmux session 只剩這一個 pane，就一起關掉；有其他視窗或 pane 則保留。停之前會先存檔，已停止的只給數量（`存檔：已停止 7（-v 看清單）`），警告照樣全部列出；`-v` 列出每一個 |
 | 重開指定的 session | `sampan restart <名稱…>`：閒置的先停再背景接回原對話（不會把你帶進去），已停止的直接接回；忙碌中的、sampan 自己所在的 pane、retired 的略過，並在最後列出名稱與原因。全部都不能重開時回傳 1 |
+| 只校正執行中 session 的 Remote Control 名稱 | `sampan rc <名稱…>`、`--all`、`--profile <p>`、`--dry-run`、`--yes`：不重開 Claude；忙的、已停止的、Codex、沒開 Remote Control 的、sampan 自己的 pane 略過並列出原因；有失敗結束碼 1 |
 | 重開機後接回 | `sampan restore [名稱…] [--all] [--dry-run]` |
 | 接手在 tmux 外（例如終端機程式的分頁）跑的 claude／codex | `sampan adopt [--dry-run]`（或 ui 按 A）：列出 tmux 外的 claude／codex（目錄、最後活動、最後一句話），勾選後逐一問 session 名稱；你自己在原視窗 `/exit`（Codex：`/quit`），sampan 等它結束後才在新的 tmux session 接回同一段對話並登記。sampan 不對原視窗按任何鍵；判斷不出對話 id 或 profile 的不能選（Codex：新開的要先送出第一個 prompt、剛 `codex resume` 的要先送一則訊息，sampan 才認得出是哪段對話） |
 | 改 session 名稱 | `sampan rename <名稱> <新名稱>`（或 ui 按 e）：tmux session 與登記表一起改，agent 照常執行、不送任何按鍵。名稱不能含 `.` 或 `:` |

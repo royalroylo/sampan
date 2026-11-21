@@ -209,6 +209,14 @@ stdio MCP server（每行一則 JSON-RPC 2.0；協定版本 `2025-06-18`，clien
 
 重開指定的 session，每筆結果記在 `actions.log`（標籤 `重開`）。分類：登記表裡執行中、`agent_status` 是 `idle`、也不在 sampan 自己所在的 pane 的 → 先 `sampan stop`（逾時 90 秒）再背景接回；已停止的 → 只接回；忙碌中的（`busy`／`working`／`waiting`，原因「忙」）、其他不是 idle 的（原因例如「沒有閒著（unknown）」）、retired、狀態不明、其他狀態、找不到的 → 略過，最後一行印「略過：名稱（原因）…」。接回用 `restore` 的不確認模式，不會主動把你帶進 session；agent 啟動時停在選單（信任目錄等）的，跟 `R` 一樣等選單出現、把問題交給你回答（終端機裡用編號問）；在 sampan 畫面裡選「進去自己操作」就會進到那個 session。可重開與可接回的都沒有時回傳 1；否則回傳 stop 與 restore 中最差的結束碼。
 
+
+## `sampan rc <名稱…>`（0.21）
+
+```
+sampan rc <名稱…> | --all | --profile <p>   [--dry-run] [--yes]
+```
+
+只校正**執行中** Claude session 的 Remote Control 名稱，不重開、不重載 context。名稱解析同 `restart`（名稱、id、唯一的 id 前綴）；`--all`（所有登記的 session）、`--profile <p>`（登記在 p 的）可與名稱併用取聯集，`--all` 加 `--profile` 取交集。分類：執行中、`agent_status` 為 `idle`、Claude、profile 有 `remoteControlAtStartup` → 校正；忙（`busy`／`working`／`waiting`，原因「忙」）、其他不是 idle、已停止（「已停止；下次接回會自動套用」）、retired、狀態不明、Codex（「Codex 沒有 Remote Control」）、profile 沒開 Remote Control、sampan 自己所在的 pane、找不到 → 略過，最後依原因分行列出名稱。校正的流程是 `steps.rc_rename`：與接回後的 RC 校正相同（只按文字加 Enter、Up、Enter、Esc；游標驗證在 `Disconnect this session` 才按 Enter；認不得畫面就按 Esc 並印原因），差別是它不等畫面上出現「/remote-control is active」（執行很久的 session 畫面上沒有那一行），而是直接從空的輸入框開始，輸入框有字或不是輸入框就什麼都不按。沒連上 Remote Control 的 session 打 `/remote-control` 會直接連線而不是開選單，sampan 會等選單跟上，沒跟上才再打一次。一次一個、依序、中間停 0.5 秒；每個動手前重新讀它的狀態（變忙就略過）。`--all`／`--profile` 先印計畫，在終端機問 `確定？(y/N)`，沒有終端機要 `--yes`；`--dry-run` 印出完整計畫、不按鍵。每則訊息記進 `actions.log`（標籤 `RC 校正`），失敗時最後 40 行畫面（每行最多 160 字）也記在那裡（只在本機檔，不印出）。結束碼：沒有失敗 0（略過不算失敗）、有失敗或被 Ctrl-C 中斷 1、找不到名稱或參數錯誤 2。agent 可以對別的 session 跑，不能對自己的 pane（略過）；不受 `[mcp] confirm` 管，也沒有 MCP 工具。每校正一個，手機 app 的 Remote Control 列表多一筆新的（舊的離線）。
 ## 啟動後的標準步驟與 RC 校正
 
 接回（`restore`／`R`／Enter）、重開（`restart`／`S`）、`switch`、`move`、`adopt` 在 Claude 回到輸入框之後，如果該 profile 開了 Remote Control（`remoteControlAtStartup`），都會做一次 RC 校正：打 `/remote-control`，確認選單的游標停在 `Disconnect this session` 才按 Enter，再打 `/remote-control <別名，沒設就是名稱>`。每次啟動都做，不判斷名稱對不對，所以手機 app 的 RC 列表每次多一個新項目、舊的消失。sampan 只按文字加 Enter、上、Enter、Esc 這幾種鍵；畫面不是預期的樣子就按 Esc，印 `RC 校正沒做：<原因>`，原動作與其他步驟不受影響、結束碼不變。`new` 不做（新對話直接帶對的名稱）；在 sampan 畫面自己那個 pane 原地接回（sampan 先結束）也做不了。畫面上單按 Enter 接回一個 session 會等接回與校正做完才進去：等待時印出 `… <名稱>：RC 校正中（最多約 20 秒）`，這段時間按的鍵會被丟掉（不會變成第二次接回）；校正沒做時訊息會附上「之後按 S 重開（或 `sampan restart <名稱>`）會再校正」。手動做法同樣是 `/remote-control` → `Disconnect this session` → `/remote-control <名稱>`。修一個現有 session 的名稱：先 `sampan alias` 設好，再 `sampan restart <名稱>`（agent 可從自己的 shell 對別的 session 跑，忙碌中的與自己的 pane 略過）。

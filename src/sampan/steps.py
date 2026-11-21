@@ -142,23 +142,36 @@ def snapshot(screen):
     return lines[-SNAPSHOT_LINES:]
 
 
-def rc_reset(tmux, pane, alias, *, sleep, wait=RC_WAIT, report=None):
-    """Disconnect Remote Control and reconnect it as `alias`. None when done, else why it was not (nothing pressed
-    blindly: a step that does not see what it expects presses Escape if a menu may be open, and stops). report(reason,
-    screen) is called with the last screen seen when it was not done (screen None when nothing was captured)."""
+def _run_reset(tmux, pane, alias, *, sleep, wait, report, bridge):
     if report is None:
-        return _rc_reset(tmux, pane, alias, sleep=sleep, wait=wait)
+        return _rc_reset(tmux, pane, alias, sleep=sleep, wait=wait, bridge=bridge)
     watched = _Watched(tmux)
-    reason = _rc_reset(watched, pane, alias, sleep=sleep, wait=wait)
+    reason = _rc_reset(watched, pane, alias, sleep=sleep, wait=wait, bridge=bridge)
     if reason is not None:
         report(reason, watched.last)
     return reason
 
 
-def _rc_reset(tmux, pane, alias, *, sleep, wait):
-    screen = _wait(tmux, pane, lambda s: any(RC_ACTIVE in ln for ln in _plain(s)), wait, sleep)
-    if screen is None:
-        return "沒看到 Remote Control 連上"
+def rc_reset(tmux, pane, alias, *, sleep, wait=RC_WAIT, report=None):
+    """Disconnect Remote Control and reconnect it as `alias`. None when done, else why it was not (nothing pressed
+    blindly: a step that does not see what it expects presses Escape if a menu may be open, and stops). report(reason,
+    screen) is called with the last screen seen when it was not done (screen None when nothing was captured)."""
+    return _run_reset(tmux, pane, alias, sleep=sleep, wait=wait, report=report, bridge=True)
+
+
+def rc_rename(tmux, pane, alias, *, sleep, wait=RC_WAIT, report=None):
+    """rc_reset for a session that has been running for a while: its screen has no "is active" line to wait for (that
+    line only shows after a /remote-control), so it starts from the input box. Everything after is the same."""
+    return _run_reset(tmux, pane, alias, sleep=sleep, wait=wait, report=report, bridge=False)
+
+
+def _rc_reset(tmux, pane, alias, *, sleep, wait, bridge):
+    if bridge:
+        screen = _wait(tmux, pane, lambda s: any(RC_ACTIVE in ln for ln in _plain(s)), wait, sleep)
+        if screen is None:
+            return "沒看到 Remote Control 連上"
+    else:
+        screen = tmux.capture(pane, escapes=True)
     state = claude_input_state(screen)
     if state == "draft":
         return "輸入框有字"

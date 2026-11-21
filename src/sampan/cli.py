@@ -52,6 +52,12 @@ def build_parser():
     sp.add_argument("-v", "--verbose", action="store_true", help="停之前的存檔列出每個已停止的 session（預設只給數量）")
     rt = sub.add_parser("restart", help="重開這些 session：閒置的先停再背景接回原對話，已停止的直接接回，忙的略過")
     rt.add_argument("names", nargs="+", help="session 名稱")
+    rc = sub.add_parser("rc", help="校正執行中 Claude session 的 Remote Control 名稱（不重開；忙的、已停止的、Codex 的略過）")
+    rc.add_argument("names", nargs="*", help="session 名稱")
+    rc.add_argument("--all", action="store_true", help="這台機器上登記的全部 session")
+    rc.add_argument("--profile", help="登記在這個 profile 的 session")
+    rc.add_argument("--dry-run", action="store_true", help="只列出會校正與略過的，不按任何鍵")
+    rc.add_argument("--yes", action="store_true", help="--all／--profile 時不問確認")
     rn = sub.add_parser("rename", help="改 session 名稱（tmux 與登記表一起改，agent 照常執行）")
     rn.add_argument("name")
     rn.add_argument("new")
@@ -461,6 +467,49 @@ def _prompt_fn(isatty=None):
     return recording(plain_prompt(out, input))
 
 
+def _cmd_rc(cfg, run, args):
+    """sampan rc: correct the Remote Control name of running sessions (see rc.py). A batch (--all, --profile) is shown
+    first and asked about; without a terminal it needs --yes."""
+    import os
+
+    from . import rc, restart, status
+    batch = args.all or bool(args.profile)
+    if not args.names and not batch:
+        out("❌ 要指定 session 名稱，或用 --all／--profile")
+        return 2
+    if args.profile and args.profile not in cfg.profiles:
+        out(f"❌ 沒有這個 profile：{args.profile}")
+        return 2
+    refs = _resolve_refs(cfg, args.names, out)
+    if refs is None:
+        return 2
+    own = os.environ.get("TMUX_PANE")
+    plan = rc.plan_rc(cfg, status.status_rows(cfg, run), refs, everyone=args.all, profile=args.profile, own_pane=own)
+    missing = [n for n, why in plan.skip if why == restart.NOT_FOUND]
+    for n in missing:
+        out(f"❌ 找不到 session：{n}")
+    plan.skip[:] = [(n, why) for n, why in plan.skip if why != restart.NOT_FOUND]
+    if not plan.todo:
+        out("沒有可校正的 session。")
+        for line in rc.skip_lines(plan.skip):
+            out(line)
+        return 2 if missing else 0
+    if args.dry_run or batch:
+        for line in rc.plan_lines(plan, limit=None if args.dry_run else 8):
+            out(line)
+        out(rc.CLUTTER)
+    if args.dry_run:
+        return 2 if missing else 0
+    if batch and not args.yes:
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            out("❌ 批次校正要在終端機確認（沒有終端機時要加 --yes；agent 只有在使用者要求批次時才可以加）")
+            return 2
+        if input("確定？(y/N) ").strip().lower() not in ("y", "yes"):
+            out("已取消")
+            return 0
+    return max(rc.cmd_rc(cfg, run, out, plan, own_pane=own), 2 if missing else 0)
+
+
 def _agent_refused(cfg, caller, out):
     """While [mcp] confirm is on, an agent (not a person at the terminal) may not run an acting command through its
     shell: print why and return True. caller None = not looked up (confirm off)."""
@@ -743,6 +792,8 @@ def _dispatch(cfg, args):
             return 1
         on_prompt, _want = _prompt_fn()
         return restart.cmd_restart(cfg, run, out, input, plan, own_pane=own, on_prompt=on_prompt)
+    if cmd == "rc":
+        return _cmd_rc(cfg, run, args)
     if cmd == "model":
         from . import session_run
         from .send import command_caller

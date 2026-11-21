@@ -6,7 +6,7 @@ from pathlib import Path
 from sampan import steps
 from sampan.registry import Row
 from sampan.screens import ANSI_RE, claude_input_state
-from sampan.steps import RC_DISCONNECT, RcMenu, rc_menu, rc_reset, rc_step, rc_wanted
+from sampan.steps import RC_DISCONNECT, RcMenu, rc_menu, rc_rename, rc_reset, rc_step, rc_wanted
 from tests.helpers import make_env
 
 A = "aaaaaaaa-0000-4000-8000-000000000001"
@@ -348,6 +348,47 @@ class RcResetTest(unittest.TestCase):
                                       f"❯ /remote-control {alias[:30]}\n  {alias[30:]}\n")
         tmux = FakeTmux(ACTIVE, [MENU_CONTINUE, MENU_QR, MENU_DISCONNECT, DISCONNECTED, wrapped])
         self.assertIsNone(rc_reset(tmux, "%1", alias, sleep=self.sleep))
+
+
+class RcRenameTest(unittest.TestCase):
+    """rc_rename: the same reset for a session that has run a while, whose screen has no "is active" line."""
+
+    def setUp(self):
+        self.sleep = Sleeps()
+
+    def rename(self, tmux, **kw):
+        return rc_rename(tmux, "%1", ALIAS, sleep=self.sleep, **kw)
+
+    def test_starts_from_the_input_box_without_waiting_for_the_bridge(self):
+        tmux = FakeTmux(BOOTING, [MENU_CONTINUE, MENU_QR, MENU_DISCONNECT, DISCONNECTED, RECONNECTED])
+        self.assertIsNone(self.rename(tmux))
+        self.assertEqual(tmux.sent, HAPPY_KEYS)
+        self.assertEqual(self.sleep, [])  # rc_reset would have waited up to RC_WAIT for "is active" here
+
+    def test_rc_reset_still_waits_for_the_bridge_on_that_screen(self):
+        self.assertEqual(rc_reset(FakeTmux(BOOTING), "%1", ALIAS, sleep=self.sleep, wait=1), "沒看到 Remote Control 連上")
+
+    def test_draft_in_the_box_presses_nothing(self):
+        tmux = FakeTmux(DRAFT)
+        self.assertEqual(self.rename(tmux), "輸入框有字")
+        self.assertEqual(tmux.sent, [])
+
+    def test_a_dialog_instead_of_the_box_presses_nothing(self):
+        tmux = FakeTmux(OTHER_MENU)
+        self.assertEqual(self.rename(tmux), "找不到空的輸入框")
+        self.assertEqual(tmux.sent, [])
+
+    def test_no_menu_escapes_and_reports_the_screen(self):
+        got = []
+        tmux = FakeTmux(BOOTING, [OTHER_MENU])
+        self.assertEqual(self.rename(tmux, report=lambda why, screen: got.append((why, screen))), "選單沒出現")
+        self.assertEqual(tmux.sent, [["/remote-control", "Enter"], ["Escape"]])
+        self.assertEqual(got[0][0], "選單沒出現")
+
+    def test_a_bridge_that_was_down_gets_its_menu_after_the_bare_command(self):
+        tmux = FakeTmux(BOOTING, [[BARE_CONNECTED, MENU_CONTINUE], MENU_QR, MENU_DISCONNECT, DISCONNECTED, RECONNECTED])
+        self.assertIsNone(self.rename(tmux))
+        self.assertEqual(tmux.sent, HAPPY_KEYS)
 
 
 def rc_cfg(on):

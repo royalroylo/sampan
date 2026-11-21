@@ -5,6 +5,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `sampan rc <name…>` (also `--all`, `--profile <p>`, `--dry-run`, `--yes`): correct only the Remote Control name of **running** Claude sessions, in place: no restart, no context reload. It does the usual disconnect and reconnect under the session's alias (the same steps and the same safety rules as the reset after a reattach: only text plus Enter, Up, Enter and Escape, Enter only with the cursor verified on Disconnect) but starts from the empty input box instead of waiting for "/remote-control is active", which a session that has run a while does not show. Busy sessions, stopped ones (they get the name at their next reattach), Codex, profiles without Remote Control and the pane sampan runs in are skipped and listed by reason. One session at a time, each looked at again right before its turn; text in the input box means nothing is pressed. `--all` / `--profile` print the plan and ask in a terminal (`--yes` without one; an agent passes it only when the user asked for a batch). Exit 1 when any session failed. Each correction adds a new entry to the phone app's Remote Control list (the old one goes offline), which the plan says.
+
 ## [0.20.1] - 2026-11-21
 
 Upgrading: nothing to restart; the next start or reattach of a Claude session uses the new reset. Fixes the Remote Control name that was not corrected on machines with a newer Claude Code.
