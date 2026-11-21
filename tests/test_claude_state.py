@@ -20,11 +20,13 @@ from tests.helpers import make_env
 SID = "e70d5dbc-0000-4000-8000-000000000001"
 
 
-def write_session(cfg, profile, pid, sid=SID, cwd="/Users/u/proj", status="idle", tmux="001-proj:@1.%3", raw=None):
+def write_session(cfg, profile, pid, sid=SID, cwd="/Users/u/proj", status="idle", tmux="001-proj:@1.%3", raw=None,
+                  version=None):
     d = cfg.profiles[profile].config_dir / "sessions"
     d.mkdir(parents=True, exist_ok=True)
     body = raw if raw is not None else json.dumps(
-        {"pid": pid, "sessionId": sid, "cwd": cwd, "status": status, "tmux": tmux, "kind": "interactive"})
+        {"pid": pid, "sessionId": sid, "cwd": cwd, "status": status, "tmux": tmux, "kind": "interactive",
+         **({"version": version} if version else {})})
     (d / f"{pid}.json").write_text(body)
     (d / f"{pid}.abc.key").write_text("x")  # Claude Code also keeps .key files in the same directory; they must not be taken for session files
 
@@ -32,6 +34,12 @@ def write_session(cfg, profile, pid, sid=SID, cwd="/Users/u/proj", status="idle"
 class SessionFilesTest(unittest.TestCase):
     def setUp(self):
         self.cfg = make_env(Path(tempfile.mkdtemp()))
+
+    def test_reads_the_claude_version_of_each_process(self):
+        write_session(self.cfg, "work", 5359, version="2.1.311")
+        write_session(self.cfg, "alice", 26772, sid="b19e16af-0000-4000-8000-000000000002")
+        live, _ = read_session_files(self.cfg.profiles.values(), {5359, 26772})
+        self.assertEqual({l.pid: l.version for l in live}, {5359: "2.1.311", 26772: ""})  # an older file has none
 
     def test_reads_live_sessions_with_profile_and_pane(self):
         write_session(self.cfg, "work", 5359)

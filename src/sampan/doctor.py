@@ -13,10 +13,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
 
-from . import actionlog, codex_approval, codex_daemon, heartbeat, launchd, mcp_install, migrate, procs, store
+from . import actionlog, codex_approval, codex_daemon, heartbeat, launchd, mcp_install, migrate, procs, store, verified
 from . import deps as deps_mod
 from . import update as update_mod
-from .claude_state import stale_session_files
+from .claude_state import read_session_files, stale_session_files
 from .clock import fmt_local, parse_iso
 from .codex_state import _state_db
 from .config import claude_added, same_source, source_key, valid_source
@@ -523,6 +523,41 @@ def _multi_agent(cfg, run, proc_root):
             for s in sorted(multi_agent_sessions(procs, panes, found))]
 
 
+def _claude_versions(cfg, run):
+    """Which Claude Code versions are running, and whether sampan's screen reading has been checked on them. The
+    versions come from the running sessions' own files (every process, so a session left on an older release shows too);
+    `claude --version` only when no session is running. Never fails the doctor: what cannot be read is not reported."""
+    live, _warnings = read_session_files(_present(cfg), claude_pids(list_procs(run)))
+    counts = verified.count_versions([lc.version for lc in live])
+    where = "個 session 在跑"
+    if not counts:
+        try:
+            r = run(["claude", "--version"], timeout=5)
+        except Exception:  # noqa: BLE001  a missing or hanging claude is the deps check's business
+            return []
+        m = re.search(r"\d+\.\d+\.\d+\S*", r.stdout or "") if r.returncode == 0 else None
+        if m is None:
+            return []
+        counts, where = {m.group(0): 1}, "claude --version"
+    top = verified.newest("claude")
+    out = []
+    for version, n in counts.items():
+        who = f"{n} {where}" if where != "claude --version" else where
+        verdict = verified.judge("claude", version)
+        if verdict == "verified":
+            out.append(Check("ok", f"Claude Code {version}（{who}）：sampan 查證過這個版本的畫面"))
+        elif verdict == "newer":
+            out.append(Check("warn", f"Claude Code {version}（{who}）比 sampan 查證過的版本（最新 {top}）新，畫面判斷可能失效",
+                             "輸入框、信任選單、Remote Control 校正是讀畫面文字的；認不得時 sampan 不按鍵、不貼，不會亂動，"
+                             "但可能送不出訊息或校正不了名稱。先更新 sampan（sampan update）；還是不行就回報這個版本"))
+        elif verdict == "older":
+            out.append(Check("info", f"Claude Code {version}（{who}）不在 sampan 查證過的版本裡（最新 {top}）",
+                             "舊一點的版本多半沒問題，只是沒有查證過"))
+        else:
+            out.append(Check("info", f"Claude Code 版本「{version}」的格式 sampan 不認得，無法判斷畫面是否查證過"))
+    return out
+
+
 def _deps(cfg, which, env, platform):
     return [Check(d.level, d.title, d.hint) for d in deps_mod.check(which, env, cfg.home, platform=platform)
             if d.level != "ok" or d.name in ("tmux", "claude")]
@@ -614,7 +649,7 @@ def run_checks(cfg, run, *, now, uid, sampan_path=None, proc_root=PROC_ROOT, whi
     sampan_path = sampan_path or current_sampan()
     current = current or update_mod.current_version()
     latest_fn = latest_fn or (lambda: update_mod.check(cfg.state_dir, run=run)[0])
-    return (_version(current, latest_fn) + _deps(cfg, which, env, platform) + _profile_dirs(cfg) + _owners(cfg, uid) + _plugins(cfg) + _auth(cfg, run) + _two_logins(cfg, run, platform) + _stale(cfg, run)
+    return (_version(current, latest_fn) + _deps(cfg, which, env, platform) + _claude_versions(cfg, run) + _profile_dirs(cfg) + _owners(cfg, uid) + _plugins(cfg) + _auth(cfg, run) + _two_logins(cfg, run, platform) + _stale(cfg, run)
             + _hooks(cfg) + _statusline(cfg, now) + _codex(cfg) + _codex_daemon(cfg, run, daemon_fn) + _mcp(cfg) + _detach_key(cfg, run) + _tmux_conf(cfg, run) + _multi_agent(cfg, run, proc_root) + _action_log(cfg) + _data_format(cfg)
             + _profile_mismatch(cfg, run, rows_fn)
             + _dispatch_store(cfg, run, now, rows_fn, alive, start_of)

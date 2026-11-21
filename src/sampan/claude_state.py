@@ -20,6 +20,7 @@ class LiveClaude:
     cwd: str
     status: str
     pane_id: object  # str | None
+    version: str = ""  # the Claude Code version this process runs ("" when the file has none)
 
 
 def _session_files(profile):
@@ -50,7 +51,7 @@ def read_session_files(profiles, alive):
                 continue
             m = PANE_RE.search(str(j.get("tmux") or ""))
             live.append(LiveClaude(pid, prof.name, sid, cwd, str(j.get("status") or "unknown"),
-                                   m.group(1) if m else None))
+                                   m.group(1) if m else None, str(j.get("version") or "")))
     return live, warnings
 
 

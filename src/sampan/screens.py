@@ -1,7 +1,7 @@
 """Everything sampan knows about what Claude Code and Codex draw on their screens.
 
 Markers and parsers live here and nowhere else, so a new agent release means editing one file.
-Verified on Claude Code 2.1.287 and codex-cli 0.147.0 (fixtures: tests/fixtures/codex_*.txt, tests/test_prompts.py).
+Verified on the Claude Code versions listed in verified.py and codex-cli 0.147.0 (fixtures: tests/fixtures/codex_*.txt, tests/test_prompts.py).
 
 Codex menus are lines "› N. text" above "Press enter to continue" / "Press enter to confirm or esc to go back".
 Claude's trust prompt is not numbered: the cursor "❯" starts on "No, exit".

@@ -27,6 +27,76 @@ def listed(cfg, profile):
     return {pid: [("user", "1", None)] for pid in cfg.profiles[profile].plugins}
 
 
+class ClaudeVersionTest(unittest.TestCase):
+    """The doctor's line per Claude Code version: from the running sessions' files, else `claude --version`."""
+
+    def setUp(self):
+        self.cfg = make_env(Path(tempfile.mkdtemp()))
+
+    def checks(self, sessions, version_out=None, version_rc=0):
+        from sampan.doctor import _claude_versions
+        from tests.test_claude_state import write_session
+        lines = []
+        for i, (profile, version) in enumerate(sessions):
+            pid = 4000 + i
+            write_session(self.cfg, profile, pid, sid=f"e70d5dbc-0000-4000-8000-{i:012d}", version=version)
+            lines.append(ps_line(pid, 1, "claude", "claude --name x"))
+        r = FakeRunner().on(["ps", "-A"], cp(out="\n".join(lines) + "\n"))
+        if version_out is not None:
+            r.on(["claude", "--version"], cp(out=version_out, rc=version_rc))
+        return _claude_versions(self.cfg, r), r
+
+    def test_verified_versions_are_ok_with_a_count(self):
+        out, _ = self.checks([("alice", "2.1.311"), ("work", "2.1.311"), ("work", "2.1.330")])
+        self.assertEqual([(c.level, c.title) for c in out], [
+            ("ok", "Claude Code 2.1.311（2 個 session 在跑）：sampan 查證過這個版本的畫面"),
+            ("ok", "Claude Code 2.1.330（1 個 session 在跑）：sampan 查證過這個版本的畫面")])
+
+    def test_a_newer_version_warns_and_says_what_it_means(self):
+        out, _ = self.checks([("alice", "2.1.311"), ("work", "2.1.999")])
+        self.assertEqual([c.level for c in out], ["ok", "warn"])
+        self.assertIn("2.1.999（1 個 session 在跑）比 sampan 查證過的版本（最新 2.1.330）新", out[1].title)
+        self.assertIn("不按鍵、不貼", out[1].detail)
+        self.assertIn("sampan update", out[1].detail)
+
+    def test_an_unlisted_older_version_is_only_info(self):
+        out, _ = self.checks([("alice", "2.1.300")])
+        self.assertEqual([c.level for c in out], ["info"])
+
+    def test_an_unreadable_version_is_info_not_an_error(self):
+        out, _ = self.checks([("alice", "2.1.311-beta")])
+        self.assertEqual([c.level for c in out], ["info"])
+        self.assertIn("格式 sampan 不認得", out[0].title)
+
+    def test_sessions_never_run_claude_version(self):
+        _, r = self.checks([("alice", "2.1.311")], version_out="2.1.999 (Claude Code)\n")
+        self.assertEqual(r.called(["claude"]), [])
+
+    def test_without_a_running_session_it_asks_claude(self):
+        out, r = self.checks([], version_out="2.1.330 (Claude Code)\n")
+        self.assertEqual([(c.level, c.title) for c in out],
+                         [("ok", "Claude Code 2.1.330（claude --version）：sampan 查證過這個版本的畫面")])
+        self.assertEqual(len(r.called(["claude", "--version"])), 1)
+
+    def test_a_session_file_without_a_version_falls_back_to_claude_version(self):
+        out, _ = self.checks([("alice", None)], version_out="2.1.340 (Claude Code)\n")
+        self.assertEqual([c.level for c in out], ["warn"])
+
+    def test_nothing_is_reported_when_the_version_cannot_be_read(self):
+        for kw in ({"version_out": "", "version_rc": 127}, {"version_out": "garbage\n"}, {"version_out": "x", "version_rc": 1}):
+            out, _ = self.checks([], **kw)
+            self.assertEqual(out, [], kw)
+        out, _ = self.checks([])  # claude --version is not even answered
+        self.assertEqual(out, [])
+
+    def test_run_checks_includes_it(self):
+        from sampan.doctor import run_checks
+        r = FakeRunner().on(["claude", "--version"], cp(out="2.1.311 (Claude Code)\n"))
+        out = run_checks(self.cfg, r, now=NOW, uid=os.getuid(), sampan_path=SAMPAN, which=lambda n: f"/bin/{n}",
+                         env={"PATH": "/usr/bin"}, platform="linux", current="0.22.0", latest_fn=lambda: "0.22.0")
+        self.assertTrue(any(c.title.startswith("Claude Code 2.1.311") for c in out))
+
+
 class DoctorTest(unittest.TestCase):
     def setUp(self):
         self.cfg = make_env(Path(tempfile.mkdtemp()))
