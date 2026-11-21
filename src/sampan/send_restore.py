@@ -51,6 +51,7 @@ FAIL_DIED = "接回後 {name} 的 agent 又結束了；sampan status 看過後�
 FAIL_STATE = "接回後 {name} 的狀態是「{state}」，不送；sampan status 看過後用 resend 重送"
 FAIL_RETIRED = "對方 {name} 已是 retired，不接回；要的話先 sampan activate {name}，再用 resend 重送"
 FAIL_AGAIN = "接回 {n} 次，{name} 還是起不來又停了；到 tmux attach -t {name} 看過，再用 resend 重送"
+FAIL_PROFILE_LOST = "{name} 已在執行（{profile}），沒換成 {want}；要換用 sampan switch {name} {want}，再用 resend 重送"
 FAIL_START = "接回失敗：{why}"
 # queued reasons that clear by themselves or end in a failure of their own: the 30-minute queue limit does not apply
 WAIT_PREFIXES = ("對方已停止，等接回", "對方已停止，接回中", "對方接回中", "排隊等接回", "對方已接回")

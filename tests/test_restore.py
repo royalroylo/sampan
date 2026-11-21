@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 from sampan.registry import Row, write_rows
 from sampan.restore import Candidate, candidates, cmd_restore, start_one
@@ -920,6 +921,45 @@ class StartOneTest(Base):
         self.assertEqual(r.called(["tmux", "-u", "new-session"]), [])
         from sampan.registry import load_rows
         self.assertEqual(load_rows(self.cfg.registry_path)[0].profile, "alice")
+
+    def test_a_row_on_a_profile_missing_from_the_config_is_refused_plainly(self):
+        self.registry([Row("x", "claude", "gone-profile", A, str(self.cwd))])
+        why = self.start(self.runner(), "x", profile="work")
+        self.assertEqual(why, "profile gone-profile 不在設定檔，不換")
+        self.assertEqual(self.keys(), [])
+
+    def test_an_agent_that_started_meanwhile_on_the_old_profile_is_reported_not_switched(self):
+        self.transcript(A)
+        self.registry([Row("x", "claude", "alice", A, str(self.cwd))])
+        self.panes = [pane_line("x", "%7", 4242, "claude", str(self.cwd))]
+        self.procs = [ps_line(4242, 1, "claude", "claude")]
+        why = self.start(self.runner(), "x", profile="work")
+        self.assertIn("已在執行（alice），沒換成 work", why)
+        self.assertEqual(self.keys(), [])
+
+    def test_the_switch_is_not_done_when_the_session_starts_between_the_looks(self):
+        # rehome_stopped looks once before the lock and once inside it: a session that appears in between stops it
+        from sampan import session_run
+        from sampan.registry import load_rows
+        self.transcript(A)
+        self.registry([Row("x", "claude", "alice", A, str(self.cwd))])
+        row = load_rows(self.cfg.registry_path)[0]
+        calls = []
+        from sampan.restore import _observe as real
+
+        def appears(cfg, run):
+            calls.append(1)
+            live = real(cfg, run)
+            if len(calls) > 1:
+                live.running.add("x")
+            return live
+        out = []
+        with mock.patch("sampan.restore._observe", appears):
+            rc = session_run.rehome_stopped(self.cfg, self.runner(), out.append, "x", row, "work")
+        self.assertEqual(rc, 1)
+        self.assertIn("剛剛有人把它開起來了", "\n".join(out))
+        self.assertEqual(load_rows(self.cfg.registry_path)[0].profile, "alice")
+        self.assertTrue(list(self.cfg.profiles["alice"].projects_dir.rglob(f"{A}.jsonl")))
 
     def test_the_same_profile_is_a_plain_reattach(self):
         self.transcript(A)

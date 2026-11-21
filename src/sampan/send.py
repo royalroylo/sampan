@@ -264,12 +264,12 @@ def profile_problem(cfg, row, to, profile):
     (the caller checks that); a target that is already on that profile needs no change (also None)."""
     if profile not in cfg.profiles:
         return send_restore.PROFILE_UNKNOWN.format(profile=profile, known="、".join(cfg.profiles))
-    if cfg.profiles[profile].disabled:
-        return send_restore.PROFILE_DISABLED.format(profile=profile)
     if row.agent != "claude":
         return send_restore.PROFILE_AGENT.format(name=to, agent=row.agent)
     if row.profile == profile:
         return None
+    if cfg.profiles[profile].disabled:
+        return send_restore.PROFILE_DISABLED.format(profile=profile)
     if row.state == State.RUNNING:
         return send_restore.PROFILE_RUNNING.format(name=to, profile=profile)
     return None
@@ -281,12 +281,15 @@ def _restore_profile(row, profile):
 
 
 def _profile_conflict(items, row, name, profile):
-    """A queued restore dispatch of the same target that wants another profile (reattaching has one profile), or None."""
+    """A queued restore dispatch of the same target that wants another profile (reattaching has one profile), or None.
+    Profiles are compared as what each would end up on: the one a dispatch asked for, else the one the target had when
+    it was sent; ours, else the one it has now (one that already switched the row to B does not clash with a plain one)."""
+    mine = profile or row.profile
     for x in items:
         if x.state == "queued" and x.extra.get(send_restore.RESTORE) and _for_target(x, row):
-            other = x.extra.get(send_restore.PROFILE, "")
-            if other != profile:
-                return send_restore.PROFILE_CONFLICT.format(name=name, other=other or row.profile, mine=profile or row.profile)
+            other = x.extra.get(send_restore.PROFILE) or x.to_profile
+            if other != mine:
+                return send_restore.PROFILE_CONFLICT.format(name=name, other=other, mine=mine)
     return None
 
 
@@ -741,6 +744,13 @@ def _restoring(cfg, d, row, now, save, items, work):
             _finish(x, "failed", now, why)
         _log(cfg, "send", f"派工 {'、'.join(x.id for x in group)}：{why}")
         return True
+    want = next((x.extra[send_restore.PROFILE] for x in group if x.extra.get(send_restore.PROFILE)), "")
+    if want and row.state == State.RUNNING and row.profile != want:  # started by someone else meanwhile: the switch is lost
+        why = send_restore.FAIL_PROFILE_LOST.format(name=row.name, profile=row.profile, want=want)
+        for x in group:
+            _finish(x, "failed", now, why)
+        _log(cfg, "send", f"派工 {'、'.join(x.id for x in group)}：{why}")
+        return True
     first = next((x for x in group if x.extra.get(send_restore.PHASE)), None)
     phase = first.extra[send_restore.PHASE] if first else ""
     if phase == send_restore.READY_PHASE and row.state == State.STOPPED:
@@ -784,6 +794,8 @@ def _restoring(cfg, d, row, now, save, items, work):
         _set_phase(group, send_restore.RC, now, send_restore.REASON_RC)
     save()  # the claim is on record before anything is pressed: a second look never starts the same thing again
     profile = next((x.extra[send_restore.PROFILE] for x in group if x.extra.get(send_restore.PROFILE)), "")
+    if step.kind == "launch" and n:  # a second launch (up, down again): the row may have been moved by hand since
+        profile = ""
     work.append((step.kind, row.name, row.id, [x.id for x in group], profile))
     _log(cfg, "send", f"派工 {'、'.join(x.id for x in group)}：{send_restore.REASON_RESTORING if step.kind == 'launch' else send_restore.REASON_RC}（{row.name}）")
     return True

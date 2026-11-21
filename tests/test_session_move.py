@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from sampan import actionlog
 from sampan.registry import Row, load_rows, write_rows
@@ -772,6 +773,15 @@ class SwitchTest(MoveFixture):
         self.assertFalse(self.old_transcript().exists())
         self.assertEqual(self.keys, [])
         self.assertIn("沒有啟動", self.msgs[-1])
+
+    def test_a_registry_write_that_fails_puts_the_transcript_back(self):
+        with mock.patch("sampan.session_run.write_rows", side_effect=OSError("disk full")):
+            rc = self.stopped_switch(no_launch=True)
+        self.assertEqual(rc, 1)
+        self.assertIn("登記表寫不進去", self.msgs[-1])
+        self.assertTrue(self.old_transcript().exists())
+        self.assertFalse(self.new_transcript().exists())
+        self.assertEqual(self.row().profile, "alice")
 
     def test_no_launch_dry_run_says_it_would_not_start_and_changes_nothing(self):
         self.assertEqual(self.stopped_switch(no_launch=True, dry_run=True), 0)

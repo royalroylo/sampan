@@ -314,8 +314,12 @@ def start_one(cfg, run, name, *, sleep, out=lambda _l: None, alive=os.kill, targ
     except TmuxUnreadable as e:
         return f"{e}；不知道 {name} 是否已在執行，沒有開"
     if name in live.running:
+        if profile and profile != row.profile:  # somebody started it meanwhile: it runs as it is, so the switch is lost
+            return f"{name} 已在執行（{row.profile}），沒換成 {profile}；要換用 sampan switch {name} {profile}"
         return None
     if profile and profile != row.profile:
+        if profile not in cfg.profiles or row.profile not in cfg.profiles:
+            return f"profile {profile if profile not in cfg.profiles else row.profile} 不在設定檔，不換"
         from . import session_run
         said = []
         rc = session_run.rehome_stopped(cfg, run, said.append, name, row, profile)

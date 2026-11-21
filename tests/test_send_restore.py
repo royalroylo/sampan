@@ -481,6 +481,41 @@ class RestoreProfileTest(RestoreBase):
         self.assertIn("已有一則排隊中的接回派工要用「work」，這則要用「alice」", clash)
         self.assertIsNotNone(self.restore_submit(profile="work"))  # the same one is fine
 
+    def test_a_dispatch_after_one_that_already_switched_the_row_does_not_clash(self):
+        first = self.restore_submit(profile="work")
+        self.advance(FakeRunner(strict=True), first.id)  # launched: the registry row (and so the status row) is on work now
+        self.set_row("b", profile="work")
+        plain = self.submit(restore=True)
+        self.assertNotIsInstance(plain, str, plain)
+        again = self.submit(restore=True, profile="work")
+        self.assertNotIsInstance(again, str, again)
+        self.assertIsInstance(self.submit(restore=True, profile="alice"), str)  # a third profile does clash
+
+    def test_the_second_launch_does_not_switch_again(self):
+        d = self.restore_submit(profile="work")
+        self.advance(FakeRunner(strict=True), d.id)
+        self.assertEqual(self.start.call_args.kwargs["profile"], "work")
+        self.set_row("b", profile="work")  # what the launch did to the registry row
+        self.up()
+        self.advance(tmux_runner(DRAFT), d.id, later(5))  # ready, then it goes down again
+        self.set_row("b", state=State.STOPPED, agent_status="-", pane=None, tmux_alive=False)
+        self.advance(FakeRunner(strict=True), d.id, later(6))
+        self.assertEqual(self.start.call_args.kwargs["profile"], "")
+
+    def test_a_disabled_profile_the_target_is_already_on_is_not_a_problem(self):
+        profiles = {**self.cfg.profiles, "alice": dataclasses.replace(self.cfg.profiles["alice"], disabled=True)}
+        self.cfg = dataclasses.replace(self.cfg, profiles=profiles)
+        self.assertNotIsInstance(self.submit(restore=True, profile="alice"), str)
+
+    def test_a_target_started_by_someone_else_on_the_old_profile_fails_the_dispatch(self):
+        d = self.restore_submit(profile="work")
+        self.up()  # another process restored it first, under alice
+        d = self.advance(tmux_runner(), d.id)
+        self.assertEqual(d.state, "failed")
+        self.assertIn("已在執行（alice），沒換成 work", d.reason)
+        self.assertIn("sampan switch b work", d.reason)
+        self.start.assert_not_called()
+
     def test_a_failed_switch_fails_the_dispatch_with_its_reason_and_launches_nothing_more(self):
         self.start.return_value = "逐字稿搬不過去（唯讀）"
         d = self.advance(FakeRunner(strict=True), self.restore_submit(profile="work").id)

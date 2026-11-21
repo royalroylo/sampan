@@ -929,15 +929,33 @@ def rehome_stopped(cfg, run, out, name, row, profile, *, dry_run=False, launch=T
         if why:
             out(f"❌ {name}：{why}，不動")
             return 1
+        try:  # someone may have started it since the first look (a restore does not take this lock): look once more
+            live = _observe(cfg, run)
+        except TmuxUnreadable as e:
+            out(f"❌ {e}；不動 {name}")
+            return 2
+        if name in live.running or live.by_id.get(row.session_id) is not None:
+            out(f"❌ {name}：剛剛有人把它開起來了，不換（避免兩邊同時寫）")
+            return 1
+        old_profile, moved = row.profile, None
         if carry is not None:
             try:
-                move_transcript(carry, cfg.profiles[profile].projects_dir)
+                moved = move_transcript(carry, cfg.profiles[profile].projects_dir)
             except OSError as e:
                 out(f"❌ {name}：逐字稿搬不過去（{e}），什麼都沒改")
                 return 1
             out(f"  已把逐字稿搬到 {profile}")
         row.profile = profile
-        write_rows(cfg.registry_path, rows, now_iso(), cfg.history_dir, machine=registry_machine(cfg))
+        try:
+            write_rows(cfg.registry_path, rows, now_iso(), cfg.history_dir, machine=registry_machine(cfg))
+        except OSError as e:
+            if moved is not None:  # keep the transcript and the row in step: put the transcript back
+                try:
+                    move_transcript(moved, cfg.profiles[old_profile].projects_dir)
+                except OSError:
+                    pass
+            out(f"❌ {name}：登記表寫不進去（{e}），什麼都沒改")
+            return 1
     return None
 
 
