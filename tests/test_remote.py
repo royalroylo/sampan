@@ -135,6 +135,26 @@ class SendTest(Setup):
         self.assertEqual(self.a.store.outbox_pending(), [])
 
 
+class SubmitRoutingTest(Setup):
+    def test_send_submit_routes_machine_slash_session_to_the_hub_path(self):
+        from sampan import send
+        d = send.submit(self.a.cfg, None, CALLER, "desktop/proj-a", "via the cli path", notify=False, now=self.clock(),
+                        status_fn=lambda cfg, run, **kw: self.a.rows)
+        self.assertEqual((d.to_name, remote.info(d)["phase"]), ("desktop/proj-a", "outbox"))
+
+    def test_a_local_name_is_never_taken_for_a_remote_one(self):
+        from sampan import send
+        got = send.submit(self.a.cfg, None, CALLER, "nobody", "x", notify=False, now=self.clock(),
+                          status_fn=lambda cfg, run, **kw: self.a.rows)
+        self.assertIn("找不到 session", got)
+
+    def test_a_batch_never_goes_remote(self):
+        from sampan import send
+        got = send.submit(self.a.cfg, None, CALLER, "desktop/proj-a", "x", notify=False, now=self.clock(), batch="b1",
+                          status_fn=lambda cfg, run, **kw: self.a.rows)
+        self.assertIn("找不到 session", got)
+
+
 class FlowTest(Setup):
     def test_the_whole_way_there_and_back(self):
         d = self.send()

@@ -13,6 +13,7 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 
 from . import actionlog, deliver, deliveries, dispatch, doorbell, heartbeat, procs, remote, send_restore, steps, store
+from . import hubproto as hp
 from . import restore as restore_mod
 from .claude_state import Reply, TurnInfo, after_marker, command_reply, find_transcript
 from .claude_state import reply_to as claude_reply_to
@@ -317,6 +318,10 @@ def submit(cfg, run, caller, to, message, *, notify, now, snapshot_fn=None, stat
         row = _rows(cfg, run, snapshot_fn, status_fn).get(to)
     except RegistryError as e:
         return str(e)
+    if row is None and batch is None and hp.parse_target(to) is not None:
+        # `machine/session`: a session on another of the owner's machines (through the hub)
+        return remote.submit_remote(cfg, caller, to, message, notify=notify, now=now, raw=raw, restore=restore,
+                                    profile=profile)
     problem = target_problem(row, to, restore)
     if problem:
         return problem
