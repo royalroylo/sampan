@@ -301,6 +301,27 @@ def _data_format(cfg):
     return [Check("info", title, "降版到 0.16 前先跑 sampan migrate --revert")]
 
 
+def _profile_mismatch(cfg, run, rows_fn):
+    """Sessions whose agent runs under another profile than the registry says. One that has no CLAUDE_CONFIG_DIR runs in
+    ~/.claude: what 0.18.0 and older did to the profile of `default = true` once it was moved away from ~/.claude."""
+    try:
+        rows = rows_fn(cfg, run)
+    except Exception:  # noqa: BLE001  (a doctor check never stops the others)
+        return []
+    home = cfg.home_profile
+    out = []
+    for r in rows:
+        if r.state is not State.PROFILE_MISMATCH:
+            continue
+        registered = r.detail.strip("（）").removeprefix("登記 ")
+        why = ""
+        if home is not None and r.profile == home.name and registered in cfg.profiles and not cfg.profiles[registered].uses_home:
+            why = f"（沒有 CLAUDE_CONFIG_DIR：用的是 ~/.claude，不是 {registered} 自己的目錄）"
+        out.append(Check("warn", f"{r.name}：登記在 {registered}，實際跑在 {r.profile}{why}",
+                         f"sampan restart {r.name} 重開，就會用登記的 {registered} 啟動（要改用 {r.profile} 則 sampan switch {r.name} {r.profile}）"))
+    return out
+
+
 def _dispatch_store(cfg, run, now, rows_fn, alive, start_of):
     """The state dir must not be on a Windows drive (/mnt under WSL); and the registered, running Claude sessions that
     have no valid heartbeat (their sampan MCP is not up for this conversation) are listed."""
@@ -595,6 +616,7 @@ def run_checks(cfg, run, *, now, uid, sampan_path=None, proc_root=PROC_ROOT, whi
     latest_fn = latest_fn or (lambda: update_mod.check(cfg.state_dir, run=run)[0])
     return (_version(current, latest_fn) + _deps(cfg, which, env, platform) + _profile_dirs(cfg) + _owners(cfg, uid) + _plugins(cfg) + _auth(cfg, run) + _two_logins(cfg, run, platform) + _stale(cfg, run)
             + _hooks(cfg) + _statusline(cfg, now) + _codex(cfg) + _codex_daemon(cfg, run, daemon_fn) + _mcp(cfg) + _detach_key(cfg, run) + _tmux_conf(cfg, run) + _multi_agent(cfg, run, proc_root) + _action_log(cfg) + _data_format(cfg)
+            + _profile_mismatch(cfg, run, rows_fn)
             + _dispatch_store(cfg, run, now, rows_fn, alive, start_of)
             + (_launchd(cfg, run, sampan_path) + _save_log(cfg, now) if platform == "darwin" else
                [Check("info", "這台不是 macOS，沒有自動存檔排程（需要時自己跑 sampan save，或用 cron／systemd timer）")]))

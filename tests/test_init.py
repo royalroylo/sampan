@@ -165,6 +165,8 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(cfg.profiles["alice"].label, "alice@example.com")
         self.assertEqual(cfg.marketplaces, {"claude-plugins-official": "anthropics/claude-plugins-official",
                                             "my-plugins": "owner/my-plugins", "gitea": "https://git.example.com/owner/my-plugins.git"})
+        self.assertIn("# default：沒指定 profile 時（sampan new、選單）用哪個", text)  # what `default` means, next to it
+        self.assertLess(text.index("# default："), text.index("default = true"))
         self.assertFalse(cfg.codex.enabled)
         self.assertEqual(cfg.codex.home, home / ".codex")
         self.assertEqual(cfg.recent_days, 7)

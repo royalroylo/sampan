@@ -173,6 +173,38 @@ class DoctorTest(unittest.TestCase):
         self.assertFalse([c for c in doctor._profile_dirs(env_of(HOME_DEFAULT)) if "預設 profile" in c.title])
 
 
+class ProfileMismatchTest(unittest.TestCase):
+    def rows(self, *rows):
+        return lambda cfg, run: list(rows)
+
+    def test_a_session_running_in_home_but_registered_on_a_profile_outside_it_is_warned_about(self):
+        from sampan.status import State
+        from tests.helpers import status_row
+        cfg = env_of(TEAM_DEFAULT)
+        stale = status_row("flow", State.PROFILE_MISMATCH, profile="alice", detail="（登記 work）")
+        fine = status_row("ok", profile="work")
+        got = doctor._profile_mismatch(cfg, None, self.rows(stale, fine))
+        [c] = got
+        self.assertEqual(c.level, "warn")
+        self.assertIn("flow：登記在 work，實際跑在 alice", c.title)
+        self.assertIn("沒有 CLAUDE_CONFIG_DIR", c.title)
+        self.assertIn("sampan restart flow", c.detail)
+
+    def test_other_mismatches_are_warned_about_without_the_home_explanation(self):
+        from sampan.status import State
+        from tests.helpers import status_row
+        cfg = env_of(TEAM_DEFAULT)
+        [c] = doctor._profile_mismatch(cfg, None, self.rows(
+            status_row("x", State.PROFILE_MISMATCH, profile="work", detail="（登記 alice）")))
+        self.assertNotIn("沒有 CLAUDE_CONFIG_DIR", c.title)
+        self.assertIn("sampan switch x work", c.detail)
+
+    def test_an_unreadable_status_is_no_check(self):
+        def boom(cfg, run):
+            raise OSError("no tmux")
+        self.assertEqual(doctor._profile_mismatch(env_of(TEAM_DEFAULT), None, boom), [])
+
+
 class LastBackupTest(unittest.TestCase):
     def test_the_newest_of_any_migration_not_only_0_15(self):
         state = Path(tempfile.mkdtemp())

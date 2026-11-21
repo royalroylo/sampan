@@ -164,6 +164,7 @@ def _profile_section(name, config_dir, default, label, plugins, skipped):
     lines.append(f"[profiles.{_k(name)}]")
     lines.append(f"config_dir = {_s(config_dir)}")
     if default:
+        lines.append("# default：沒指定 profile 時（sampan new、選單）用哪個；要不要設 CLAUDE_CONFIG_DIR 是看 config_dir 是不是 ~/.claude")
         lines.append("default = true")
     lines.append(f"label = {_s(label)}")
     lines.append(f"plugins = {_array(plugins)}")
