@@ -27,6 +27,18 @@ jobs:
       - name: Unit tests
         run: uv run python -m unittest discover -s tests -t .
 
+  hub:
+    # the hub's token checks need the `hub` extra (PyJWT with cryptography); the job above skips those tests
+    name: test hub extra (ubuntu-latest, py3.12)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Unit tests with the hub extra
+        run: uv run --extra hub python -m unittest discover -s tests -t .
+
   lint:
     runs-on: ubuntu-latest
     steps:

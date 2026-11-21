@@ -102,6 +102,35 @@ class MachinesTest(unittest.TestCase):
         self.assertEqual((receipt["phase"], receipt["reason"]), ("rejected", "machine-revoked"))
 
 
+class RevokeSenderTest(unittest.TestCase):
+    def test_what_a_revoked_machine_sent_and_nobody_took_never_arrives(self):
+        hub, clock, _ = hub_with_machines()
+        sent = message(clock, body="from the stolen laptop")
+        hub.send(L, sent)
+        handed = message(clock, body="already handed out")
+        hub.send(L, handed)
+        hub.fetch(D)  # both handed out, not acked
+        hub.revoke("laptop")
+        clock.advance(seconds=hp.VISIBILITY_TIMEOUT)
+        self.assertEqual(hub.fetch(D), [])
+        rows = hub.db.execute("SELECT state, reason, body FROM envelopes WHERE from_machine='id-laptop'").fetchall()
+        self.assertEqual({(r["state"], r["reason"], r["body"]) for r in rows}, {("rejected", "sender-revoked", None)})
+
+    def test_an_envelope_taken_before_the_revoke_stays_taken(self):
+        hub, clock, _ = hub_with_machines()
+        hub.send(L, message(clock))
+        hub.ack(D, [e["id"] for e in hub.fetch(D)], "taken")
+        hub.revoke("laptop")
+        self.assertEqual(hub.db.execute("SELECT state FROM envelopes WHERE from_machine='id-laptop'").fetchone()["state"], "taken")
+
+    def test_fetch_skips_a_sender_that_is_no_longer_active_even_if_a_row_slipped_through(self):
+        hub, clock, _ = hub_with_machines()
+        hub.send(L, message(clock))
+        hub.db.execute("UPDATE machines SET state='revoked' WHERE machine_id='id-laptop'")  # revoked behind the core's back
+        hub.db.commit()
+        self.assertEqual(hub.fetch(D), [])
+
+
 class SendTest(unittest.TestCase):
     def setUp(self):
         self.hub, self.clock, _ = hub_with_machines()
@@ -196,6 +225,15 @@ class SendTest(unittest.TestCase):
         self.assertFalse(hub2.send(L, message(clock2, body="three"))["duplicate"])
         hub3, clock3, _ = hub_with_machines(limits=Limits(mailbox_bytes=10))
         self.assertEqual(code_of(lambda: hub3.send(L, message(clock3, body="x" * 11))), "mailbox-full")
+
+    def test_the_whole_envelope_counts_not_just_the_text(self):
+        hub, clock, _ = hub_with_machines(limits=Limits(mailbox_bytes=1500))
+        big = message(clock, body="x")
+        hub.send(L, big)  # about 600 bytes
+        fat = hp.sign({**hp.new_envelope("message", "id-desktop", "proj-a", "y", now=clock(), thread_id="t" * 200),
+                       "reason": "r" * 200}, {"k1": b"o" * 32}, "k1", "id-laptop")
+        hub.send(L, fat)
+        self.assertEqual(code_of(lambda: hub.send(L, message(clock, body="z"))), "mailbox-full")  # one more would pass on text alone
 
     def test_the_mailbox_frees_up_once_the_target_takes_things(self):
         hub, clock, _ = hub_with_machines(limits=Limits(mailbox_cap=1))

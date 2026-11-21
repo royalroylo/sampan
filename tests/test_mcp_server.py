@@ -1563,3 +1563,80 @@ class RestoreToolTest(Base):
         self.assertEqual([i["state"] for i in tool_json(c.response(2))["items"]], ["queued", "queued"])
         self.assertEqual({d.extra["restore_profile"] for d in self.dispatches()}, {"work"})
 
+
+
+class RemoteToolTest(Base):
+    """send / send_batch / dispatch_result / list_sessions with a session on another of the owner's machines."""
+
+    def setUp(self):
+        super().setUp()
+        from sampan import machine, remote
+        from sampan.connect import write_key
+        self.remote = remote
+        machine.rename(self.cfg.path, "laptop")
+        remote.hub_dir(self.cfg).mkdir(parents=True)
+        write_key(remote.key_path(self.cfg))
+        store = remote.open_store(self.cfg)
+        store.peers_set([{"machine_id": "id-desktop", "name": "desktop",
+                          "sessions": [{"session": "proj-a", "alias": "main", "status": "idle"}]}])
+        store.close()
+
+    def test_send_to_machine_slash_session_queues_a_remote_dispatch(self):
+        c = self.serve(Client([init(1), call(2, "send", {"session": "desktop/proj-a", "message": "do it"})]), confirm=False)
+        body = tool_json(c.response(2))
+        [d] = self.dispatches()
+        self.assertEqual((body["dispatch"], body["state"]), (d.id, "queued"))
+        self.assertEqual(body["remote"]["machine"], "desktop")
+        self.assertEqual(body["remote"]["phase"], "outbox")
+        self.assertEqual(body["reason"], self.remote.PHASES["outbox"])
+        self.assertEqual(self.remote.info(d)["session"], "proj-a")
+
+    def test_dispatch_result_carries_the_remote_phase(self):
+        c = self.serve(Client([init(1), call(2, "send", {"session": "desktop/main", "message": "do it"})]), confirm=False)
+        did = tool_json(c.response(2))["dispatch"]
+        c = self.serve(Client([init(1), call(3, "dispatch_result", {"id": did})]), confirm=False)
+        out = tool_json(c.response(3))
+        self.assertEqual((out["state"], out["to"], out["remote"]["phase"]), ("queued", "desktop/proj-a", "outbox"))
+        self.assertEqual(out["status"], "queued")
+
+    def test_remote_problems_are_tool_errors(self):
+        for args, needle in (({"session": "desktop/secret", "message": "x"}, "沒有發布"),
+                             ({"session": "nas/proj-a", "message": "x"}, "沒有叫"),
+                             ({"session": "desktop/proj-a", "message": "x", "raw": True}, "raw"),
+                             ({"session": "desktop/proj-a", "message": "x", "restore": True}, "restore"),
+                             ({"session": "desktop/proj-a", "message": "x", "restore": True, "profile": "work"}, "restore")):
+            c = self.serve(Client([init(1), call(2, "send", args)]), confirm=False)
+            r = c.response(2)["result"]
+            self.assertTrue(r["isError"], args)
+            self.assertIn(needle, tool_text(c.response(2)))
+        self.assertEqual(self.dispatches(), [])
+
+    def test_a_local_session_with_that_exact_name_wins_over_the_remote_form(self):
+        self.rows["x/y"] = status_row("x/y", sid="sx", pane="%9")
+        self.serve(Client([init(1), call(2, "send", {"session": "x/y", "message": "hi"})]), run=tmux_runner(), confirm=False)
+        [d] = self.dispatches()
+        self.assertEqual((d.to_name, self.remote.info(d)), ("x/y", None))
+
+    def test_send_asks_the_user_like_any_send(self):
+        c = self.serve(Client([init(1, client="other"), call(2, "send", {"session": "desktop/proj-a", "message": "hi"})]))
+        self.assertTrue(c.response(2)["result"]["isError"])
+        self.assertEqual(self.dispatches(), [])  # an unknown client is refused before anything is queued
+
+    def test_send_batch_does_not_take_remote_targets_yet(self):
+        c = self.serve(Client([init(1), call(2, "send_batch", {"sessions": ["b", "desktop/proj-a"], "message": "hi"})]),
+                       run=tmux_runner(), confirm=False)
+        self.assertTrue(c.response(2)["result"]["isError"])
+        self.assertIn("send 一個一個送", tool_text(c.response(2)))
+        self.assertEqual(self.dispatches(), [])
+
+    def test_list_sessions_lists_the_other_machines_only_when_asked(self):
+        c = self.serve(Client([init(1), call(2, "list_sessions", {}), call(3, "list_sessions", {"remote": True})]), confirm=False)
+        self.assertNotIn("remote_machines", tool_json(c.response(2)))
+        got = tool_json(c.response(3))["remote_machines"]
+        self.assertEqual(got, [{"name": "desktop", "machine": "id-desktop",
+                                "sessions": [{"name": "proj-a", "alias": "main", "activity": "idle"}]}])
+
+    def test_the_schema_says_so(self):
+        tools = {t["name"]: t for t in mcp_server.tools_list(True)}
+        self.assertIn("機器/session", tools["send"]["description"])
+        self.assertEqual(tools["list_sessions"]["inputSchema"]["properties"]["remote"]["type"], "boolean")

@@ -276,6 +276,23 @@ class CheckTest(unittest.TestCase):
         peer_unsigned = self.stamped(hp.new_envelope("receipt", "id-desktop", "proj-a", "", now=self.clock(), phase="sent", ref=hp.new_id()))
         self.assertEqual(self.inject(peer_unsigned)["rejected"], 1)  # a peer's receipt has to be signed
 
+    def test_the_hubs_unsigned_receipt_is_limited_to_its_own_phases_about_a_real_envelope(self):
+        for phase, ref in (("sent", hp.new_id()), ("taken", "not-an-id"), ("taken", None)):
+            rec = {**hp.new_envelope("receipt", "id-desktop", "proj-a", "", now=self.clock(), phase="taken", ref=hp.new_id()),
+                   "phase": phase, "ref": ref}
+            self.assertEqual(self.inject(self.stamped(rec, hub=True, sender_machine=None))["rejected"], 1, (phase, ref))
+        self.assertEqual(self.b.receipts, [])
+        for phase in ("rejected", "expired"):
+            rec = hp.new_envelope("receipt", "id-desktop", "proj-a", "", now=self.clock(), phase=phase, ref=hp.new_id())
+            self.assertEqual(self.inject(self.stamped(rec, hub=True, sender_machine=None))["rejected"], 0, phase)
+
+    def test_a_sent_receipt_needs_the_owner_signature_even_with_a_hub_stamp(self):
+        rec = hp.new_envelope("receipt", "id-desktop", "proj-a", "", now=self.clock(), phase="sent", ref=hp.new_id())
+        self.assertEqual(self.inject(self.stamped(rec, hub=True, sender_machine=None))["rejected"], 1)
+        signed = self.a.conn.sign(rec)
+        self.assertEqual(self.inject(self.stamped(signed))["rejected"], 0)
+        self.assertEqual([r["phase"] for r in self.b.receipts], ["sent"])
+
     def test_malformed_input_never_crashes_the_pass(self):
         self.b.transport.extra_poll = [None, "x", {"id": "nope"}, {"id": hp.new_id(), "v": 99}, {"id": hp.new_id(), "v": 1}]
         out = self.b.conn.pull()

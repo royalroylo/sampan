@@ -14,6 +14,7 @@ from . import hubproto as hp
 
 TRANSIENT = ("mailbox-full", "rate-limited", "pending-approval", "superseded", "unauthorized")  # try again later
 SLOW = ("mailbox-full", "rate-limited")  # and not too soon
+HUB_PHASES = ("taken", "rejected", "expired")  # receipts the hub may send without an owner signature
 SLOW_FLOOR = 30
 HELLO_EVERY = 60  # seconds between two hellos (they carry what the machine publishes and its busy/idle)
 KEY_FILE = "owner.key"
@@ -197,7 +198,9 @@ class Connector:
         if now - created > hp.MAX_AGE:
             return "too-old"
         if env.get("kind") == "receipt" and stamp.get("hub") and not env.get("sig"):
-            return None  # the hub's own receipt (taken, rejected, expired): the hub says it, no owner signature
+            # the hub's own receipt: it says it itself, no owner signature; but only these phases, about a real envelope.
+            # `sent` (pasted into the session) is the other machine's word and needs the owner signature.
+            return None if env.get("phase") in HUB_PHASES and hp.is_id(env.get("ref")) else "bad-envelope"
         if env.get("kind") not in hp.KINDS or not stamp.get("sender_machine"):
             return "bad-envelope"
         if not hp.verify(env, self.keys, stamp["sender_machine"]):
@@ -261,13 +264,15 @@ class Connector:
         if self.hello_due() or self.state != "active":
             try:
                 self.hello()
-            except hp.ProtoError:
-                out["state"] = self.state
+            except hp.ProtoError as e:
+                out["state"], out["error"] = self.state, e.message
                 return out
             except TransportError as e:
                 out["error"] = f"hub 連不上：{e}"
                 return out
             out["state"] = self.state
+            if self.state == "active":
+                self._refresh_peers(out)
         if self.state != "active":
             return out
         try:
@@ -280,6 +285,13 @@ class Connector:
                 self._set_state("revoked")
             out["error"] = e.message
         return out
+
+    def _refresh_peers(self, out):
+        """The owner's other machines and what they publish, kept for `machine/session` addressing (with each hello)."""
+        try:
+            self.store.peers_set(self.transport.peers())
+        except (TransportError, hp.ProtoError) as e:
+            out["peers_error"] = str(e)
 
     def maintenance(self):
         """Forget what is old: the ids taken (16 days), finished outbox rows."""

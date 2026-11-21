@@ -18,7 +18,8 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import dispatch, folders, heartbeat, ids, inbox, machine, send, send_restore, session_run
+from . import dispatch, folders, heartbeat, ids, inbox, machine, remote, send, send_restore, session_run
+from . import hubproto as hp
 from .procs import list_procs
 from .prompts import SKIP
 from .registry import RegistryError, load_rows
@@ -53,12 +54,17 @@ def _str(desc):
 TOOLS = [
     {"name": "list_sessions",
      "description": "列出 sampan 登記的 session：名稱、id（完整；其他工具可用名稱或 id 前 8 碼以上指定）、machine（這台機器的 id）、agent、profile、目錄、所在資料夾（folder，\"\" 是最上層）、別名（alias，沒設是 \"\"）、"
-                    "狀態（running 才收得到訊息）、忙／閒（activity）、最後活動。頂層另有 machine（id 與名稱）。唯讀。",
-     "inputSchema": {"type": "object", "properties": {}}},
+                    "狀態（running 才收得到訊息）、忙／閒（activity）、最後活動。頂層另有 machine（id 與名稱）。唯讀。"
+                    "remote=true 時另列你自己其他機器上已發布的 session（remote_machines：機器、session、忙閒；要用「機器/session」寫法 send）。",
+     "inputSchema": {"type": "object", "properties": {
+         "remote": {"type": "boolean", "default": False,
+                    "description": "也列出自己其他機器上已發布的 session（來自 hub，要 sampan connect 在跑）"}}}},
     {"name": "send",
      "description": "傳一則訊息給另一個執行中的 sampan session（對方閒著才送，忙就排隊）。回傳派工編號；"
                     "wait=true 時最多等 60 秒，做完就連回覆一起回。沒等到的，完成或失敗時會在你的 session 送出一則通知，"
-                    "或用 dispatch_result 查。對方已停止時，restore=true 會先接回它再送（預設不接回）。",
+                    "或用 dispatch_result 查。對方已停止時，restore=true 會先接回它再送（預設不接回）。"
+                    "session 也可以寫「機器/session」（例如 laptop/proj-a），送到你自己另一台機器上已發布的 session（經 hub；"
+                    "不支援 restore、profile、raw）。",
      "inputSchema": {"type": "object", "properties": {
          "session": _str("對方的 session 名稱或 id（前 8 碼以上；list_sessions 看）"),
          "message": _str("要送的訊息"),
@@ -500,6 +506,16 @@ class Server:
                              "state": r.state.value, "activity": r.agent_status,
                              "last": r.last.astimezone(timezone.utc).isoformat(timespec="seconds") if r.last else None}
                             for r in rows]}
+        if args.get("remote") is True:
+            try:
+                store = remote.open_store(self.cfg)
+                out["remote_machines"] = [
+                    {"name": p["name"], "machine": p["machine_id"],
+                     "sessions": [{"name": x["session"], "alias": x.get("alias") or "", "activity": x.get("status") or ""}
+                                  for x in p["sessions"]]} for p in store.peers_get()]
+                store.close()
+            except Exception as e:  # noqa: BLE001  the hub's list is optional: say why it is missing
+                warnings.append(f"讀不到遠端機器清單：{e}")
         warning = "；".join(w for w in warnings if w)
         if warning:
             out["warning"] = warning
@@ -546,6 +562,8 @@ class Server:
         if session_run.has_control(to):
             raise ToolError(f"session 名稱不能含換行或控制字元：{to!r}")
         status = self._rows()
+        if not any(r.name == to for r in status) and hp.parse_target(to) is not None:
+            return self._send_remote(to, message, wait, raw, restore, profile)
         if not any(r.name == to for r in status):
             to = _resolve_ref(status, to)  # an id (prefix) names the session; the name goes on from here
         caller = self._refresh_caller()
@@ -573,11 +591,33 @@ class Server:
             raise ToolError(f"派工 {d.id} 失敗：{d.reason}")
         return out
 
+    def _send_remote(self, to, message, wait, raw, restore, profile):
+        """send to a session on another of the owner's machines (through the hub): same answer as a local send."""
+        caller = self._refresh_caller()
+        d = remote.submit_remote(self.cfg, caller, to, message, notify=not wait, now=self.now_fn(), raw=raw,
+                                 restore=restore, profile=profile)
+        if isinstance(d, str):
+            raise ToolError(d)
+        self.mine.add(d.id)
+        d = self._wait(d.id, WAIT_MAX_S if wait else 0)
+        out = {"dispatch": d.id, "state": d.state, "remote": remote.summary(d)}
+        if d.state == "done":
+            out["reply"] = d.reply or ""
+        elif d.reason:
+            out["reason"] = d.reason
+        if wait and d.state not in dispatch.FINISHED and caller.name is not None:
+            send.set_notify(self.cfg, d.id, True)
+        if d.state == "failed":
+            raise ToolError(f"派工 {d.id} 失敗：{d.reason}")
+        return out
+
     def tool_send_batch(self, args):
         names, message = args.get("sessions"), _arg_str(args, "message")
         if not isinstance(names, list) or not names or not all(isinstance(n, str) and n for n in names):
             raise ToolError("參數 sessions 要是 session 名稱的清單（至少一個）")
         status = self._rows()
+        if any(not any(r.name == n for r in status) and hp.parse_target(n) is not None for n in names):
+            raise ToolError("send_batch 還不能送到別台機器的 session：遠端的請用 send 一個一個送")
         names = [n if any(r.name == n for r in status) or session_run.has_control(n) else _resolve_ref(status, n)
                  for n in names]
         twice = sorted({n for n in names if names.count(n) > 1})
@@ -692,6 +732,8 @@ class Server:
         out["deliveries"] = h["deliveries"]
         out["last_ring"] = h["ring"]
         out["merged_with"] = h["deliveries"][-1]["with"] if h["deliveries"] else []
+        if (rem := remote.summary(d)) is not None:
+            out["remote"] = rem
         return out
 
     def tool_cancel_dispatch(self, args):

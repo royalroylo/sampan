@@ -31,6 +31,8 @@ RECEIPT_PHASES = ("taken", "sent", "rejected", "expired")  # taken, rejected, ex
 MAX_BODY = 8_000  # characters of one message (the existing batching limit)
 MAX_REQUEST = 64 * 1024  # bytes of one request body
 MAX_FROM_SESSION = 100
+MAX_FIELD = 200  # characters of any other free-text field of an envelope (names, reason, thread id)
+MAX_ENVELOPE = 20_000  # bytes of one whole envelope (the text is at most 8,000 characters)
 POLL_BATCH = 20
 POLL_WAIT = 30  # seconds a poll waits for something before answering "nothing"
 VISIBILITY_TIMEOUT = 60  # seconds before an envelope that was handed out and not acked is handed out again
@@ -201,6 +203,14 @@ def new_envelope(kind, to_machine, to_session, body, *, now, expires_in=EXPIRY_S
     return env
 
 
+def envelope_size(env):
+    """Bytes of the envelope as it would be sent: what counts against the mailbox and the daily quota."""
+    try:
+        return len(json.dumps(env, ensure_ascii=False).encode("utf-8"))
+    except (TypeError, ValueError):
+        return MAX_ENVELOPE + 1
+
+
 def client_fields(env):
     """env with only the fields a client may set: its own `stamp` or `from` never reach the hub's logic."""
     return {k: env[k] for k in CLIENT_FIELDS if k in env}
@@ -240,6 +250,19 @@ def check_envelope(env, *, now, max_body=MAX_BODY):
         return ProtoError("bad-envelope", "receipt 要有 phase")
     if kind in ("reply", "receipt") and not is_id(env.get("in_reply_to") if kind == "reply" else env.get("ref")):
         return ProtoError("bad-envelope", "reply／receipt 要指向原信封")
+    for field in ("thread_id", "in_reply_to", "reason", "status", "phase", "ref"):
+        value = env.get(field)
+        if value is not None and (not isinstance(value, str) or len(value) > MAX_FIELD):
+            return ProtoError("bad-envelope", f"{field} 不合規")
+    for field in ("machine", "session"):
+        if len(to[field]) > MAX_FIELD:
+            return ProtoError("bad-envelope", f"to.{field} 太長")
+    sig = env.get("sig")
+    if sig is not None and (not isinstance(sig, dict) or len(sig) > 4
+                            or not all(isinstance(k, str) and isinstance(v, str) and len(v) <= 100 for k, v in sig.items())):
+        return ProtoError("bad-envelope", "sig 不合規")
+    if envelope_size(env) > MAX_ENVELOPE:
+        return ProtoError("too-large", "整個信封太大")
     fs = env.get("from_session", "")
     if not isinstance(fs, str) or len(fs) > MAX_FROM_SESSION or any(ord(c) < 32 for c in fs):
         return ProtoError("bad-envelope", "from_session 不合規")

@@ -86,6 +86,7 @@ The full key reference, the commands and the rules for restore are in the [usage
 - [Install](docs/en/install.md)
 - [Usage](docs/en/usage.md)
 - [SSH and tmux setup](docs/en/setup.md)
+- [The hub: messages between your own machines](docs/en/hub.md)
 - [Configuration and registry formats](docs/en/reference.md)
 - [Platforms and limits](docs/en/platforms.md)
 - [SECURITY.md](SECURITY.md)

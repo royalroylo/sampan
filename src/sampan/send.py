@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 
-from . import actionlog, deliver, deliveries, dispatch, doorbell, heartbeat, procs, send_restore, steps, store
+from . import actionlog, deliver, deliveries, dispatch, doorbell, heartbeat, procs, remote, send_restore, steps, store
 from . import restore as restore_mod
 from .claude_state import Reply, TurnInfo, after_marker, command_reply, find_transcript
 from .claude_state import reply_to as claude_reply_to
@@ -562,7 +562,9 @@ def advance(cfg, run, did, *, sleep, snapshot_fn=None, status_fn=None, now=None,
             dispatch.checkpoint(cfg.state_dir, items)
         # deliveries, rings and the notice's reply parts are read and written through items.conn
         with dispatch._sqlite_errors(cfg.state_dir):
-            if d.state == "queued":
+            if remote.is_outgoing(d):
+                remote.advance_out(cfg, d, now)  # another machine's session: the hub's receipts move it, not this
+            elif d.state == "queued":
                 _deliver(cfg, run, d, _row_of(rows(), d.to_id, d.to_name), sleep, now, save, items, work)
                 _expire(cfg, d, now)
             elif d.state == "sent":
@@ -1385,13 +1387,18 @@ def cancel(cfg, did, *, now=None, wait_s=None):
             if refusal:
                 return refusal
             was, rung = d.state, d.status == "rung"
+            if remote.is_outgoing(d):
+                remote.cancel(cfg, d)  # withdraws it from the outbox (or has `sampan connect` ask the hub)
             _finish(d, "cancelled", now or _utcnow(), "已取消" if was == "queued" else REASON_CANCELLED)
             d.status = "cancelled"
             with dispatch._sqlite_errors(cfg.state_dir):
-                if rung:
-                    doorbell.drop_from_ring(items.conn, d.to_id or d.to_name, d.id)
-                if was == "sent":
-                    _leave_deliveries(items, d, now or _utcnow())
+                if remote.info(d) is not None:
+                    pass  # no ring, no delivery here: the message is on another machine
+                else:
+                    if rung:
+                        doorbell.drop_from_ring(items.conn, d.to_id or d.to_name, d.id)
+                    if was == "sent":
+                        _leave_deliveries(items, d, now or _utcnow())
             result = replace(d)
     except (dispatch.DispatchError, OSError) as e:
         return str(e)
@@ -1423,6 +1430,8 @@ def cancel_done_text(d):
 
 def resend_refusal(d):
     """Why dispatch d cannot be resent, or None (failed, cancelled, or done and to be asked again)."""
+    if remote.is_outgoing(d):
+        return remote.RESEND_REFUSAL
     if d.state in RESENDABLE:
         return None
     return f"派工 {d.id} 是「{STATE_LABELS[d.state]}」，只能重送失敗、已取消或已回覆的"

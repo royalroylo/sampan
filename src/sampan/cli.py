@@ -58,6 +58,22 @@ def build_parser():
     rc.add_argument("--profile", help="登記在這個 profile 的 session")
     rc.add_argument("--dry-run", action="store_true", help="只列出會校正與略過的，不按任何鍵")
     rc.add_argument("--yes", action="store_true", help="--all／--profile 時不問確認")
+    cn = sub.add_parser("connect", help="這台機器連 hub，跟自己其他機器的 session 互傳訊息（常駐；也有 keygen、status）")
+    cn.add_argument("action", nargs="?", choices=("keygen", "status"), help="keygen：建立 owner key；status：看這台機器的 hub 狀態；不給＝連 hub 常駐")
+    cn.add_argument("--once", action="store_true", help="只做一輪（除錯用）")
+    hb = sub.add_parser("hub", help="hub：這台機器發布 session（publish）、看對方（peers）；hub 主機上 serve、machines、approve、revoke")
+    hb.add_argument("action", choices=("publish", "unpublish", "peers", "status", "serve", "machines", "approve", "revoke", "audit"))
+    hb.add_argument("name", nargs="?", help="session 名稱（publish、unpublish）或機器名稱（approve、revoke）")
+    hb.add_argument("--as", dest="alias", default="", help="publish：用這個別名被找到（避免專案名稱上 hub）")
+    hb.add_argument("--db", help="hub 資料庫（hub 主機上的指令；預設 ~/.local/state/sampan-hub/hub.db）")
+    hb.add_argument("--code", help="approve：那台機器 sampan connect 印的驗證碼（給了才核准）")
+    hb.add_argument("--listen", help="serve：位址，只能是本機（預設 127.0.0.1:8787）")
+    hb.add_argument("--dev", action="store_true", help="serve：用測試用 token（只給開發）")
+    hb.add_argument("--issuer")
+    hb.add_argument("--audience")
+    hb.add_argument("--jwks-url", dest="jwks_url")
+    hb.add_argument("--limit", type=int, default=50, help="audit：最近幾筆")
+    hb.add_argument("--host", action="store_true", help="status：看 hub 主機的資料庫，不是這台機器的連線狀態")
     rn = sub.add_parser("rename", help="改 session 名稱（tmux 與登記表一起改，agent 照常執行）")
     rn.add_argument("name")
     rn.add_argument("new")
@@ -510,6 +526,41 @@ def _cmd_rc(cfg, run, args):
     return max(rc.cmd_rc(cfg, run, out, plan, own_pane=own), 2 if missing else 0)
 
 
+def _cmd_hub(cfg, run, args):
+    """sampan connect / sampan hub: reading commands run for anyone; the ones that change something (keys, publishing, the
+    daemon, approving or revoking a machine, serving) are refused to an agent while [mcp] confirm is on."""
+    import os
+
+    from . import hubcmd
+    from .send import command_caller
+    if args.cmd == "connect":
+        acting = args.action != "status"
+    else:
+        acting = args.action in ("publish", "unpublish", "serve", "approve", "revoke")
+    if acting and cfg.mcp_confirm and _agent_refused(cfg, command_caller(cfg, run, os.getpid()), out):
+        return 2
+    if args.cmd == "connect":
+        if args.action == "keygen":
+            return hubcmd.cmd_keygen(cfg, out)
+        if args.action == "status":
+            return hubcmd.cmd_status(cfg, out)
+        return hubcmd.cmd_connect(cfg, run, out, once=args.once)
+    action = args.action
+    if action in ("publish", "unpublish", "approve", "revoke") and not args.name:
+        out(f"❌ sampan hub {action} 要給名稱")
+        return 2
+    if action == "publish":
+        return hubcmd.cmd_publish(cfg, out, args.name, args.alias)
+    if action == "unpublish":
+        return hubcmd.cmd_unpublish(cfg, out, args.name)
+    if action == "peers":
+        return hubcmd.cmd_peers(cfg, out)
+    if action == "status":
+        return hubcmd.cmd_hub_status(args, out) if args.host else hubcmd.cmd_status(cfg, out)
+    return {"serve": hubcmd.cmd_serve, "machines": hubcmd.cmd_machines, "approve": hubcmd.cmd_approve,
+            "revoke": hubcmd.cmd_revoke, "audit": hubcmd.cmd_audit}[action](args, out)
+
+
 def _agent_refused(cfg, caller, out):
     """While [mcp] confirm is on, an agent (not a person at the terminal) may not run an acting command through its
     shell: print why and return True. caller None = not looked up (confirm off)."""
@@ -794,6 +845,8 @@ def _dispatch(cfg, args):
         return restart.cmd_restart(cfg, run, out, input, plan, own_pane=own, on_prompt=on_prompt)
     if cmd == "rc":
         return _cmd_rc(cfg, run, args)
+    if cmd in ("connect", "hub"):
+        return _cmd_hub(cfg, run, args)
     if cmd == "model":
         from . import session_run
         from .send import command_caller

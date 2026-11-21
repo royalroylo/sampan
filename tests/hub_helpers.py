@@ -101,3 +101,62 @@ class LocalTransport:
 
     def peers(self):
         return self._go("peers", lambda: self.hub.peers(self.who))
+
+
+class StubIdp:
+    """A stand-in for the identity provider's token endpoint (OAuth client credentials), on a loopback port. Hands out
+    `stub.<client>.<sub>` tokens (what hub.auth.StubVerifier accepts) and records how it was called."""
+
+    def __init__(self, clients, expires_in=300):
+        import json
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        self.clients, self.expires_in, self.requests, self.mode = dict(clients), expires_in, [], "ok"
+        idp = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                from urllib.parse import parse_qs
+                form = parse_qs(self.rfile.read(int(self.headers.get("Content-Length") or 0)).decode())
+                idp.requests.append({"ua": self.headers.get("User-Agent"), "headers": dict(self.headers.items()),
+                                     "client": (form.get("client_id") or [""])[0]})
+                if idp.mode == "redirect":
+                    self.send_response(302)
+                    self.send_header("Location", "https://login.example.com/")
+                    self.end_headers()
+                    return
+                if idp.mode == "html":
+                    body = b"<html>Sign in</html>"
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                client, secret = (form.get("client_id") or [""])[0], (form.get("client_secret") or [""])[0]
+                if idp.clients.get(client) != secret:
+                    body = json.dumps({"error": "unauthorized_client"}).encode()
+                    self.send_response(401)
+                else:
+                    body = json.dumps({"access_token": f"stub.{client}.sub-{client}", "expires_in": idp.expires_in,
+                                       "token_type": "Bearer"}).encode()
+                    self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        self.server = HTTPServer(("127.0.0.1", 0), Handler)
+        self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+        self.thread.start()
+
+    @property
+    def url(self):
+        return f"http://127.0.0.1:{self.server.server_address[1]}/token"
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(5)

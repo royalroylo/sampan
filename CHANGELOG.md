@@ -5,6 +5,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **The hub (first phase): messages between your own machines.** `sampan send laptop/proj-a "…"` (and the MCP `send`, `dispatch_result`, `list_sessions` with `remote: true`) reaches a session published on another machine of yours, through a relay that every machine connects to (HTTPS long polling; nothing listens on the machines). Parts: `sampan connect` (the per-machine daemon: standard library only, custom User-Agent, never follows a redirect), `sampan hub serve` (the relay, the new extra `sampan[hub]` for RS256 token checks; it listens on loopback only) and the commands `connect keygen/status`, `hub publish/unpublish/peers/status`, and on the hub host `hub machines/approve/revoke/audit`. Envelopes have a unique id, are signed with HMAC-SHA256 under an owner key every one of your machines holds (put there by hand, never through the hub), are delivered at least once (outbox retries with backoff, the hub answers a repeated id the same, the receiver drops repeats), expire after 7 days undelivered (the text is deleted at once) and keep the text 14 days after delivery. A new machine is pending until the owner approves it on the hub host (comparing a verification code); a revoked machine is refused at once and what it had queued never arrives. Nothing is visible to other machines until `sampan hub publish`. `restore`, `profile` and `raw` for a remote target, `resend` of a remote dispatch and a remote target in `send_batch` are not supported yet. The hub sees the text of messages (it is a relay); see docs/hub.md.
+
 ## [0.23.0] - 2026-11-21
 
 Upgrading: nothing to restart. The next reattach or `sampan rc` renames in place.

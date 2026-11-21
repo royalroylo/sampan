@@ -29,7 +29,7 @@ CREATE TABLE envelopes (
     from_machine TEXT, from_name TEXT, from_sub TEXT, from_session TEXT, owner TEXT,
     to_machine TEXT NOT NULL, to_session TEXT, thread_id TEXT, in_reply_to TEXT, created TEXT NOT NULL, expires TEXT NOT NULL,
     state TEXT NOT NULL, reason TEXT, attempts INT DEFAULT 0, last_attempt TEXT, taken_at TEXT,
-    body TEXT, body_len INT, body_purge_at TEXT, status TEXT, phase TEXT, ref TEXT, sig TEXT, digest TEXT, stamped_at TEXT, hub INT DEFAULT 0
+    body TEXT, body_len INT, size INT DEFAULT 0, body_purge_at TEXT, status TEXT, phase TEXT, ref TEXT, sig TEXT, digest TEXT, stamped_at TEXT, hub INT DEFAULT 0
 );
 CREATE INDEX envelopes_to ON envelopes(to_machine, state, seq);
 CREATE INDEX envelopes_from ON envelopes(from_machine, created);
@@ -245,7 +245,7 @@ class HubCore:
                         (m["client_id"], day, 1, size, size))
 
     def _mailbox_full(self, to_machine, size):
-        row = self.db.execute("SELECT COUNT(*) n, COALESCE(SUM(body_len),0) b FROM envelopes WHERE to_machine=? AND state IN ('queued','delivered')",
+        row = self.db.execute("SELECT COUNT(*) n, COALESCE(SUM(size),0) b FROM envelopes WHERE to_machine=? AND state IN ('queued','delivered')",
                               (to_machine,)).fetchone()
         return row["n"] + 1 > self.limits.mailbox_cap or row["b"] + size > self.limits.mailbox_bytes
 
@@ -280,18 +280,18 @@ class HubCore:
                 orig = self.db.execute("SELECT * FROM envelopes WHERE id=?", (orig_id,)).fetchone()
                 if orig is None or orig["kind"] != "message" or orig["from_machine"] != to["machine"] or orig["to_machine"] != m["machine_id"]:
                     raise hp.ProtoError("unknown-target", "回覆或回條要指向送給你的訊息")
-            size = len(fields.get("body") or "")
+            size = hp.envelope_size(fields)  # the whole envelope counts, not just the text
             if self._mailbox_full(to["machine"], size):
                 raise hp.ProtoError("mailbox-full")
             self._quota(m, size)
             stamped = self._t(now)
             self.db.execute(
                 "INSERT INTO envelopes(id,kind,from_machine,from_name,from_sub,from_session,owner,to_machine,to_session,thread_id,"
-                "in_reply_to,created,expires,state,body,body_len,status,phase,ref,reason,sig,digest,stamped_at)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "in_reply_to,created,expires,state,body,body_len,size,status,phase,ref,reason,sig,digest,stamped_at)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (fields["id"], fields["kind"], m["machine_id"], m["name"], p.sub, fields.get("from_session") or "", m["owner"],
                  to["machine"], to["session"], fields.get("thread_id"), fields.get("in_reply_to"), fields["created"],
-                 fields["expires"], "queued", fields.get("body") or "", len(fields.get("body") or ""), fields.get("status"),
+                 fields["expires"], "queued", fields.get("body") or "", len(fields.get("body") or ""), size, fields.get("status"),
                  fields.get("phase"), fields.get("ref"), fields.get("reason") or "",
                  json.dumps(fields["sig"]) if isinstance(fields.get("sig"), dict) else None, digest, stamped))
             self.db.commit()
@@ -311,6 +311,7 @@ class HubCore:
             stale = self._t(now - timedelta(seconds=self.limits.visibility_timeout))
             rows = self.db.execute(
                 "SELECT * FROM envelopes WHERE to_machine=? AND expires>? AND (state='queued' OR (state='delivered' AND last_attempt<=?))"
+                " AND (from_machine IS NULL OR from_machine IN (SELECT machine_id FROM machines WHERE state='active'))"  # not from a revoked machine
                 " ORDER BY seq LIMIT ?", (m["machine_id"], self._t(now), stale, min(limit, hp.POLL_BATCH))).fetchall()
             for r in rows:
                 self.db.execute("UPDATE envelopes SET state='delivered', attempts=attempts+1, last_attempt=? WHERE id=?",
@@ -463,6 +464,9 @@ class HubCore:
                 self.db.execute("UPDATE envelopes SET state='rejected', reason='machine-revoked', body=NULL WHERE id=?", (e["id"],))
                 if e["kind"] == "message":
                     self._hub_receipt(e, "rejected", "machine-revoked", now)
+            # what it sent and nobody has taken yet goes too (a stolen machine's queued messages must not arrive later)
+            self.db.execute("UPDATE envelopes SET state='rejected', reason='sender-revoked', body=NULL WHERE from_machine=? AND state IN ('queued','delivered')",
+                            (r["machine_id"],))
             self.audit(actor, "machine-revoked", name)
             self.db.commit()
             self._cond.notify_all()

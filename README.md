@@ -85,6 +85,7 @@ sampan init
 - [安裝](docs/install.md)
 - [使用說明](docs/usage.md)
 - [SSH 與 tmux 設定](docs/setup.md)
+- [hub：自己的幾台機器之間互傳訊息](docs/hub.md)
 - [設定檔與登記表格式](docs/reference.md)
 - [平台與限制](docs/platforms.md)
 - [SECURITY.md](SECURITY.md)

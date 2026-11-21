@@ -127,6 +127,22 @@ class EnvelopeTest(unittest.TestCase):
         self.assertEqual(self.check({**good_receipt, "phase": "read"}), "bad-envelope")
         self.assertEqual(self.check({**good_receipt, "body": "text"}), "bad-envelope")
 
+    def test_free_text_fields_are_bounded(self):
+        for field in ("thread_id", "in_reply_to", "reason"):
+            self.assertEqual(self.check({**msg(), field: "x" * 201}), "bad-envelope", field)
+            self.assertEqual(self.check({**msg(), field: 5}), "bad-envelope", field)
+        self.assertEqual(self.check({**msg(), "to": {"machine": "m" * 201, "session": "s"}}), "bad-envelope")
+        self.assertEqual(self.check({**msg(), "to": {"machine": "m", "session": "s" * 201}}), "bad-envelope")
+        self.assertEqual(self.check({**msg(), "sig": {"kid": "k1", "alg": "HMAC-SHA256", "mac": "x" * 101}}), "bad-envelope")
+        self.assertEqual(self.check({**msg(), "sig": {"a": "1", "b": "2", "c": "3", "d": "4", "e": "5"}}), "bad-envelope")
+        self.assertEqual(self.check({**msg(), "sig": "text"}), "bad-envelope")
+        self.assertIsNone(self.check({**msg(), "thread_id": "x" * 200}))
+
+    def test_a_whole_envelope_has_a_size_limit(self):
+        self.assertLess(hp.envelope_size(msg()), 1000)
+        self.assertGreater(hp.envelope_size(msg(body="é" * 8000)), 8000)  # bytes, not characters
+        self.assertGreater(hp.envelope_size({"x": object()}), hp.MAX_ENVELOPE)
+
     def test_client_fields_drops_stamp_and_from(self):
         env = {**msg(), "stamp": {"sender_machine": "forged"}, "from": "alice", "owner": "self"}
         out = hp.client_fields(env)
