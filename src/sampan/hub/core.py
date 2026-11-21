@@ -59,6 +59,7 @@ class Limits:
     daily_messages: int = hp.DEFAULT_DAILY_MESSAGES
     daily_bytes: int = hp.DEFAULT_DAILY_BYTES
     visibility_timeout: int = hp.VISIBILITY_TIMEOUT
+    max_pending: int = 20  # machines waiting for approval at once: a client the identity provider accepts cannot fill the table
 
 
 class HubCore:
@@ -156,6 +157,8 @@ class HubCore:
             now = self._t()
             m = self._machine(p)
             if m is None:
+                if self.db.execute("SELECT COUNT(*) FROM machines WHERE state='pending'").fetchone()[0] >= self.limits.max_pending:
+                    raise hp.ProtoError("rate-limited", "等核准的機器太多了：先核准或撤銷一些")
                 if self.db.execute("SELECT 1 FROM machines WHERE name=?", (name,)).fetchone():
                     raise hp.ProtoError("name-taken")
                 if self.db.execute("SELECT 1 FROM machines WHERE machine_id=?", (machine_id,)).fetchone():
@@ -238,7 +241,10 @@ class HubCore:
         row = self.db.execute("SELECT count, bytes FROM quota WHERE client_id=? AND day=?", (m["client_id"], day)).fetchone()
         count, used = (row["count"], row["bytes"]) if row else (0, 0)
         if count + 1 > self.limits.daily_messages or used + size > self.limits.daily_bytes:
-            self.audit(m["client_id"], "quota", m["name"], f"{count} messages, {used} bytes today")
+            key = f"quota-audited:{m['client_id']}"
+            if self.meta(key) != day:  # one line a day: the trail is kept a year and must not be fillable by hitting the limit
+                self.audit(m["client_id"], "quota", m["name"], f"{count} messages, {used} bytes today")
+                self.db.execute("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, day))
             self.db.commit()
             raise hp.ProtoError("rate-limited", "今天的額度用完了")
         self.db.execute("INSERT INTO quota VALUES(?,?,?,?) ON CONFLICT(client_id,day) DO UPDATE SET count=count+1, bytes=bytes+?",
@@ -419,11 +425,15 @@ class HubCore:
                                    (cut,)).rowcount
             self.db.execute("DELETE FROM audit WHERE at<=?", (self._t(now - hp.AUDIT_KEEP),))
             self.db.execute("DELETE FROM quota WHERE day<?", ((now - timedelta(days=3)).strftime("%Y-%m-%d"),))
+            self.db.execute("DELETE FROM meta WHERE key LIKE 'quota-audited:%' AND value<?", ((now - timedelta(days=3)).strftime("%Y-%m-%d"),))
             self.db.commit()
             last = hp.parse_time(self.meta("last_vacuum"))
             if last is None or (now - last).days >= VACUUM_EVERY_DAYS:
                 self.db.execute("VACUUM")
                 self.set_meta("last_vacuum", t)
+            # secure_delete blanks the page, but the old text may still sit in the write-ahead log: empty it (last, so
+            # nothing written after it puts anything back)
+            self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             return {"expired": expired, "purged": purged, "deleted": gone}
 
     # ---------- admin (the hub host's own commands) ----------

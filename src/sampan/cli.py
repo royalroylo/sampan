@@ -72,6 +72,7 @@ def build_parser():
     hb.add_argument("--issuer")
     hb.add_argument("--audience")
     hb.add_argument("--jwks-url", dest="jwks_url")
+    hb.add_argument("--client", action="append", help="serve：允許連 hub 的 OAuth client id（每台機器一個，可重複給）")
     hb.add_argument("--limit", type=int, default=50, help="audit：最近幾筆")
     hb.add_argument("--host", action="store_true", help="status：看 hub 主機的資料庫，不是這台機器的連線狀態")
     rn = sub.add_parser("rename", help="改 session 名稱（tmux 與登記表一起改，agent 照常執行）")

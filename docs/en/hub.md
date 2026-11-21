@@ -33,7 +33,7 @@ The hub is a relay: every machine connects to it (HTTPS long polling), so no mac
 
 **The hub host:**
 - Run the hub as its own OS user (directory 0700), not as the user your agents run as, and keep the hub's directory out of Time Machine, syncing and other backups.
-- `sampan hub serve --listen 127.0.0.1:8787 --issuer <issuer> --audience <audience> --jwks-url <jwks>` (`--dev` is for development only and takes test tokens).
+- `sampan hub serve --listen 127.0.0.1:8787 --issuer <issuer> --audience <audience> --jwks-url <jwks> --client sampan-laptop --client sampan-desktop`: **`--client` lists the OAuth clients allowed to connect (one per machine, repeatable)**, so other clients of the same identity provider and audience cannot register machines here. `--dev` is for development only and takes test tokens; **behind a proxy or tunnel it refuses to serve** (it answers 401 to any request carrying `X-Forwarded-For`, `CF-Connecting-IP` and the like).
 - A new machine is **pending** the first time it connects and sends and receives nothing. Its `sampan connect` prints a verification code; on the hub host `sampan hub machines` shows the same code, and only when they match do you `sampan hub approve <name> --code <code>` (`--code` is required; without it nothing is approved).
 - Revoke: `sampan hub revoke <name>` takes effect at once (it does not wait for the token to run out) and drops what waits for that machine; also disable its OAuth client and service token. `sampan hub audit` shows the audit trail (never message text).
 
@@ -49,7 +49,9 @@ The hub is a relay: every machine connects to it (HTTPS long polling), so no mac
 
 - **At least once**: an envelope has a unique id; one the hub has not accepted stays in the outbox and is retried (backoff with jitter, at most every 5 minutes); the hub answers a repeat of an id with the same answer; the receiver tells repeats apart by id, so nothing runs twice.
 - Expiry: what nobody took expires after 7 days (the text is deleted at once); after it was taken the text stays 14 more days; the metadata (who sent what to whom, when, how big) stays 90 days.
-- Limits: 8,000 characters per message, 200 messages or 1 MB per mailbox by default, a daily limit per sender; going over gives a readable reason.
+- Limits: 8,000 characters per message, 200 messages or 1 MB per mailbox by default, a daily limit per sender; going over gives a readable reason. At most 20 machines wait for approval at once.
+- Text rules: a message cannot contain control characters (only newline and tab pass: ESC, `\r`, zero-width and bidi characters, U+2028/2029 are all refused; CRLF is turned into a newline first), because an ESC can end a bracketed paste early so the rest is typed as keys. The sender, the hub and the receiver each check. `expires` may be at most 7 days after `created`.
+- The hub server gives a client 15 seconds to send its request (a long poll is not affected) and serves at most 64 connections at once (503 beyond that).
 - Versions: a client that is too old is refused with a request to update; the signature cannot be downgraded (a hub that says "no signing needed" is ignored).
 - Clocks: `doctor` warns at a 5 minute difference; past 15 minutes messages are refused.
 - There is no read receipt: only `replied` means the other agent answered.

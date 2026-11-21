@@ -47,32 +47,46 @@ class OidcVerifier:
         self._lock = threading.Lock()
 
     def _load(self):
-        """Fetch the key set. Raises when it cannot be had; the caller decides whether the old one still serves."""
+        """Fetch the key set (no lock held: a slow identity provider must not stop requests that can be answered from the
+        keys we have). Returns {kid: key}; raises when it cannot be had."""
         data = self.fetch(self.url)
         keys = {}
         for k in (data or {}).get("keys", []):
-            if isinstance(k, dict) and k.get("kid") and k.get("kty") == "RSA":
+            if isinstance(k, dict) and k.get("kid") and k.get("kty") == "RSA" and k.get("use") != "enc":
                 keys[k["kid"]] = self._PyJWK(k).key
         if not keys:
-            raise ValueError("JWKS 沒有 RSA 公鑰")
-        self._keys, self._fetched = keys, self.clock()
+            raise ValueError("JWKS 沒有 RSA 簽章公鑰")
+        return keys
 
     def _key(self, kid):
         with self._lock:
             now = self.clock()
             stale = now - self._fetched > JWKS_TTL
-            unknown = kid not in self._keys and now - self._attempt >= JWKS_MIN_GAP
-            if stale or unknown or not self._keys:
+            unknown = kid not in self._keys
+            # every fetch, failed or not, waits JWKS_MIN_GAP before the next: a down identity provider is asked every
+            # 30 seconds, not by every request
+            fetch = (stale or unknown or not self._keys) and now - self._attempt >= JWKS_MIN_GAP
+            if fetch:
                 self._attempt = now
-                try:
-                    self._load()
-                except Exception:  # noqa: BLE001  keep serving from the last set for a while
-                    if not self._keys or now - self._fetched > JWKS_STALE:
-                        raise hp.ProtoError("unauthorized", "拿不到公鑰") from None
-            key = self._keys.get(kid)
-            if key is None:
-                raise hp.ProtoError("unauthorized")
-            return key
+            have = dict(self._keys)
+            fetched = self._fetched
+        if fetch:
+            try:
+                keys = self._load()
+            except Exception:  # noqa: BLE001  keep serving from the last set for a while
+                keys = None
+            with self._lock:
+                if keys is not None:
+                    self._keys, self._fetched = keys, now
+                    have = keys
+                elif not have or now - fetched > JWKS_STALE:
+                    raise hp.ProtoError("unauthorized", "拿不到公鑰")
+        elif not have:
+            raise hp.ProtoError("unauthorized", "拿不到公鑰")
+        key = have.get(kid)
+        if key is None:
+            raise hp.ProtoError("unauthorized")
+        return key
 
     def __call__(self, token):
         jwt = self._jwt

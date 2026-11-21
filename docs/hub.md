@@ -33,7 +33,7 @@ hub 是中繼站：每台機器主動連它（HTTPS 長輪詢），機器不用�
 
 **hub 主機：**
 - 建一個專屬的 OS 使用者跑 hub（資料夾 0700），不要和你的 agent 同一個使用者；資料庫與備份排除（hub 資料夾不要進 Time Machine、同步或其他備份）。
-- `sampan hub serve --listen 127.0.0.1:8787 --issuer <issuer> --audience <audience> --jwks-url <jwks>`（`--dev` 只給開發，用測試 token）。
+- `sampan hub serve --listen 127.0.0.1:8787 --issuer <issuer> --audience <audience> --jwks-url <jwks> --client sampan-laptop --client sampan-desktop`：**`--client` 要列出允許連的 OAuth client（每台機器一個，可重複給）**，同一個身分提供者、同一個 audience 的其他 client 不能在這裡登記機器。`--dev` 只給開發，用測試 token，**前面接了代理或 Tunnel 就拒絕服務**（看到 `X-Forwarded-For`、`CF-Connecting-IP` 等 header 就回 401）。
 - 新機器第一次連上是 **pending**，不會收發任何東西。那台機器的 `sampan connect` 會印一組驗證碼；在 hub 主機 `sampan hub machines` 看到同一組，比對相同才 `sampan hub approve <名稱> --code <碼>`（`--code` 一定要給，不給不核准）。
 - 撤銷：`sampan hub revoke <名稱>` 立刻生效（不等 token 過期），並丟掉等它的訊息；也要停用它的 OAuth client 與 service token。`sampan hub audit` 看稽核紀錄（不含訊息內容）。
 
@@ -49,7 +49,9 @@ hub 是中繼站：每台機器主動連它（HTTPS 長輪詢），機器不用�
 
 - **至少送達一次**：信封有唯一 id；沒被 hub 接受就在 outbox 重試（退避加抖動，最久 5 分鐘一次），hub 對同一個 id 的重送回同一個答案；對方以 id 去重，同一則不會做兩次。
 - 過期：沒被取走的 7 天後過期（本文立刻刪）；取走後本文再留 14 天；中繼資料（誰傳給誰、時間、大小）留 90 天。
-- 額度：單則 8,000 字、信箱預設 200 則／1 MB、每人每日上限；超過會回可讀的原因。
+- 額度：單則 8,000 字、信箱預設 200 則／1 MB、每人每日上限；超過會回可讀的原因。等核准的機器最多 20 台。
+- 文字限制：訊息裡不能有控制字元（只放行換行與 Tab：ESC、`\r`、零寬字元、雙向控制字元、U+2028／2029 一律拒收；CRLF 會先轉成換行）——ESC 可以提早結束貼上，讓後面的字被當成按鍵。寄件端、hub、收件端各檢查一次。`expires` 最多比 `created` 晚 7 天。
+- hub 伺服器：讀請求最多 15 秒（長輪詢不受影響）、同時最多 64 個連線（超過回 503）。
 - 版本協商：太舊的客戶端會被 hub 擋下並說要更新；簽章不能被降級（hub 說「不用簽」會被忽略）。
 - 時鐘：兩邊差 5 分鐘以上 `doctor` 會提醒；超過 15 分鐘訊息會被拒。
 - 沒有已讀回報：`replied` 才代表對方的 agent 回了話。

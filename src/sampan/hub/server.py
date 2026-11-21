@@ -5,21 +5,49 @@ http.server on the standard library, one thread per request (a long poll holds i
 (127.0.0.1 behind the tunnel). It never logs a header, a body or a token: a line is the method, the path and the status.
 """
 import json
+import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 from .. import hubproto as hp
 
+REQUEST_TIMEOUT = 15
+MAX_CONNECTIONS = 64
+PROXY_HEADERS = ("CF-Connecting-IP", "X-Forwarded-For", "X-Real-IP", "Forwarded", "CF-Ray", "X-Forwarded-Host")
+
 
 class HubServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, address, core, verifier, *, max_poll_wait=hp.POLL_WAIT, require_ua=True, log=None):
+    def __init__(self, address, core, verifier, *, max_poll_wait=hp.POLL_WAIT, require_ua=True, log=None,
+                 request_timeout=REQUEST_TIMEOUT, max_connections=MAX_CONNECTIONS, reject_proxied=False):
         super().__init__(address, _Handler)
         self.core, self.verifier, self.max_poll_wait = core, verifier, max_poll_wait
         self.require_ua, self.log = require_ua, log or (lambda line: None)
+        self.request_timeout = request_timeout  # seconds a client has to send its request (reading); a long poll waits elsewhere
+        self.reject_proxied = reject_proxied  # --dev: a test-token hub must never sit behind a proxy or tunnel
+        self._slots = threading.BoundedSemaphore(max_connections)
+
+    def process_request(self, request, client_address):
+        """One thread per connection, at most max_connections at once: past that the answer is 503 and the connection
+        closes at once, so idle or slow clients cannot use up the threads."""
+        if not self._slots.acquire(blocking=False):
+            try:
+                request.settimeout(1)
+                request.sendall(b"HTTP/1.0 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        super().process_request(request, client_address)
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
 
     def start(self):
         """Serve in a background thread; the thread (stop() ends it)."""
@@ -45,8 +73,18 @@ class _Handler(BaseHTTPRequestHandler):
     server_version = "sampan-hub"
     sys_version = ""
 
+    def setup(self):
+        self.timeout = self.server.request_timeout  # reads (the request line, headers, body) give up after this
+        super().setup()
+
     def log_message(self, *args):  # the default would print the client address and the request line
         pass
+
+    def handle_one_request(self):
+        try:
+            super().handle_one_request()
+        except (socket.timeout, TimeoutError, ConnectionError):
+            self.close_connection = True  # a client too slow to finish its request
 
     # ---------- plumbing ----------
 
@@ -73,6 +111,8 @@ class _Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             raise hp.ProtoError("bad-request", "Content-Length") from None
+        if length < 0:
+            raise hp.ProtoError("bad-request", "Content-Length 不能是負的")
         if length > hp.MAX_REQUEST:
             raise hp.ProtoError("too-large", "請求本文太大")
         raw = self.rfile.read(length) if length else b""
@@ -94,6 +134,8 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/health" and self.command == "GET":
             return self._send(200, {"ok": True, "proto": hp.PROTO})
         try:
+            if self.server.reject_proxied and any(self.headers.get(h) for h in PROXY_HEADERS):
+                raise hp.ProtoError("unauthorized", "--dev 的 hub（測試 token）不能放在代理或 Tunnel 後面")
             if self.server.require_ua and not (self.headers.get("User-Agent") or "").startswith(hp.USER_AGENT_PREFIX + "/"):
                 raise hp.ProtoError("bad-request", "User-Agent 不是 sampan-connect")
             handler = ROUTES.get((self.command, path))

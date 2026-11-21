@@ -60,6 +60,14 @@ class PublishTest(Case):
         self.assertEqual(hubcmd.cmd_unpublish(self.cfg, self.out(), "proj-a"), 0)
         self.assertEqual(hubcmd.cmd_unpublish(self.cfg, self.out(), "proj-a"), 1)
 
+    def test_publish_refuses_an_alias_that_is_another_sessions_name_or_alias(self):
+        self.assertEqual(hubcmd.cmd_publish(self.cfg, self.out(), "proj-a", "proj-b"), 2)  # proj-b is a session of this machine
+        self.assertIn("另一個 session 的名稱", "".join(self.lines))
+        self.assertEqual(hubcmd.cmd_publish(self.cfg, self.out(), "proj-a", "main"), 0)
+        self.assertEqual(hubcmd.cmd_publish(self.cfg, self.out(), "proj-b", "main"), 2)  # the alias is taken by proj-a
+        self.assertIn("已發布", "".join(self.lines))
+        self.assertEqual(hubcmd.cmd_publish(self.cfg, self.out(), "proj-a", "proj-a"), 0)  # an alias equal to its own name is fine
+
     def test_publish_refuses_unknown_sessions_and_bad_aliases(self):
         self.assertEqual(hubcmd.cmd_publish(self.cfg, self.out(), "ghost"), 2)
         self.assertEqual(hubcmd.cmd_publish(self.cfg, self.out(), "proj-a", "a/b"), 2)
@@ -235,6 +243,12 @@ class HostTest(unittest.TestCase):
         rc, text = self.run_cmd(hubcmd.cmd_machines, db=str(self.path) + ".none")
         self.assertEqual(rc, 2)
         self.assertIn("找不到", text)
+
+    def test_serve_needs_the_list_of_allowed_clients(self):
+        rc, text = self.run_cmd(hubcmd.cmd_serve, listen="127.0.0.1:0", dev=False, issuer="https://idp.example.com", audience="a",
+                                jwks_url="https://idp.example.com/certs", client=None)
+        self.assertEqual(rc, 2)
+        self.assertIn("--client", text)
 
     def test_serve_refuses_a_public_address_and_a_missing_issuer(self):
         args = SimpleNamespace(db=str(self.path), listen="0.0.0.0:8787", dev=True, issuer=None, audience=None, jwks_url=None)

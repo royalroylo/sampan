@@ -99,7 +99,9 @@ def submit_remote(cfg, caller, to, message, *, notify, now, store=None, raw=Fals
         return "遠端不支援 restore／profile：接回與換帳號是對方那台機器的決定"
     if not message.strip():
         return "訊息是空的"
-    text = message.strip()
+    text = hp.clean_newlines(message).strip()
+    if bad := hp.unsafe_char(text):
+        return f"訊息含不能傳到別台機器的控制字元（{bad}）：拿掉再送"
     if len(text) > hp.MAX_BODY:
         return f"訊息太長（{len(text)} 字，上限 {hp.MAX_BODY}）：請分成幾則送"
     own = machine.load_or_create(cfg.path)
@@ -276,13 +278,12 @@ def process_cancels(store, transport):
 
 # ---------- taking what comes (the hooks, inbound side) ----------
 
-def _published_names(store):
-    names = set()
-    for p in store.published():
-        names.add(p["session"])
-        if p["alias"]:
-            names.add(p["alias"])
-    return names
+def _published_entry(store, session):
+    """The published entry (session, alias) that `session` names: by its session name first, then by its alias. Only a
+    published entry can be reached; a name that is only a registered session of this machine is not."""
+    published = store.published()
+    return (next((p for p in published if p["session"] == session), None)
+            or next((p for p in published if p["alias"] and p["alias"] == session), None))
 
 
 OPEN = "inbound_open"  # remote.db state: the dispatches received from other machines that still owe a receipt or a reply
@@ -303,14 +304,16 @@ def make_deliver_local(cfg, run, store, now_fn=_utcnow, status_fn=status_rows):
     envelope id: an envelope that comes again finds its message and does not make another."""
     def deliver_local(env):
         from . import send
-        row = None
         session = env["to"]["session"]
-        if session not in _published_names(store):
+        entry = _published_entry(store, session)
+        if entry is None:
             raise Rejected("這個 session 沒有發布")
-        rows = status_fn(cfg, run)
-        row = next((r for r in rows if r.name == session), None) or next((r for r in rows if r.alias == session), None)
+        for text in (env.get("body"), env.get("from_session")):  # a second gate: nothing with an ESC reaches the paste
+            if isinstance(text, str) and hp.unsafe_char(text):
+                raise Rejected("訊息含不能貼進 session 的控制字元")
+        row = next((r for r in status_fn(cfg, run) if r.name == entry["session"]), None)
         if row is None or row.state != State.RUNNING:
-            raise Rejected(f"{session} 沒在執行")
+            raise Rejected(f"{entry['session']} 沒在執行")
         stamp = env.get("stamp") or {}
         sender = f"{stamp.get('sender_machine_name') or '?'}/{env.get('from_session') or '?'}"
         now = now_fn()

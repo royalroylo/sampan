@@ -197,6 +197,13 @@ class Connector:
             return "expired"
         if now - created > hp.MAX_AGE:
             return "too-old"
+        if created - now > hp.SKEW_REJECT:
+            return "clock-skew"  # from the future: it could be replayed once the ids it was taken under are forgotten
+        if expires - created > hp.EXPIRY_SELF:
+            return "bad-envelope"
+        for text in (env.get("body"), env.get("reason"), env.get("from_session")):
+            if isinstance(text, str) and hp.unsafe_char(text):
+                return "unsafe-characters"  # never reaches a session: an ESC could end a bracketed paste early
         if env.get("kind") == "receipt" and stamp.get("hub") and not env.get("sig"):
             # the hub's own receipt: it says it itself, no owner signature; but only these phases, about a real envelope.
             # `sent` (pasted into the session) is the other machine's word and needs the owner signature.

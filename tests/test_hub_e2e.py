@@ -159,6 +159,28 @@ class E2E(unittest.TestCase):
         self.assertEqual(final.state, "failed")
         self.assertIn("bad-signature", final.reason)
 
+    def test_a_hostile_hub_cannot_slip_a_paste_escape_through(self):
+        # the sender refuses it at the source; here the hub itself is the attacker and rewrites a stored message
+        d = self.submit()
+        self.laptop.tick()
+        self.hub.db.execute("UPDATE envelopes SET body=? WHERE state='queued'", ("x\x1b[201~\rINJECT",))
+        self.hub.db.commit()
+        self.desktop.tick()
+        self.assertEqual([x for x in dispatch.load(self.desktop.cfg.state_dir, ids=()) if remote.info(x)], [])
+        self.assertEqual(ts.tmux_writes(self.desktop.run), [])  # nothing was pasted or typed into the target
+        self.laptop.tick()
+        self.assertEqual(self.laptop.dispatch(d.id).state, "failed")
+
+    def test_a_sender_that_is_itself_compromised_cannot_get_an_escape_through_the_hub(self):
+        env = self.laptop.conn.sign(hp.new_envelope("message", f"{self.desktop.conn.machine_id}", "proj-a", "ok\x1b[201~\rINJECT",
+                                                    now=self.clock()))
+        self.laptop.store.outbox_add(env, "d-evil")
+        out = self.laptop.conn.send_outbox()
+        self.assertEqual(out["failed"], 1)  # the hub refuses it (bad-envelope), never stores it
+        self.assertEqual(self.hub.db.execute("SELECT COUNT(*) FROM envelopes WHERE body LIKE ?", ("%INJECT%",)).fetchone()[0], 0)
+        self.desktop.tick()
+        self.assertEqual(ts.tmux_writes(self.desktop.run), [])
+
     def test_no_wait_dispatch_does_not_notify_a_remote_session_that_does_not_exist(self):
         d = self.submit()
         self.assertFalse(self.laptop.dispatch(d.id).notify)  # the terminal-less caller asked for no notice; nothing to deliver

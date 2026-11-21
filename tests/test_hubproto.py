@@ -138,6 +138,33 @@ class EnvelopeTest(unittest.TestCase):
         self.assertEqual(self.check({**msg(), "sig": "text"}), "bad-envelope")
         self.assertIsNone(self.check({**msg(), "thread_id": "x" * 200}))
 
+    def test_control_and_format_characters_never_pass(self):
+        # an ESC in the text could end a bracketed paste early so the rest is typed as keys (checked with tmux -L)
+        for text in ("a\x1b[201~\rINJECT", "x\ry", "x\x00y", "x\x7fy", "a\u2028b", "a\u2029b", "a\u202eb", "a\u200bb",
+                     "a\ufeffb", "a\u200db", "a\x85b", "a\x9bb"):
+            self.assertEqual(self.check(msg(body=text)), "bad-envelope", repr(text))
+            self.assertIsNotNone(hp.unsafe_char(text), repr(text))
+        for field in ("reason", "thread_id"):
+            self.assertEqual(self.check({**msg(), field: "a\x1bb"}), "bad-envelope", field)
+        self.assertEqual(self.check({**msg(), "from_session": "a\u200bb"}), "bad-envelope")
+        self.assertEqual(self.check({**msg(), "to": {"machine": "m\x1b", "session": "s"}}), "bad-envelope")
+
+    def test_newline_tab_and_ordinary_text_pass(self):
+        for text in ("two\nlines", "tab\there", "讀書 PM — ✓", "emoji 🙂", "  indented\n    more"):
+            self.assertIsNone(self.check(msg(body=text)), repr(text))
+            self.assertIsNone(hp.unsafe_char(text))
+
+    def test_clean_newlines_makes_crlf_and_cr_newlines_only(self):
+        self.assertEqual(hp.clean_newlines("a\r\nb\rc\nd"), "a\nb\nc\nd")
+        self.assertEqual(hp.clean_newlines(None), "")
+
+    def test_expires_cannot_be_further_out_than_the_kind_allows(self):
+        far = hp.new_envelope("message", "m", "s", "x", now=NOW, expires_in=hp.EXPIRY_SELF + timedelta(seconds=1))
+        self.assertEqual(self.check(far), "bad-envelope")
+        edge = hp.new_envelope("message", "m", "s", "x", now=NOW, expires_in=hp.EXPIRY_SELF)
+        self.assertIsNone(self.check(edge))
+        self.assertEqual(hp.check_envelope(edge, now=NOW, max_lifetime=hp.EXPIRY_PERSON).code, "bad-envelope")  # across people: 48 h
+
     def test_a_whole_envelope_has_a_size_limit(self):
         self.assertLess(hp.envelope_size(msg()), 1000)
         self.assertGreater(hp.envelope_size(msg(body="é" * 8000)), 8000)  # bytes, not characters

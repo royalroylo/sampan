@@ -135,6 +135,47 @@ class SendTest(Setup):
         self.assertEqual(self.a.store.outbox_pending(), [])
 
 
+class SafetyTest(Setup):
+    def test_a_message_with_an_escape_sequence_is_refused_before_anything_is_queued(self):
+        for body in ("go\x1b[201~\rrm -rf /", "a\u202eb", "tab\x00nul"):
+            self.assertIn("控制字元", self.send(message=body), repr(body))
+        self.assertEqual(self.a.store.outbox_pending(), [])
+        self.assertEqual(dispatch.load(self.a.cfg.state_dir, ids=()), [])
+
+    def test_windows_line_endings_are_made_newlines_and_go_through(self):
+        d = self.send(message="line one\r\nline two\rline three\n")
+        self.assertEqual(self.a.store.outbox_pending()[0]["envelope"]["body"], "line one\nline two\nline three")
+        self.assertEqual(d.state, "queued")
+
+    def test_the_receiver_refuses_a_body_with_an_escape_even_if_everything_before_let_it_through(self):
+        from sampan.connect import Rejected
+        env = {"id": hp.new_id(), "to": {"machine": self.b.machine.id, "session": "proj-a"}, "body": "x\x1b[201~\rINJECT",
+               "from_session": "proj-b", "stamp": {"sender_machine_name": "laptop", "sender_machine": "id-laptop"}}
+        with self.assertRaises(Rejected) as e:
+            self.b.hooks.deliver_local(env)
+        self.assertIn("控制字元", str(e.exception))
+        self.assertEqual([x for x in dispatch.load(self.b.cfg.state_dir, ids=()) if remote.info(x)], [])
+        self.assertFalse((Path(self.b.cfg.state_dir) / "outbox").exists() and any((Path(self.b.cfg.state_dir) / "outbox").iterdir()))
+
+    def test_an_alias_never_reaches_a_session_that_is_not_published(self):
+        from sampan.connect import Rejected
+        self.b.store.publish("proj-a", "private")  # an alias that is also the name of an unpublished session of this machine
+        env = {"id": hp.new_id(), "to": {"machine": self.b.machine.id, "session": "private"}, "body": "hello",
+               "from_session": "proj-b", "stamp": {"sender_machine_name": "laptop", "sender_machine": "id-laptop"}}
+        self.b.hooks.deliver_local(env)  # lands on proj-a, the published one the alias belongs to
+        [inbound] = [x for x in dispatch.load(self.b.cfg.state_dir, ids=()) if remote.info(x)]
+        self.assertEqual(inbound.to_name, "proj-a")
+        self.b.store.unpublish("proj-a")
+        env2 = {**env, "id": hp.new_id()}
+        with self.assertRaises(Rejected):
+            self.b.hooks.deliver_local(env2)  # no entry at all: the unpublished 'private' session is not reachable
+
+    def test_a_published_name_wins_over_another_published_alias(self):
+        self.b.store.publish("private", "proj-a")  # silly, but possible by hand: the alias of one is the name of the other
+        entry = remote._published_entry(self.b.store, "proj-a")
+        self.assertEqual(entry["session"], "proj-a")
+
+
 class SubmitRoutingTest(Setup):
     def test_send_submit_routes_machine_slash_session_to_the_hub_path(self):
         from sampan import send

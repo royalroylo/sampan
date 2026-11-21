@@ -2,6 +2,7 @@ import json
 import socket
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -21,7 +22,7 @@ from sampan.hubhttp import (
     transport_from_credentials,
 )
 from sampan.remote_store import RemoteStore
-from tests.hub_helpers import KEYS, Clock, StubIdp, hello_payload, new_hub
+from tests.hub_helpers import KEYS, Clock, StubIdp, hello_payload, new_hub, principal
 
 UA = hp.user_agent("0.26.0")
 
@@ -100,6 +101,90 @@ class EndpointTest(HttpCase):
         for needle in ("stub.client-laptop", "PRIVATE", "Bearer", UA, "127.0.0.1"):
             self.assertNotIn(needle, joined)
         self.assertTrue(all(line.split()[0] in ("GET", "POST") for line in self.logs))
+
+
+class HardeningTest(unittest.TestCase):
+    def setUp(self):
+        self.hub, self.clock, _ = new_hub(Clock())
+        self.servers = []
+
+    def server(self, **kw):
+        srv = HubServer(("127.0.0.1", 0), self.hub, StubVerifier(), max_poll_wait=0.2, **kw)
+        srv.start()
+        self.servers.append(srv)
+        self.addCleanup(srv.stop)
+        return srv
+
+    def raw(self, srv, data, *, read=True, wait=2.0):
+        s = socket.create_connection(srv.server_address[:2], timeout=wait)
+        s.sendall(data)
+        out = b""
+        if read:
+            try:
+                while chunk := s.recv(4096):
+                    out += chunk
+            except (socket.timeout, ConnectionError):
+                pass
+        s.close()
+        return out
+
+    def test_a_negative_content_length_is_refused_at_once(self):
+        srv = self.server()
+        out = self.raw(srv, b"POST /v1/hello HTTP/1.0\r\nUser-Agent: " + UA.encode() + b"\r\nAuthorization: Bearer stub.c.s\r\n"
+                       b"Content-Length: -1\r\n\r\n")
+        self.assertTrue(out.startswith(b"HTTP/1.0 400"), out[:40])
+
+    def test_a_client_that_never_finishes_its_request_is_cut_off(self):
+        srv = self.server(request_timeout=0.4)
+        started = time.monotonic()
+        out = self.raw(srv, b"POST /v1/hello HTTP/1.0\r\nUser-Agent: x\r\n", wait=5)  # headers never end
+        self.assertLess(time.monotonic() - started, 3)
+        self.assertEqual(out, b"")  # closed without an answer
+
+    def test_a_body_that_never_arrives_is_cut_off(self):
+        srv = self.server(request_timeout=0.4)
+        started = time.monotonic()
+        self.raw(srv, b"POST /v1/hello HTTP/1.0\r\nUser-Agent: " + UA.encode() + b"\r\nAuthorization: Bearer stub.c.s\r\n"
+                 b"Content-Length: 100\r\n\r\n{", wait=5)
+        self.assertLess(time.monotonic() - started, 3)
+
+    def test_connections_past_the_limit_get_503_and_the_server_keeps_serving(self):
+        srv = self.server(max_connections=2, request_timeout=5)
+        idle = [socket.create_connection(srv.server_address[:2]) for _ in range(2)]  # two connections that say nothing
+        try:
+            time.sleep(0.2)
+            out = self.raw(srv, b"GET /health HTTP/1.0\r\n\r\n")
+            self.assertTrue(out.startswith(b"HTTP/1.0 503"), out[:40])
+        finally:
+            for s in idle:
+                s.close()
+        time.sleep(0.3)
+        self.assertTrue(self.raw(srv, b"GET /health HTTP/1.0\r\n\r\n").startswith(b"HTTP/1.0 200"))
+
+    def test_a_slow_client_does_not_hold_a_long_poll_hostage(self):
+        # the read timeout covers the request only: a poll that waits for mail is not cut by it
+        srv = self.server(request_timeout=0.3)
+        for n in ("laptop",):
+            self.hub.hello(principal(n), hello_payload(n))
+            self.hub.approve(n)
+        req = (b"GET /v1/poll?wait=1 HTTP/1.0\r\nUser-Agent: " + UA.encode() + b"\r\nAuthorization: Bearer stub.client-laptop.s\r\n\r\n")
+        out = self.raw(srv, req, wait=5)
+        self.assertTrue(out.startswith(b"HTTP/1.0 204"), out[:40])
+
+    def test_dev_mode_refuses_anything_that_came_through_a_proxy(self):
+        srv = self.server(reject_proxied=True)
+        for header in ("CF-Connecting-IP", "X-Forwarded-For", "X-Real-IP", "Forwarded", "CF-Ray"):
+            req = (f"GET /v1/peers HTTP/1.0\r\nUser-Agent: {UA}\r\nAuthorization: Bearer stub.client-laptop.s\r\n{header}: 1.2.3.4\r\n\r\n").encode()
+            out = self.raw(srv, req)
+            self.assertTrue(out.startswith(b"HTTP/1.0 401"), (header, out[:40]))
+            self.assertIn(b"--dev", out)
+        direct = self.raw(srv, "GET /health HTTP/1.0\r\nCF-Connecting-IP: 1.1.1.1\r\n\r\n".encode())
+        self.assertTrue(direct.startswith(b"HTTP/1.0 200"))  # /health says nothing, whoever asks
+
+    def test_without_dev_mode_proxy_headers_are_normal(self):
+        srv = self.server(reject_proxied=False)
+        req = (f"GET /v1/peers HTTP/1.0\r\nUser-Agent: {UA}\r\nAuthorization: Bearer stub.client-laptop.s\r\nCF-Connecting-IP: 1.2.3.4\r\n\r\n").encode()
+        self.assertNotIn(b"--dev", self.raw(srv, req))
 
 
 class TransportTest(HttpCase):

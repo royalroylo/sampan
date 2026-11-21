@@ -2,6 +2,7 @@ import os
 import stat
 import tempfile
 import unittest
+from datetime import timedelta
 from pathlib import Path
 
 from sampan import hubproto as hp
@@ -275,6 +276,29 @@ class CheckTest(unittest.TestCase):
         self.assertEqual(len(self.b.receipts), 1)
         peer_unsigned = self.stamped(hp.new_envelope("receipt", "id-desktop", "proj-a", "", now=self.clock(), phase="sent", ref=hp.new_id()))
         self.assertEqual(self.inject(peer_unsigned)["rejected"], 1)  # a peer's receipt has to be signed
+
+    def test_an_envelope_from_the_future_is_refused(self):
+        future = self.stamped(self.a.conn.sign(hp.new_envelope("message", "id-desktop", "proj-a", "hi",
+                                                               now=self.clock() + hp.SKEW_REJECT + timedelta(minutes=1))))
+        self.assertEqual(self.inject(future)["rejected"], 1)
+        self.assertTrue(any("clock-skew" in line for line in self.b.logs))
+        self.assertEqual(self.b.delivered, [])
+
+    def test_an_expiry_further_out_than_seven_days_is_refused_here_too(self):
+        far = self.stamped(self.a.conn.sign(hp.new_envelope("message", "id-desktop", "proj-a", "hi", now=self.clock(),
+                                                            expires_in=timedelta(days=30))))
+        self.assertEqual(self.inject(far)["rejected"], 1)
+        self.assertEqual(self.b.delivered, [])
+
+    def test_text_with_an_escape_or_other_control_character_never_reaches_the_hook(self):
+        for body in ("a\x1b[201~\rINJECT", "a\u2028b", "a\u200bb"):
+            env = self.stamped(self.a.conn.sign(hp.new_envelope("message", "id-desktop", "proj-a", body, now=self.clock())))
+            self.assertEqual(self.inject(env)["rejected"], 1, repr(body))
+        reply = self.stamped(self.a.conn.sign(hp.new_envelope("reply", "id-desktop", "proj-a", "ok\x1b[2J", now=self.clock(),
+                                                               in_reply_to=hp.new_id(), status="done")))
+        self.assertEqual(self.inject(reply)["rejected"], 1)
+        self.assertEqual((self.b.delivered, self.b.replies), ([], []))
+        self.assertTrue(any("unsafe-characters" in line for line in self.b.logs))
 
     def test_the_hubs_unsigned_receipt_is_limited_to_its_own_phases_about_a_real_envelope(self):
         for phase, ref in (("sent", hp.new_id()), ("taken", "not-an-id"), ("taken", None)):

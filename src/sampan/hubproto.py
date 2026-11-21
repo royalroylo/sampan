@@ -19,6 +19,7 @@ import hashlib
 import hmac
 import json
 import re
+import unicodedata
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -109,6 +110,25 @@ def parse_time(text):
     except ValueError:
         return None
     return when.astimezone(timezone.utc) if when.tzinfo else None
+
+
+BAD_CATEGORIES = ("Cc", "Cf", "Zl", "Zp")  # control, format (zero-width, bidi, BOM), line and paragraph separators
+ALLOWED_CONTROL = ("\n", "\t")
+
+
+def unsafe_char(text):
+    """The first character of text that must never reach a terminal or a prompt (a description, e.g. "U+001B"), or None.
+    An ESC (or \r, U+2028, a bidi mark…) in a message pasted into a session could end a bracketed paste early so the rest
+    is typed as keys; only newline and tab are let through."""
+    for ch in text or "":
+        if ch not in ALLOWED_CONTROL and unicodedata.category(ch) in BAD_CATEGORIES:
+            return f"U+{ord(ch):04X}"
+    return None
+
+
+def clean_newlines(text):
+    """CRLF and a lone CR become a newline (what a Windows editor sends); nothing else is touched."""
+    return (text or "").replace("\r\n", "\n").replace("\r", "\n")
 
 
 def new_id():
@@ -216,7 +236,7 @@ def client_fields(env):
     return {k: env[k] for k in CLIENT_FIELDS if k in env}
 
 
-def check_envelope(env, *, now, max_body=MAX_BODY):
+def check_envelope(env, *, now, max_body=MAX_BODY, max_lifetime=EXPIRY_SELF):
     """The problem with a client's envelope as a ProtoError, or None. Time checks (too old, expired, skew) included."""
     if not isinstance(env, dict):
         return ProtoError("bad-envelope", "不是物件")
@@ -254,6 +274,9 @@ def check_envelope(env, *, now, max_body=MAX_BODY):
         value = env.get(field)
         if value is not None and (not isinstance(value, str) or len(value) > MAX_FIELD):
             return ProtoError("bad-envelope", f"{field} 不合規")
+    for text in (body, env.get("reason"), env.get("thread_id"), to["machine"], to["session"]):
+        if isinstance(text, str) and (bad := unsafe_char(text)):
+            return ProtoError("bad-envelope", f"含不能傳的控制字元 {bad}")
     for field in ("machine", "session"):
         if len(to[field]) > MAX_FIELD:
             return ProtoError("bad-envelope", f"to.{field} 太長")
@@ -264,11 +287,13 @@ def check_envelope(env, *, now, max_body=MAX_BODY):
     if envelope_size(env) > MAX_ENVELOPE:
         return ProtoError("too-large", "整個信封太大")
     fs = env.get("from_session", "")
-    if not isinstance(fs, str) or len(fs) > MAX_FROM_SESSION or any(ord(c) < 32 for c in fs):
+    if not isinstance(fs, str) or len(fs) > MAX_FROM_SESSION or any(ord(c) < 32 for c in fs) or unsafe_char(fs):
         return ProtoError("bad-envelope", "from_session 不合規")
     created, expires = parse_time(env.get("created")), parse_time(env.get("expires"))
     if created is None or expires is None or expires <= created:
         return ProtoError("bad-envelope", "created／expires 不合規")
+    if expires - created > max_lifetime:
+        return ProtoError("bad-envelope", f"expires 比 created 晚超過 {max_lifetime.days} 天")
     if created - now > SKEW_REJECT:
         return ProtoError("clock-skew", "created 在未來太遠")
     if now - created > MAX_AGE:

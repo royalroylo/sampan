@@ -131,6 +131,52 @@ class RevokeSenderTest(unittest.TestCase):
         self.assertEqual(hub.fetch(D), [])
 
 
+class ReviewFixesTest(unittest.TestCase):
+    def test_hub_refuses_a_body_with_an_escape_sequence(self):
+        hub, clock, _ = hub_with_machines()
+        for body in ("x\x1b[201~\rINJECT", "a\u202eb"):
+            self.assertEqual(code_of(lambda: hub.send(L, message(clock, body=body))), "bad-envelope", repr(body))
+        self.assertEqual(hub.db.execute("SELECT COUNT(*) FROM envelopes").fetchone()[0], 0)
+
+    def test_hub_refuses_an_expiry_further_out_than_seven_days(self):
+        hub, clock, _ = hub_with_machines()
+        env = hp.sign(hp.new_envelope("message", "id-desktop", "proj-a", "x", now=clock(), expires_in=timedelta(days=400)),
+                      {"k1": b"o" * 32}, "k1", "id-laptop")
+        self.assertEqual(code_of(lambda: hub.send(L, env)), "bad-envelope")
+
+    def test_pending_machines_are_capped(self):
+        hub, clock, _ = new_hub(limits=Limits(max_pending=2))
+        for n in ("a", "b"):
+            hub.hello(principal(n), hello_payload(n))
+        self.assertEqual(code_of(lambda: hub.hello(principal("c"), hello_payload("c"))), "rate-limited")
+        hub.approve("a")
+        self.assertEqual(hub.hello(principal("c"), hello_payload("c"))["state"], "pending")  # a place is free again
+        self.assertEqual(hub.hello(principal("b"), hello_payload("b"))["state"], "pending")  # a known one is never refused
+
+    def test_the_quota_audit_is_one_line_a_day_however_often_it_is_hit(self):
+        hub, clock, _ = hub_with_machines(limits=Limits(daily_messages=1))
+        hub.send(L, message(clock))
+        for i in range(25):
+            code_of(lambda i=i: hub.send(L, message(clock, body=f"over {i}")))
+        self.assertEqual(sum(1 for a in hub.audit_log(500) if a["action"] == "quota"), 1)
+        clock.advance(days=1)
+        hub.send(L, message(clock, body="new day"))
+        for i in range(5):
+            code_of(lambda i=i: hub.send(L, message(clock, body=f"again {i}")))
+        self.assertEqual(sum(1 for a in hub.audit_log(500) if a["action"] == "quota"), 2)
+
+    def test_tick_checkpoints_the_log_so_deleted_text_is_gone_from_the_wal_file_too(self):
+        hub, clock, path = hub_with_machines()
+        hub.send(L, message(clock, body="NEEDLE-IN-THE-WAL"))
+        hub.db.commit()
+        clock.advance(days=8)
+        hub.tick()
+        wal = path.with_name(path.name + "-wal")
+        data = (path.read_bytes() + (wal.read_bytes() if wal.exists() else b""))
+        self.assertNotIn(b"NEEDLE-IN-THE-WAL", data)
+        self.assertEqual(wal.stat().st_size if wal.exists() else 0, 0)
+
+
 class SendTest(unittest.TestCase):
     def setUp(self):
         self.hub, self.clock, _ = hub_with_machines()

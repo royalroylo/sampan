@@ -133,6 +133,48 @@ class OidcTest(unittest.TestCase):
         self.now[0] += 24 * 3600
         self.assertEqual(self.code(v, self.token()), "unauthorized")  # but not forever
 
+    def test_a_failing_key_fetch_is_not_retried_by_every_request(self):
+        self.fail_fetch = True
+        v = self.verifier()
+        for _ in range(10):
+            self.assertEqual(self.code(v, self.token()), "unauthorized")
+        self.assertEqual(len(self.fetches), 1)  # one try, then 30 seconds of quiet
+        self.now[0] += 31
+        self.assertEqual(self.code(v, self.token()), "unauthorized")
+        self.assertEqual(len(self.fetches), 2)
+
+    def test_requests_are_answered_from_the_keys_we_have_while_a_fetch_is_slow(self):
+        import threading
+        v = self.verifier()
+        v(self.token())  # keys loaded
+        self.now[0] += 3601  # stale: the next request starts a fetch
+        gate, started = threading.Event(), threading.Event()
+        real = self.jwks
+
+        def slow(url):
+            started.set()
+            gate.wait(5)
+            return real(url)
+        v.fetch = slow
+        t = threading.Thread(target=lambda: v(self.token()))
+        t.start()
+        self.assertTrue(started.wait(5))
+        done = []
+        t2 = threading.Thread(target=lambda: done.append(self.code(v, self.token())))  # the lock must not be held by the fetch
+        t2.start()
+        t2.join(2)
+        self.assertEqual(done, [None])
+        gate.set()
+        t.join(5)
+
+    def test_encryption_keys_are_not_used_to_verify(self):
+        def fetch(url):
+            data = self.jwks(url)
+            data["keys"][0]["use"] = "enc"
+            return data
+        v = OidcVerifier(ISS, AUD, JWKS, fetch=fetch, clock=lambda: self.now[0])
+        self.assertEqual(self.code(v, self.token()), "unauthorized")
+
     def test_no_key_set_at_all_is_unauthorized(self):
         self.fail_fetch = True
         self.assertEqual(self.code(self.verifier(), self.token()), "unauthorized")

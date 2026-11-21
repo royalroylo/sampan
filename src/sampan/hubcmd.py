@@ -56,7 +56,15 @@ def cmd_publish(cfg, out, session, alias=""):
     if alias and not hp.valid_name(alias):
         out("❌ 別名不可含斜線、控制字元，最多 64 字")
         return 2
+    if alias and alias != session and alias in names:
+        out(f"❌ 別名「{alias}」是這台機器另一個 session 的名稱：換一個，不然會被當成那個 session")
+        return 2
     store = remote.open_store(cfg)
+    clash = next((p["session"] for p in store.published() if p["session"] != session and alias and alias in (p["session"], p["alias"])), None)
+    if clash:
+        store.close()
+        out(f"❌ 別名「{alias}」已經是已發布的「{clash}」的名稱或別名")
+        return 2
     store.publish(session, alias)
     store.close()
     shown = f"{session}（別名 {alias}）" if alias else session
@@ -330,16 +338,20 @@ def cmd_serve(args, out):
         if not (args.issuer and args.audience and args.jwks_url):
             out("❌ 要給 --issuer、--audience 與 --jwks-url（或 --dev 做開發測試）")
             return 2
+        if not getattr(args, "client", None):
+            out("❌ 要用 --client 列出允許連 hub 的 OAuth client（每台機器一個，可重複）：同一個身分提供者、同一個 audience 的其他 client 不該能在這裡登記機器")
+            return 2
         try:
             ua = hp.user_agent(current_version())
-            verifier = OidcVerifier(args.issuer, args.audience, args.jwks_url, fetch=lambda url: fetch_json(url, ua=ua))
+            verifier = OidcVerifier(args.issuer, args.audience, args.jwks_url, fetch=lambda url: fetch_json(url, ua=ua),
+                                    allowed_clients=set(args.client))
         except RuntimeError as e:
             out(f"❌ {e}")
             return 2
     path = _hub_db(args)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     core = HubCore(path)
-    server = HubServer((host, int(port)), core, verifier, log=lambda line: print(line, flush=True))
+    server = HubServer((host, int(port)), core, verifier, log=lambda line: print(line, flush=True), reject_proxied=bool(args.dev))
     stop = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stop.set())
