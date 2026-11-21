@@ -93,7 +93,7 @@ def launch_line(cfg, agent, profile_name, *, resume=None, session_id=None, cwd=N
     profile = cfg.profiles[profile_name]
     argv = claude_argv(profile, resume=resume, session_id=session_id, name=name,
                        remote_control=name if name and remote_control_on(profile) else None)
-    if profile.default:
+    if profile.uses_home:
         return shell_command(argv, env_set={}, env_unset=("CLAUDE_CONFIG_DIR",), cwd=cwd, prompt_file=prompt_file)
     return shell_command(argv, env_set={"CLAUDE_CONFIG_DIR": str(profile.config_dir)}, cwd=cwd,
                          prompt_file=prompt_file)

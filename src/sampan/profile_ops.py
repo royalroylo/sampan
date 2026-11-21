@@ -135,7 +135,7 @@ def profile_rows(cfg, run, rows, *, env=None):
         if p.agent == "codex":
             account, plugins = _codex_account(run, p.config_dir, base), None
         else:
-            account, plugins = _email(run, p.config_dir, p.default, base) or UNKNOWN_ACCOUNT, len(p.plugins)
+            account, plugins = _email(run, p.config_dir, p.uses_home, base) or UNKNOWN_ACCOUNT, len(p.plugins)
         result.append(ProfileRow(p.name, p.agent, p.config_dir, p.label, p.disabled, p.default, running, plugins,
                                  account))
     return result

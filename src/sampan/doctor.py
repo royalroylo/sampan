@@ -51,6 +51,14 @@ def _profile_dirs(cfg):
                              "目錄被刪掉或搬走了；復原它，或從 config.toml 移除這個 profile（sampan 不會自己建立）"))
     claude = [p for p in cfg.all_profiles.values() if p.agent == "claude"]
     out += [Check("info", f"{p.name} 已停用") for p in claude if p.disabled]
+    default = cfg.default_profile
+    if not default.uses_home:
+        # `default = true` only says which profile `sampan new` picks; whether Claude runs without CLAUDE_CONFIG_DIR is
+        # decided by where the profile lives (0.18.1; before it the default one always ran without the variable)
+        home = cfg.home_profile
+        out.append(Check("info", f"預設 profile {default.name} 的 config_dir 不是 ~/.claude，啟動時會帶 CLAUDE_CONFIG_DIR={default.config_dir}",
+                         f"沒帶變數的 Claude 用的是 ~/.claude（{home.name if home else '設定檔裡沒有 profile 對應它'}）；"
+                         f"這種 session 看起來會是「profile 不符」（登記 {default.name}）：sampan restart <名稱> 重開就對了"))
     root = cfg.home / ".claude-profiles"
     known = {Path(p.config_dir) for p in claude}  # a disabled profile's directory is not a new one
     for d in sorted(root.iterdir()) if root.is_dir() else []:
@@ -145,7 +153,7 @@ def _scoped(cfg, p, st):
             out.append(Check("warn", f"{p.name}：{pid} 在 {path} 另有 local scope 安裝",
                              "與 user scope 重複，日後升版可能分岔；sampan plugins sync --prune 會移除"))
         elif path and Path(path) == cfg.home:
-            if not p.default:  # the default profile's ~/.claude/settings.json is its user settings anyway
+            if not p.uses_home:  # the ~/.claude profile's ~/.claude/settings.json is its user settings anyway
                 home_ids.append(pid)
         else:
             out.append(Check("warn", f"{p.name}：{pid} 在 {path} 有 {scope} scope 安裝",
@@ -188,7 +196,7 @@ _ACCOUNT_OK = re.compile(r"^[a-zA-Z0-9._-]+$")
 
 
 def _keychain_service(p):
-    return KEYCHAIN_SERVICE if p.default else \
+    return KEYCHAIN_SERVICE if p.uses_home else \
         f"{KEYCHAIN_SERVICE}-{hashlib.sha256(str(p.config_dir).encode()).hexdigest()[:8]}"
 
 
@@ -282,7 +290,7 @@ def _action_log(cfg):
 def _data_format(cfg):
     from . import migrate_017
     reg, fol, dis = migrate.versions(cfg)
-    backup = migrate.last_backup(cfg.state_dir)
+    backup = migrate.last_backup_any(cfg.state_dir)
     def v(n):
         return "（沒有）" if n is None else f" v{n}"
     title = f"資料格式：登記表{v(reg)}、資料夾{v(fol)}、派工{v(dis)}；上次備份 {backup if backup else '（沒有）'}"

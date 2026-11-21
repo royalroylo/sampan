@@ -298,10 +298,19 @@ class RcStepTest(unittest.TestCase):
         self.assertFalse(rc_wanted(rc_cfg(True), row(agent="codex", profile="")))
         self.assertFalse(rc_wanted(rc_cfg(True), row(profile="gone")))
 
-    def test_rc_step_off_profile_sends_nothing(self):
+    def test_rc_step_off_profile_sends_nothing_and_says_why(self):
         tmux = happy_tmux()
         rc_step(rc_cfg(False), tmux, row(ALIAS), "%1", self.out.append, sleep=self.sleep)
-        self.assertEqual((tmux.sent, self.out, tmux.captures), ([], [], 0))
+        self.assertEqual((tmux.sent, tmux.captures), ([], 0))
+        [line] = self.out
+        self.assertIn("沒開 Remote Control", line)
+        self.assertIn(f"/remote-control {ALIAS}", line)
+
+    def test_rc_step_says_nothing_for_codex_or_an_unknown_profile(self):
+        tmux = happy_tmux()
+        rc_step(rc_cfg(False), tmux, row(agent="codex", profile=""), "%1", self.out.append, sleep=self.sleep)
+        rc_step(rc_cfg(False), tmux, row(profile="gone"), "%1", self.out.append, sleep=self.sleep)
+        self.assertEqual((tmux.sent, self.out), ([], []))
 
     def test_rc_step_success_line(self):
         tmux = happy_tmux()

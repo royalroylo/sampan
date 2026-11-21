@@ -204,9 +204,14 @@ def launch(cfg, tmux, target, row, *, profile=None, cwd=None, sleep, clear=True)
 
 
 def rc_step(cfg, tmux, row, pane, out, *, sleep, profile=None):
-    """The Remote Control reset after a launch, reported in one line. Does nothing (and prints nothing) for a profile
-    without Remote Control; never raises and never changes the operation's outcome."""
+    """The Remote Control reset after a launch, reported in one line. A profile without Remote Control gets no reset
+    and one line saying why (a Claude that was on Remote Control before would otherwise silently lose it); never
+    raises and never changes the operation's outcome."""
     if not rc_wanted(cfg, row, profile):
+        name = profile or row.profile
+        if row.agent == "claude" and name in cfg.profiles:
+            out(f"  · {row.tmux}：profile {name} 沒開 Remote Control（settings.json 的 remoteControlAtStartup），所以沒有校正 RC 名稱；"
+                f"要用手機連它就先開，或在 session 裡打 /remote-control {display_name(row)}")
         return
     alias = display_name(row)
     out(f"  … {row.tmux}：RC 校正中（最多約 {RC_WAIT} 秒）")  # the wait for the bridge can be long: say so first

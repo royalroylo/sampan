@@ -19,7 +19,7 @@
 | `[codex] home` | Codex 資料夾；沒寫時用環境變數 `CODEX_HOME`，再沒有就是 `~/.codex`（只用在隱含的 Codex profile） |
 | `[marketplaces] <名稱> = "owner/repo"` | plugin 來源：GitHub `owner/repo`，或 git 網址（`https://…`、`ssh://…`、`git@host:path`，例如自架的 Gitea）。本機目錄不支援 |
 | `[profiles.<名稱>] config_dir` | 必填，字串路徑（可用 `~/`） |
-| `[profiles.<名稱>] default` | 剛好一個 profile 要設 `true`（該 profile 啟動時不設 `CLAUDE_CONFIG_DIR`） |
+| `[profiles.<名稱>] default` | 剛好一個 profile 要設 `true`：只代表「沒指定 profile 時用哪個」（`sampan new`、選單的預設），**跟要不要設 `CLAUDE_CONFIG_DIR` 無關**。是否設 `CLAUDE_CONFIG_DIR` 看 `config_dir`：剛好是 `~/.claude`（resolve 之後比對）的 profile 啟動時不設這個變數、登入狀態在 `~/.claude.json`；其他 profile 一律帶 `CLAUDE_CONFIG_DIR=<自己的 config_dir>`、用自己的 `.claude.json`（0.18.1 起；之前 `default` 的那個一律不帶變數，把 `default = true` 搬到不在 `~/.claude` 的 profile 會讓它悄悄跑在 `~/.claude`） |
 | `[profiles.<名稱>] label` | 顯示用，例如帳號 email |
 | `[profiles.<名稱>] agent` | `"claude"`（預設）或 `"codex"`；Codex profile 的 `config_dir` 是它的 `CODEX_HOME`，沒有 `plugins`。有多個 Codex profile 時，sampan 開 Codex 用第一個使用中的，執行中的 Codex session 也都算在它名下（多帳號還不支援） |
 | `[profiles.<名稱>] disabled` | 布林，`true` 表示停用（隱藏、不能開新 session、plugins sync 跳過）；預設 profile 不能停用 |

@@ -147,7 +147,7 @@ def plan_prune(cfg, profile, state):
             else:
                 skipped.append(f"{pid} 的 local 安裝在 {path}，目錄不存在，略過")
         elif path and Path(path) == cfg.home:
-            if not profile.default:
+            if not profile.uses_home:
                 home.append(pid)
         else:
             skipped.append(f"{pid}：{scope} scope 由 {path}/.claude/settings.json 啟用（進 git），不自動改")

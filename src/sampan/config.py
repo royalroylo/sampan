@@ -69,10 +69,11 @@ class Profile:
     config_dir: Path
     label: str
     plugins: tuple
-    default: bool
+    default: bool  # which profile `sampan new` and the pickers choose when none is named; nothing else
     claude_json: Path
     agent: str = "claude"  # "claude" or "codex"; for Codex, config_dir is CODEX_HOME
     disabled: bool = False
+    uses_home: bool = False  # config_dir is ~/.claude: Claude runs without CLAUDE_CONFIG_DIR, its .claude.json is ~/.claude.json
 
     @property
     def projects_dir(self):
@@ -80,7 +81,7 @@ class Profile:
 
     def env(self, base):
         env = dict(base)
-        if self.default:
+        if self.uses_home:
             env.pop("CLAUDE_CONFIG_DIR", None)
         else:
             env["CLAUDE_CONFIG_DIR"] = str(self.config_dir)
@@ -136,7 +137,13 @@ class Config:
 
     @property
     def default_profile(self):
+        """The profile chosen when none is named (`default = true`)."""
         return next(p for p in self.profiles.values() if p.default)
+
+    @property
+    def home_profile(self):
+        """The enabled Claude profile whose config_dir is ~/.claude (what a claude with no CLAUDE_CONFIG_DIR uses), or None."""
+        return next((p for p in self.profiles.values() if p.uses_home), None)
 
     @property
     def registry_path(self):
@@ -214,8 +221,13 @@ def load_config(path, *, home=None, state_dir=None):
         default = bool(p.get("default", False))
         if default and disabled:
             raise ConfigError(f"profile {name}：default 的 profile 不能停用（先把別的 profile 設成 default）")
-        claude_json = home / ".claude.json" if default else config_dir / ".claude.json"
-        all_profiles[name] = Profile(name, config_dir, label, plugins, default, claude_json, "claude", disabled)
+        # Whether Claude runs without CLAUDE_CONFIG_DIR depends on where the profile lives, not on which one is the
+        # default: only ~/.claude is what Claude uses when the variable is unset (and then its login state is
+        # ~/.claude.json, not ~/.claude/.claude.json)
+        uses_home = os.path.realpath(config_dir) == os.path.realpath(home / ".claude")
+        claude_json = home / ".claude.json" if uses_home else config_dir / ".claude.json"
+        all_profiles[name] = Profile(name, config_dir, label, plugins, default, claude_json, "claude", disabled,
+                                     uses_home)
 
     if sum(p.default for p in all_profiles.values() if p.agent == "claude") != 1:
         raise ConfigError("Claude 的 profiles 裡要剛好一個設 default = true")

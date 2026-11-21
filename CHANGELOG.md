@@ -5,6 +5,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-11-21
+
+Upgrading: restart the Claude sessions of a profile whose `default = true` is not at `~/.claude` (`sampan status` shows them as 「profile 不符」 if they were started by 0.18.0 or earlier after `default` was moved): until then they run in `~/.claude`, not in their own profile.
+
+### Fixed
+- `default = true` moved to a profile outside `~/.claude` made every start of that profile (new, restore, restart, switch, move, adopt, MCP install, plugin commands, `sampan claude`) run without `CLAUDE_CONFIG_DIR`, so Claude ran in `~/.claude` (another account) while the registry said the default profile, and its `.claude.json` was looked up in `~/.claude.json`. `default` now only means which profile is chosen when none is named; whether `CLAUDE_CONFIG_DIR` is set follows `config_dir` (the profile at `~/.claude` never gets it, every other one always does). A Claude running with no variable is now taken for the profile at `~/.claude`, not for the default one. Configs whose default is `~/.claude` behave exactly as before. `sampan doctor` says so when the default profile is not at `~/.claude`.
+- `sampan doctor` showed only the last 0.15 backup; it shows the newest backup of any migration (`backup-0.17-…` too).
+- A restore, restart, switch, move or adopt of a Claude in a profile without Remote Control (`remoteControlAtStartup`) said nothing about the Remote Control name; it now says in one line that the profile has it off and how to connect that session anyway.
+
 ## [0.18.0] - 2026-11-21
 
 Upgrading: restart the Claude sessions after updating, so each one runs the new `sampan mcp serve` (the `restore` parameter of `send` / `send_batch` exists only there). `--restore` is off unless you pass it.

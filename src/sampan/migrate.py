@@ -18,6 +18,7 @@ there.
 """
 import json
 import os
+import re
 import shutil
 import tempfile
 from dataclasses import replace
@@ -153,6 +154,20 @@ def last_backup(state_dir):
 
     found = [p for p in Path(state_dir).glob(BACKUP_PREFIX + "*") if p.is_dir()]
     return max(found, key=key) if found else None
+
+
+_ANY_BACKUP = re.compile(r"^backup-\d+\.\d+-(\d{8}-\d{6})(?:-(\d+))?$")
+
+
+def last_backup_any(state_dir):
+    """The newest state/backup-<version>-<stamp>[-n] directory of any migration (0.15's, 0.17's…), or None. For what
+    `sampan doctor` shows; `last_backup` stays the 0.15 one, which the 0.15 migration and its revert use."""
+    found = []
+    for p in Path(state_dir).glob("backup-*"):
+        m = _ANY_BACKUP.match(p.name)
+        if m and p.is_dir():
+            found.append(((m.group(1), int(m.group(2) or 1)), p))
+    return max(found, key=lambda f: f[0])[1] if found else None
 
 
 def _restore(state_dir, backup):

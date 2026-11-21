@@ -25,8 +25,9 @@ class LiveAgent:
 
 
 def profile_for_dir(cfg, config_dir):
-    if not config_dir:
-        return cfg.default_profile.name
+    if not config_dir:  # a claude started without the variable runs in ~/.claude: that profile, not "the default"
+        home = cfg.home_profile
+        return home.name if home is not None else None
     target = Path(config_dir).expanduser()
     for p in cfg.profiles.values():
         if Path(p.config_dir) == target:
