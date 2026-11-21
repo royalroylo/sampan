@@ -289,13 +289,16 @@ def _watch(cfg, run, launched, timeout, sleep, out=lambda _l: None, relay=None):
     return resumed, at_trust, [row.tmux for row in pending.values()]
 
 
-def start_one(cfg, run, name, *, sleep, out=lambda _l: None, alive=os.kill, target_id=""):
+def start_one(cfg, run, name, *, sleep, out=lambda _l: None, alive=os.kill, target_id="", profile=""):
     """Reattach one stopped session for a send that asked for it (`send --restore`): the same checks and the same launch
     line as `sampan restore <name>`, but it only starts the agent: it neither waits for it nor does the Remote Control
     reset (the caller looks again later, and steps.rc_step runs when it is up). Never a key beyond the launch line.
     target_id: the registry id the sender addressed; the row is found by it (a rename since the claim does not matter,
     and a name that now belongs to another session is never launched). Returns None when the agent was started (or
-    is already running), else why it was not (a plain reason)."""
+    is already running), else why it was not (a plain reason).
+    profile: reattach under this profile instead of the registered one: the registry row is first changed to it the way
+    `sampan switch` does for a stopped session (transcript moved where it can see it), permanently; a failure of that
+    is the reason returned and nothing is started."""
     try:
         rows = load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)
     except RegistryError as e:
@@ -312,6 +315,20 @@ def start_one(cfg, run, name, *, sleep, out=lambda _l: None, alive=os.kill, targ
         return f"{e}；不知道 {name} 是否已在執行，沒有開"
     if name in live.running:
         return None
+    if profile and profile != row.profile:
+        from . import session_run
+        said = []
+        rc = session_run.rehome_stopped(cfg, run, said.append, name, row, profile)
+        if rc is not None:
+            return "；".join(str(x).removeprefix("❌ ") for x in said if str(x).strip()) or f"換 profile 失敗（rc {rc}）"
+        logged = actionlog.tee(cfg, "接回", out)
+        for line in said:
+            logged(line)
+        logged(f"{name}：登記表改成 {profile}（送訊息時指定 --profile）")
+        try:
+            row = next(r for r in load_rows(cfg.registry_path, codex_profile=cfg.codex.profile) if r.tmux == name)
+        except (RegistryError, StopIteration) as e:
+            return f"換 profile 後讀不到登記表：{e}"
     why = _blocker(cfg, row, live, alive)
     if why:
         return why

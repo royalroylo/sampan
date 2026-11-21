@@ -259,11 +259,43 @@ def raw_problem(message):
 REASON_RESTORE_RAW = "--restore 不能跟直接送（raw）一起用：接回之後才送斜線指令沒有意義"
 
 
+def profile_problem(cfg, row, to, profile):
+    """Why `--profile` cannot be used for row (its StatusRow) now, or None. It is only ever used together with restore
+    (the caller checks that); a target that is already on that profile needs no change (also None)."""
+    if profile not in cfg.profiles:
+        return send_restore.PROFILE_UNKNOWN.format(profile=profile, known="、".join(cfg.profiles))
+    if cfg.profiles[profile].disabled:
+        return send_restore.PROFILE_DISABLED.format(profile=profile)
+    if row.agent != "claude":
+        return send_restore.PROFILE_AGENT.format(name=to, agent=row.agent)
+    if row.profile == profile:
+        return None
+    if row.state == State.RUNNING:
+        return send_restore.PROFILE_RUNNING.format(name=to, profile=profile)
+    return None
+
+
+def _restore_profile(row, profile):
+    """What to record for a restore dispatch: the profile to switch to, or "" when the target is on it already."""
+    return profile if profile and profile != row.profile else ""
+
+
+def _profile_conflict(items, row, name, profile):
+    """A queued restore dispatch of the same target that wants another profile (reattaching has one profile), or None."""
+    for x in items:
+        if x.state == "queued" and x.extra.get(send_restore.RESTORE) and _for_target(x, row):
+            other = x.extra.get(send_restore.PROFILE, "")
+            if other != profile:
+                return send_restore.PROFILE_CONFLICT.format(name=name, other=other or row.profile, mine=profile or row.profile)
+    return None
+
+
 def submit(cfg, run, caller, to, message, *, notify, now, snapshot_fn=None, status_fn=None, raw=False, batch=None,
-           restore=False):
+           restore=False, profile=None):
     """Check the target and create a queued dispatch (outbox written, actions.log line). Dispatch, or why not (str).
     raw: send the stripped message as is, with no source line (Claude only; see raw_problem).
-    restore: a stopped target is reattached first (see send_restore); retired ones are refused."""
+    restore: a stopped target is reattached first (see send_restore); retired ones are refused.
+    profile (only with restore): reattach it under that profile, the registry row changed the way `sampan switch` does."""
     if problem := store.mnt_problem(cfg.state_dir):
         return problem
     if not message.strip():
@@ -272,6 +304,8 @@ def submit(cfg, run, caller, to, message, *, notify, now, snapshot_fn=None, stat
         message = message.strip()
         if problem := raw_problem(message):
             return problem
+    if profile and not restore:
+        return send_restore.NEEDS_RESTORE
     if restore and raw:
         return REASON_RESTORE_RAW
     if caller.name is not None and caller.name == to:
@@ -283,11 +317,14 @@ def submit(cfg, run, caller, to, message, *, notify, now, snapshot_fn=None, stat
     problem = target_problem(row, to, restore)
     if problem:
         return problem
+    if profile and (problem := profile_problem(cfg, row, to, profile)):
+        return problem
     if raw and row.agent == "codex":
         return REASON_RAW_CODEX
     r = _create(cfg, caller, to, row.agent, row.profile, message, "queued", now, notify=notify,
                 thread_id=(row.sid or None) if row.agent == "codex" else None, raw=raw, batch=batch, to_id=row.id,
-                restore=restore)
+                restore=restore, profile=_restore_profile(row, profile) if restore else None,
+                same_row=row)
     if isinstance(r, str):
         return r
     kind = f"{row.agent}，直接送" if raw else row.agent
@@ -300,14 +337,16 @@ def _who(d):
 
 
 def _create(cfg, caller, to, to_agent, to_profile, message, state, now, *, notify, thread_id=None, strip=False,
-            startup=False, raw=False, batch=None, to_id="", restore=False):
+            startup=False, raw=False, batch=None, to_id="", restore=False, profile=None, same_row=None):
     """Write the outbox and record a dispatch under the lock. A copy of it, or why not (str).
     strip: drop trailing newlines from the text (a startup prompt goes through `$(cat …)`, which drops them)."""
     try:
         with dispatch.transaction(cfg.state_dir, keep_days=cfg.keep_days) as items:
+            if restore and same_row is not None and (clash := _profile_conflict(items, same_row, to, profile or "")):
+                return clash
             d = _record(cfg, caller, to, to_agent, to_profile, message, state, now, items.ids,
                         notify=notify, thread_id=thread_id, strip=strip, startup=startup, raw=raw, batch=batch,
-                        to_id=to_id, restore=restore)
+                        to_id=to_id, restore=restore, profile=profile)
             _keep(items, [d])
     except (dispatch.DispatchError, OSError) as e:
         return str(e)
@@ -315,7 +354,7 @@ def _create(cfg, caller, to, to_agent, to_profile, message, state, now, *, notif
 
 
 def _record(cfg, caller, to, to_agent, to_profile, message, state, now, taken, *, notify, thread_id=None, strip=False,
-            startup=False, raw=False, batch=None, to_id="", restore=False):
+            startup=False, raw=False, batch=None, to_id="", restore=False, profile=None):
     """A new Dispatch with an id not in taken, its outbox written (call inside dispatch.transaction)."""
     did = dispatch.new_id(taken)
     text = message if raw else deliver.compose(caller_label(caller), caller.profile, did, message)
@@ -328,7 +367,8 @@ def _record(cfg, caller, to, to_agent, to_profile, message, state, now, taken, *
         sent_at=_iso(now) if state == "sent" else None,
         notify=bool(notify and caller.name is not None), thread_id=thread_id, from_kind=caller_kind(caller),
         startup=startup, raw=raw, batch=batch, to_id=to_id, from_id=caller.id if caller.name is not None else "",
-        machine=registry_machine(cfg), extra={send_restore.RESTORE: True} if restore else {})
+        machine=registry_machine(cfg),
+        extra=({send_restore.RESTORE: True, **({send_restore.PROFILE: profile} if profile else {})} if restore else {}))
 
 
 def _keep(items, new):
@@ -355,7 +395,7 @@ def _new_batch_id(items):
     return "b" + dispatch.new_id(used)
 
 
-def _skip_reason(caller, name, row, raw, restore=False):
+def _skip_reason(cfg, caller, name, row, raw, restore=False, profile=None):
     """Why a batch does not send to name (its StatusRow, or None) now, or None. Only a running, idle session is sent
     to: a batch never queues. The one exception is restore: a stopped session is queued, and reattached (a few at a
     time, see send_restore) before its message goes."""
@@ -363,6 +403,8 @@ def _skip_reason(caller, name, row, raw, restore=False):
         return f"不能送給自己（{name}）"
     problem = target_problem(row, name, restore)
     if problem:
+        return problem
+    if profile and (problem := profile_problem(cfg, row, name, profile)):
         return problem
     if raw and row.agent == "codex":
         return REASON_RAW_CODEX
@@ -374,7 +416,7 @@ def _skip_reason(caller, name, row, raw, restore=False):
 
 
 def submit_batch(cfg, run, caller, names, message, *, raw, notify, now, snapshot_fn=None, status_fn=None,
-                 restore=False):
+                 restore=False, profile=None):
     """Send the same message to several sessions: a queued dispatch for each running, idle one (one transaction, one
     batch id); the others are skipped with why, never queued. A name given twice counts once. Batch, or why not
     (str: a bad message, or nobody to send to; nothing is recorded). notify: one notice for the whole batch, when
@@ -383,6 +425,8 @@ def submit_batch(cfg, run, caller, names, message, *, raw, notify, now, snapshot
         return problem
     if not message.strip():
         return "訊息是空的"
+    if profile and not restore:
+        return send_restore.NEEDS_RESTORE
     if restore and raw:
         return REASON_RESTORE_RAW
     if raw:
@@ -395,7 +439,7 @@ def submit_batch(cfg, run, caller, names, message, *, raw, notify, now, snapshot
         return str(e)
     targets, skipped = [], []
     for name in dict.fromkeys(names):
-        why = _skip_reason(caller, name, rows.get(name), raw, restore)
+        why = _skip_reason(cfg, caller, name, rows.get(name), raw, restore, profile)
         if why:
             skipped.append((name, why))
         else:
@@ -405,12 +449,18 @@ def submit_batch(cfg, run, caller, names, message, *, raw, notify, now, snapshot
     try:
         with dispatch.transaction(cfg.state_dir, keep_days=cfg.keep_days) as items:
             bid, taken, made = _new_batch_id(items), items.ids, []
-            for row in targets:
+            for row in list(targets):
+                want = _restore_profile(row, profile) if restore else None
+                if restore and (clash := _profile_conflict(items, row, row.name, want or "")):
+                    skipped.append((row.name, clash))
+                    continue
                 d = _record(cfg, caller, row.name, row.agent, row.profile, message, "queued", now, taken,
                             notify=notify, thread_id=(row.sid or None) if row.agent == "codex" else None, raw=raw,
-                            batch=bid, to_id=row.id, restore=restore)
+                            batch=bid, to_id=row.id, restore=restore, profile=want)
                 taken.add(d.id)
                 made.append(d)
+            if not made:
+                return "沒有可以送的 session：" + "；".join(f"{n}：{why}" for n, why in skipped)
             made[0].batch_skipped = len(skipped)
             _keep(items, made)
     except (dispatch.DispatchError, OSError) as e:
@@ -733,7 +783,8 @@ def _restoring(cfg, d, row, now, save, items, work):
     else:
         _set_phase(group, send_restore.RC, now, send_restore.REASON_RC)
     save()  # the claim is on record before anything is pressed: a second look never starts the same thing again
-    work.append((step.kind, row.name, row.id, [x.id for x in group]))
+    profile = next((x.extra[send_restore.PROFILE] for x in group if x.extra.get(send_restore.PROFILE)), "")
+    work.append((step.kind, row.name, row.id, [x.id for x in group], profile))
     _log(cfg, "send", f"派工 {'、'.join(x.id for x in group)}：{send_restore.REASON_RESTORING if step.kind == 'launch' else send_restore.REASON_RC}（{row.name}）")
     return True
 
@@ -743,7 +794,7 @@ def _restore_work(cfg, run, job, *, sleep, snapshot_fn, status_fn, now):
     the result in a short transaction of its own. kind: launch → phase starting (the next looks wait for the target to
     come up and be idle), or the dispatches fail with why; rc → phase ready (the reset never fails a dispatch: it only
     logs what it could not do)."""
-    kind, name, target_id, ids = job
+    kind, name, target_id, ids, profile = job
     why = None
     began = time.monotonic()
     try:
@@ -757,7 +808,7 @@ def _restore_work(cfg, run, job, *, sleep, snapshot_fn, status_fn, now):
         return
     try:
         if kind == "launch":
-            why = restore_mod.start_one(cfg, run, name, sleep=sleep, target_id=target_id)
+            why = restore_mod.start_one(cfg, run, name, sleep=sleep, target_id=target_id, profile=profile)
         else:
             row = _row_of(_rows(cfg, run, snapshot_fn, status_fn), target_id, name)
             reg = next((r for r in load_rows(cfg.registry_path, codex_profile=cfg.codex.profile) if r.tmux == name), None)
@@ -1473,7 +1524,8 @@ def _restore_until_sent(cfg, run, ids, out, *, sleep, clock, snapshot_fn, status
 
 
 def cmd_send(cfg, run, out, to, message, *, wait, timeout=600, sleep=time.sleep, clock=time.monotonic,
-             snapshot_fn=None, status_fn=None, now_fn=_utcnow, caller=TERMINAL, raw=False, restore=False):
+             snapshot_fn=None, status_fn=None, now_fn=_utcnow, caller=TERMINAL, raw=False, restore=False,
+             profile=None):
     """`sampan send`. caller: who runs it (command_caller: an agent running it through its shell tool is that session
     or an unregistered agent, never the terminal). Without wait: try once, print the id (rc 0, also when it is only
     queued). With wait: advance every 2 s; done → the reply (rc 0), failed → the reason (rc 1), timeout → rc 124
@@ -1481,7 +1533,7 @@ def cmd_send(cfg, run, out, to, message, *, wait, timeout=600, sleep=time.sleep,
     stopped target first; this command then stays until the message is out or the reattach failed (my decision: a
     terminal has no watcher to carry on, and a person is waiting at it), even without wait."""
     r = submit(cfg, run, caller, to, message, notify=False, now=now_fn(), snapshot_fn=snapshot_fn, status_fn=status_fn,
-               raw=raw, restore=restore)
+               raw=raw, restore=restore, profile=profile)
     if isinstance(r, str):
         out(f"❌ {r}")
         return 2
@@ -1526,13 +1578,13 @@ def _advance_batch_until(cfg, run, bid, wait_s, *, sleep, clock, snapshot_fn, st
 
 def cmd_send_batch(cfg, run, out, names, message, *, wait, timeout=600, raw=False, sleep=time.sleep,
                    clock=time.monotonic, snapshot_fn=None, status_fn=None, now_fn=_utcnow, caller=TERMINAL,
-                   restore=False):
+                   restore=False, profile=None):
     """`sampan send-batch`: the same message to every running, idle session of names (the others are skipped and
     listed). Without wait: try once, print each item (rc 0). With wait: advance every 2 s; every item done → the
     replies (rc 0), any failed / cancelled → rc 1, timeout → rc 124, Ctrl-C → rc 130 (the dispatches stay); nobody to
     send to → rc 2."""
     b = submit_batch(cfg, run, caller, names, message, raw=raw, notify=False, now=now_fn(), snapshot_fn=snapshot_fn,
-                     status_fn=status_fn, restore=restore)
+                     status_fn=status_fn, restore=restore, profile=profile)
     if isinstance(b, str):
         out(f"❌ {b}")
         return 2

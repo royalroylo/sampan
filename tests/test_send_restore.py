@@ -1,4 +1,5 @@
 """`send --restore`: a dispatch to a stopped session reattaches it first (send_restore, send._restoring, restore.start_one)."""
+import dataclasses
 import unittest
 from unittest import mock
 
@@ -426,6 +427,101 @@ class CmdSendRestoreTest(RestoreBase):
         self.assertEqual(send.submit_batch(self.cfg, FakeRunner(strict=True), send.TERMINAL, ["d"], "/x", raw=True,
                                            notify=False, now=NOW, status_fn=self.status_fn, restore=True),
                          send.REASON_RESTORE_RAW)
+
+
+class RestoreProfileTest(RestoreBase):
+    """`--profile`: the stopped target is reattached under another profile (a permanent switch of its registry row)."""
+
+    def setUp(self):
+        super().setUp()
+        self.set_row("b", profile="alice")  # the profiles of make_env: alice (default) and work
+
+    def test_it_needs_restore(self):
+        self.assertEqual(self.submit(profile="work"), send_restore.NEEDS_RESTORE)
+        self.assertEqual(self.submit(profile="work", restore=False), send_restore.NEEDS_RESTORE)
+
+    def test_the_profile_is_recorded_and_handed_to_the_launch(self):
+        d = self.restore_submit(profile="work")
+        self.assertEqual(self.stored(d.id).extra[send_restore.PROFILE], "work")
+        self.advance(FakeRunner(strict=True), d.id)
+        self.start.assert_called_once()
+        self.assertEqual(self.start.call_args.kwargs["profile"], "work")
+        self.assertEqual(self.start.call_args.kwargs["target_id"], ID_B)
+
+    def test_without_it_nothing_changes(self):
+        d = self.restore_submit()
+        self.assertNotIn(send_restore.PROFILE, self.stored(d.id).extra)
+        self.advance(FakeRunner(strict=True), d.id)
+        self.assertEqual(self.start.call_args.kwargs["profile"], "")
+
+    def test_a_target_already_on_that_profile_needs_no_change(self):
+        d = self.restore_submit(profile="alice")
+        self.assertNotIn(send_restore.PROFILE, self.stored(d.id).extra)
+
+    def test_what_it_refuses(self):
+        cases = {"nope": "未知的 profile：nope", }
+        for profile, text in cases.items():
+            self.assertIn(text, self.submit(restore=True, profile=profile))
+        self.up()
+        self.assertIn("sampan switch b work", self.submit(restore=True, profile="work"))  # running: use switch
+        self.set_row("b", state=State.STOPPED, agent_status="-", pane=None, tmux_alive=False)
+        self.set_row("b", agent="codex", profile="codex")
+        self.assertIn("只有 Claude session 能換 profile", self.submit(restore=True, profile="work"))
+        self.assertEqual(dispatch.load(self.cfg.state_dir), [])
+
+    def test_a_disabled_profile_is_refused(self):
+        profiles = {**self.cfg.profiles, "work": dataclasses.replace(self.cfg.profiles["work"], disabled=True)}
+        self.cfg = dataclasses.replace(self.cfg, profiles=profiles)
+        self.assertIn("profile work 已停用", self.submit(restore=True, profile="work"))
+
+    def test_two_dispatches_for_one_target_must_agree_on_the_profile(self):
+        self.restore_submit(profile="work")
+        clash = self.submit(restore=True)
+        self.assertIsInstance(clash, str)
+        self.assertIn("已有一則排隊中的接回派工要用「work」，這則要用「alice」", clash)
+        self.assertIsNotNone(self.restore_submit(profile="work"))  # the same one is fine
+
+    def test_a_failed_switch_fails_the_dispatch_with_its_reason_and_launches_nothing_more(self):
+        self.start.return_value = "逐字稿搬不過去（唯讀）"
+        d = self.advance(FakeRunner(strict=True), self.restore_submit(profile="work").id)
+        self.assertEqual(d.state, "failed")
+        self.assertEqual(d.reason, "接回失敗：逐字稿搬不過去（唯讀）")
+
+    def test_batch_queues_the_stopped_under_the_profile_and_skips_a_running_one_on_another(self):
+        self.rows["d"] = dataclasses.replace(self.rows["d"], profile="alice")
+        self.rows["e"] = status_row("e", State.RUNNING, sid=SID_E, id=ID_E, profile="alice", pane="%5")
+        self.rows["f"] = status_row("f", State.RUNNING, sid=SID_F, id=ID_F, profile="work", pane="%6")
+        b = send.submit_batch(self.cfg, FakeRunner(strict=True), send.TERMINAL, ["b", "d", "e", "f"], "hi", raw=False,
+                              notify=False, now=NOW, status_fn=self.status_fn, restore=True, profile="work")
+        self.assertEqual([d.to_name for d in b.items], ["b", "d", "f"])  # f is on work already: sent as usual
+        self.assertEqual([n for n, _ in b.skipped], ["e"])
+        self.assertIn("sampan switch e work", b.skipped[0][1])
+        extras = {d.to_name: self.stored(d.id).extra.get(send_restore.PROFILE) for d in b.items}
+        self.assertEqual(extras, {"b": "work", "d": "work", "f": None})
+        self.assertEqual(send.submit_batch(self.cfg, FakeRunner(strict=True), send.TERMINAL, ["b"], "hi", raw=False,
+                                           notify=False, now=NOW, status_fn=self.status_fn, profile="work"),
+                         send_restore.NEEDS_RESTORE)
+
+    def test_batch_skips_a_target_whose_queued_dispatch_wants_another_profile(self):
+        self.restore_submit(profile="work")
+        b = send.submit_batch(self.cfg, FakeRunner(strict=True), send.TERMINAL, ["b", "d"], "hi", raw=False,
+                              notify=False, now=NOW, status_fn=self.status_fn, restore=True)
+        self.assertEqual([d.to_name for d in b.items], ["d"])
+        self.assertEqual([n for n, _ in b.skipped], ["b"])
+        only = send.submit_batch(self.cfg, FakeRunner(strict=True), send.TERMINAL, ["b"], "hi", raw=False,
+                                 notify=False, now=NOW, status_fn=self.status_fn, restore=True)
+        self.assertIsInstance(only, str)
+        self.assertIn("沒有可以送的 session", only)
+
+    def test_cmd_send_passes_the_profile(self):
+        lines = []
+        send.cmd_send(self.cfg, FakeRunner(strict=True), lines.append, "b", "hi", wait=False, sleep=self.sleeps.append,
+                      clock=iter(range(0, 10_000, 100)).__next__, status_fn=self.status_fn, now_fn=lambda: NOW,
+                      restore=True, profile="work")
+        self.assertEqual(self.start.call_args.kwargs["profile"], "work")
+        send.cmd_send(self.cfg, FakeRunner(strict=True), lines.append, "d", "hi", wait=False, now_fn=lambda: NOW,
+                      status_fn=self.status_fn, profile="work")
+        self.assertEqual(lines[-1], f"❌ {send_restore.NEEDS_RESTORE}")
 
 
 if __name__ == "__main__":

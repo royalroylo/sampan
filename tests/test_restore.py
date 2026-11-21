@@ -896,6 +896,37 @@ class StartOneTest(Base):
         self.assertIn(f"--resume {A}", lines[0])
         self.assertIn("登記表沒有", self.start(self.runner(), "x", target_id="id-gone"))
 
+    def test_profile_changes_the_row_moves_the_transcript_and_launches_under_it(self):
+        self.transcript(A)
+        self.registry([Row("x", "claude", "alice", A, str(self.cwd), id="id-x")])
+        r = self.runner()
+        self.assertIsNone(self.start(r, "x", target_id="id-x", profile="work"))
+        from sampan.registry import load_rows
+        self.assertEqual(load_rows(self.cfg.registry_path)[0].profile, "work")
+        self.assertTrue(list((self.cfg.profiles["work"].projects_dir).rglob(f"{A}.jsonl")))
+        self.assertFalse(list((self.cfg.profiles["alice"].projects_dir).rglob(f"{A}.jsonl")))
+        lines = [k[1] for k in self.keys() if len(k) > 1 and k[1] != "Enter"]
+        self.assertEqual(len(lines), 1)
+        self.assertIn(f"CLAUDE_CONFIG_DIR={self.cfg.profiles['work'].config_dir}", lines[0])
+        self.assertIn(f"--resume {A}", lines[0])
+        self.assertIn("登記表改成 work", self.text())
+
+    def test_a_profile_that_cannot_be_switched_to_starts_nothing_and_changes_nothing(self):
+        self.registry([Row("x", "claude", "alice", A, str(self.cwd))])  # no transcript at all
+        r = self.runner()
+        why = self.start(r, "x", profile="work")
+        self.assertIn("找不到", why)
+        self.assertEqual(self.keys(), [])
+        self.assertEqual(r.called(["tmux", "-u", "new-session"]), [])
+        from sampan.registry import load_rows
+        self.assertEqual(load_rows(self.cfg.registry_path)[0].profile, "alice")
+
+    def test_the_same_profile_is_a_plain_reattach(self):
+        self.transcript(A)
+        self.registry([Row("x", "claude", "alice", A, str(self.cwd))])
+        self.assertIsNone(self.start(self.runner(), "x", profile="alice"))
+        self.assertNotIn("登記表改成", self.text())
+
     def test_an_agent_that_already_runs_is_not_started_twice(self):
         self.transcript(A)
         self.registry([Row("x", "claude", "alice", A, str(self.cwd))])

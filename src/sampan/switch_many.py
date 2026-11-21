@@ -6,8 +6,9 @@ from .restart import BUSY
 from .status import State, status_rows
 
 
-def plan(cfg, rows, names, profile, *, from_profile=None, own_pane=None):
-    """(names to switch, [(name, reason skipped)]) in the given order, each once. rows are StatusRows."""
+def plan(cfg, rows, names, profile, *, from_profile=None, own_pane=None, no_launch=False):
+    """(names to switch, [(name, reason skipped)]) in the given order, each once. rows are StatusRows. no_launch: only
+    stopped sessions are moved (a running one would have to be restarted, which is what no_launch avoids)."""
     by_name = {r.name: r for r in rows}
     try:
         cwds = {r.tmux: r.cwd for r in load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)}
@@ -33,6 +34,8 @@ def plan(cfg, rows, names, profile, *, from_profile=None, own_pane=None):
             why = f"已經是 {profile}"
         elif from_profile and row.profile != from_profile:
             why = f"目前不是 {from_profile}"
+        elif no_launch and row.state is not State.STOPPED:
+            why = f"不是已停止（{row.display}），--no-launch 只搬已停止的"
         elif row.agent_status == "waiting":
             why = "在等人回應"
         elif row.agent_status in BUSY:
@@ -81,7 +84,8 @@ def _names(cfg, refs, folder, out):
 
 
 def cmd_switch_many(cfg, run, out, ask, refs, profile, *, folder=None, from_profile=None, dry_run=False, yes=False,
-                    own_pane=None, on_prompt=None, switch_fn=session_run.cmd_switch, status_fn=status_rows):
+                    own_pane=None, on_prompt=None, switch_fn=session_run.cmd_switch, status_fn=status_rows,
+                    no_launch=False):
     """ask(prompt) answers the confirmation; None = not interactive (then yes is required). Returns 0 when everything
     switched or was skipped, 1 when a switch failed, 2 for wrong input."""
     if profile not in cfg.profiles:
@@ -101,7 +105,7 @@ def cmd_switch_many(cfg, run, out, ask, refs, profile, *, folder=None, from_prof
     if missing:
         out("❌ 找不到：" + "、".join(missing))
         return 2
-    go, skip = plan(cfg, rows, names, profile, from_profile=from_profile, own_pane=own_pane)
+    go, skip = plan(cfg, rows, names, profile, from_profile=from_profile, own_pane=own_pane, no_launch=no_launch)
     out(f"會換 {len(go)} 個：" + ("、".join(go) if go else "（無）"))
     if skip:
         out(f"跳過 {len(skip)} 個：" + "、".join(f"{n}（{why}）" for n, why in skip))
@@ -127,9 +131,10 @@ def cmd_switch_many(cfg, run, out, ask, refs, profile, *, folder=None, from_prof
         if now is not None and now.agent_status in BUSY:
             results.append((name, "略過", "開始前變忙了"))
             continue
-        rc = switch_fn(cfg, run, out, name, profile, own_pane=own_pane, on_prompt=on_prompt, warn_gap=False)
+        extra = {"no_launch": True} if no_launch else {}
+        rc = switch_fn(cfg, run, out, name, profile, own_pane=own_pane, on_prompt=on_prompt, warn_gap=False, **extra)
         if rc == 0:
-            results.append((name, "已換", profile))
+            results.append((name, "已換", f"{profile}（沒啟動）" if no_launch else profile))
         else:
             results.append((name, "失敗", f"rc {rc}"))
             worst = 1

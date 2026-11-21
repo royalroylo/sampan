@@ -763,6 +763,29 @@ class SwitchTest(MoveFixture):
         self.assertFalse(self.old_transcript().exists())
         self.assertEqual(self.keys, [])
 
+    def test_no_launch_moves_a_stopped_session_and_starts_nothing(self):
+        rc = self.stopped_switch(no_launch=True)
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.calls, [])  # restore was never called
+        self.assertEqual(self.row().profile, "work")
+        self.assertTrue(self.new_transcript().exists())
+        self.assertFalse(self.old_transcript().exists())
+        self.assertEqual(self.keys, [])
+        self.assertIn("沒有啟動", self.msgs[-1])
+
+    def test_no_launch_dry_run_says_it_would_not_start_and_changes_nothing(self):
+        self.assertEqual(self.stopped_switch(no_launch=True, dry_run=True), 0)
+        self.assertIn("不啟動", "\n".join(self.msgs))
+        self.assertNotIn("再用 work 接回", "\n".join(self.msgs))
+        self.assertEqual(self.row().profile, "alice")
+        self.assertTrue(self.old_transcript().exists())
+
+    def test_no_launch_refuses_a_running_session(self):
+        self.assertEqual(self.switch(no_launch=True), 2)
+        self.assertIn("--no-launch 只搬已停止的", self.msgs[-1])
+        self.assertEqual(self.keys, [])
+        self.assertEqual(self.row().profile, "alice")
+
     def test_interrupted_earlier_switch_is_completed(self):
         # an earlier switch moved the transcript, then the relaunch failed: the row may still say alice
         self.new_transcript().parent.mkdir(parents=True)

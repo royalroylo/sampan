@@ -18,7 +18,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import dispatch, folders, heartbeat, ids, inbox, machine, send, session_run
+from . import dispatch, folders, heartbeat, ids, inbox, machine, send, send_restore, session_run
 from .procs import list_procs
 from .prompts import SKIP
 from .registry import RegistryError, load_rows
@@ -69,7 +69,10 @@ TOOLS = [
          "restore": {"type": "boolean", "default": False,
                      "description": "對方已停止（不是 retired）時，先照 sampan restore 接回同一段對話、等它閒下來再送；接回會多吃記憶體"
                                 "（Mac 16G 同時最多接回 2 個，其餘排隊），所以預設 false。retired 的照舊拒絕，要先 sampan activate。"
-                                "接回與等待都在背景做，呼叫會立刻回派工編號；接回失敗（停在信任提示、逾時…）派工標 failed 並寫原因。不能跟 raw 一起用"}},
+                                "接回與等待都在背景做，呼叫會立刻回派工編號；接回失敗（停在信任提示、逾時…）派工標 failed 並寫原因。不能跟 raw 一起用"},
+         "profile": {"type": "string",
+                     "description": "對方已停止、要接回時改用這個 profile（等同接回前先 sampan switch：逐字稿搬過去、登記表永久改成它）；"
+                                    "必須搭配 restore=true；只限已停止的 Claude session，執行中、retired、Codex 都拒絕。核准畫面看得到這個參數"}},
          "required": ["session", "message"]}},
     {"name": "send_batch",
      "description": "同一則訊息一次送給多個 session。只送給執行中而且閒著的；忙的、沒在跑的（還有 raw 給 Codex 的）"
@@ -86,7 +89,10 @@ TOOLS = [
          "restore": {"type": "boolean", "default": False,
                      "description": "對方已停止（不是 retired）時，先照 sampan restore 接回同一段對話、等它閒下來再送；接回會多吃記憶體"
                                 "（Mac 16G 同時最多接回 2 個，其餘排隊），所以預設 false。retired 的照舊拒絕，要先 sampan activate。"
-                                "接回與等待都在背景做，呼叫會立刻回派工編號；接回失敗（停在信任提示、逾時…）派工標 failed 並寫原因。不能跟 raw 一起用"}},
+                                "接回與等待都在背景做，呼叫會立刻回派工編號；接回失敗（停在信任提示、逾時…）派工標 failed 並寫原因。不能跟 raw 一起用"},
+         "profile": {"type": "string",
+                     "description": "對方已停止、要接回時改用這個 profile（等同接回前先 sampan switch：逐字稿搬過去、登記表永久改成它）；"
+                                    "必須搭配 restore=true；只限已停止的 Claude session，執行中、retired、Codex 都拒絕。核准畫面看得到這個參數"}},
          "required": ["sessions", "message"]}},
     {"name": "new_session",
      "description": "開一個新的 sampan session，並把 message 當作它的第一個 prompt。回傳派工編號，之後用 dispatch_result 看回覆。",
@@ -243,6 +249,16 @@ def _batch_item(d):
     elif d.reason:
         out["reason"] = d.reason
     return out
+
+
+def _profile_arg(args):
+    """The optional `profile` of send / send_batch: a non-empty string, or "" when not given (ToolError otherwise)."""
+    profile = args.get("profile", "")
+    if profile is None:
+        return ""
+    if not isinstance(profile, str) or profile != profile.strip():
+        raise ToolError("參數 profile 要是 profile 名稱的字串")
+    return profile
 
 
 class Server:
@@ -513,12 +529,15 @@ class Server:
     def tool_send(self, args):
         to, message = _arg_str(args, "session"), _arg_str(args, "message")
         wait, raw, restore = args.get("wait", False), args.get("raw", False), args.get("restore", False)
+        profile = _profile_arg(args)
         if not isinstance(wait, bool):
             raise ToolError("參數 wait 要是 true 或 false")
         if not isinstance(raw, bool):
             raise ToolError("參數 raw 要是 true 或 false")
         if not isinstance(restore, bool):
             raise ToolError("參數 restore 要是 true 或 false")
+        if profile and not restore:
+            raise ToolError(send_restore.NEEDS_RESTORE)
         if restore and raw:
             raise ToolError(send.REASON_RESTORE_RAW)
         if session_run.has_control(to):
@@ -534,7 +553,8 @@ class Server:
         if problem:
             raise ToolError(problem)
         d = send.submit(self.cfg, self.run, caller, to, message, notify=not wait, now=self.now_fn(),
-                        snapshot_fn=self.snapshot_fn, status_fn=self.status_fn, raw=raw, restore=restore)
+                        snapshot_fn=self.snapshot_fn, status_fn=self.status_fn, raw=raw, restore=restore,
+                        profile=profile)
         if isinstance(d, str):
             raise ToolError(d)
         self.mine.add(d.id)
@@ -564,15 +584,18 @@ class Server:
             if session_run.has_control(n):
                 raise ToolError(f"session 名稱不能含換行或控制字元：{n!r}")
         wait, raw, restore = args.get("wait", False), args.get("raw", False), args.get("restore", False)
+        profile = _profile_arg(args)
         if not isinstance(wait, bool):
             raise ToolError("參數 wait 要是 true 或 false")
         if not isinstance(raw, bool):
             raise ToolError("參數 raw 要是 true 或 false")
         if not isinstance(restore, bool):
             raise ToolError("參數 restore 要是 true 或 false")
+        if profile and not restore:
+            raise ToolError(send_restore.NEEDS_RESTORE)
         caller = self._refresh_caller()
         b = send.submit_batch(self.cfg, self.run, caller, names, message, raw=raw, notify=not wait, now=self.now_fn(),
-                              snapshot_fn=self.snapshot_fn, status_fn=self.status_fn, restore=restore)
+                              snapshot_fn=self.snapshot_fn, status_fn=self.status_fn, restore=restore, profile=profile)
         if isinstance(b, str):
             raise ToolError(b)
         self.mine.update([b.id] + [d.id for d in b.items])

@@ -470,11 +470,11 @@ class CliTest(unittest.TestCase):
                 mock.patch("sampan.send.command_caller", return_value=TERMINAL):
             self.assertEqual(cli.main(["send", "api", "多行\n訊息", "--wait", "--timeout", "30"]), 124)
         self.assertEqual(cs.call_args.args[3:], ("api", "多行\n訊息"))
-        self.assertEqual(cs.call_args.kwargs, {"wait": True, "timeout": 30, "caller": TERMINAL, "raw": False, "restore": False})
+        self.assertEqual(cs.call_args.kwargs, {"wait": True, "timeout": 30, "caller": TERMINAL, "raw": False, "restore": False, "profile": None})
         with mock.patch("sampan.send.cmd_send", return_value=0) as cs, \
                 mock.patch("sampan.send.command_caller", return_value=TERMINAL):
             self.assertEqual(cli.main(["send", "api", "hi"]), 0)
-        self.assertEqual(cs.call_args.kwargs, {"wait": False, "timeout": 600, "caller": TERMINAL, "raw": False, "restore": False})
+        self.assertEqual(cs.call_args.kwargs, {"wait": False, "timeout": 600, "caller": TERMINAL, "raw": False, "restore": False, "profile": None})
         with mock.patch("sampan.send.cmd_send", return_value=0) as cs, \
                 mock.patch("sampan.send.command_caller", return_value=TERMINAL):
             self.assertEqual(cli.main(["send", "api", "/compact", "--raw"]), 0)
@@ -493,6 +493,31 @@ class CliTest(unittest.TestCase):
             self.assertIs(cb.call_args.kwargs["restore"], True)
             self.assertEqual(cli.main(["send-batch", "a", "b", "-m", "hi"]), 0)
             self.assertIs(cb.call_args.kwargs["restore"], False)
+
+    def test_send_and_send_batch_pass_profile(self):
+        with mock.patch("sampan.send.cmd_send", return_value=0) as cs, \
+                mock.patch("sampan.send.command_caller", return_value=TERMINAL):
+            self.assertEqual(cli.main(["send", "api", "hi", "--restore", "--profile", "work"]), 0)
+        self.assertEqual((cs.call_args.kwargs["restore"], cs.call_args.kwargs["profile"]), (True, "work"))
+        with mock.patch("sampan.send.cmd_send_batch", return_value=0) as cb, \
+                mock.patch("sampan.send.command_caller", return_value=TERMINAL), \
+                mock.patch("sampan.cli._resolve_refs", return_value=["a", "b"]):
+            self.assertEqual(cli.main(["send-batch", "a", "b", "-m", "hi", "--restore", "--profile", "work"]), 0)
+        self.assertEqual((cb.call_args.kwargs["restore"], cb.call_args.kwargs["profile"]), (True, "work"))
+
+    def test_switch_passes_no_launch(self):
+        with mock.patch("sampan.session_run.cmd_switch", return_value=0) as sw, \
+                mock.patch("sampan.cli._resolve_one", return_value="a"):
+            self.assertEqual(cli.main(["switch", "a", "work", "--no-launch"]), 0)
+            self.assertIs(sw.call_args.kwargs["no_launch"], True)
+            self.assertEqual(cli.main(["switch", "a", "work"]), 0)
+            self.assertIs(sw.call_args.kwargs["no_launch"], False)
+        with mock.patch("sampan.switch_many.cmd_switch_many", return_value=0) as many, \
+                mock.patch("sampan.send.command_caller", return_value=TERMINAL), \
+                mock.patch("sampan.runner.run", FakeRunner(strict=True)), \
+                mock.patch("sampan.cli._resolve_refs", return_value=["a", "b"]):
+            self.assertEqual(cli.main(["switch", "a", "b", "work", "--no-launch", "--yes"]), 0)
+            self.assertIs(many.call_args.kwargs["no_launch"], True)
 
     def test_send_run_by_an_agent_is_labelled_as_that_session(self):  # final review 9
         import dataclasses

@@ -1499,3 +1499,37 @@ class RestoreToolTest(Base):
         self.assertIn("sampan activate e", body["skipped"][0]["reason"])
         self.assertTrue(c.response(3)["result"]["isError"])
         self.start.assert_not_called()
+
+    def test_both_tools_describe_profile(self):
+        tools = {t["name"]: t for t in mcp_server.tools_list(True)}
+        for name in ("send", "send_batch"):
+            prop = tools[name]["inputSchema"]["properties"]["profile"]
+            self.assertEqual(prop["type"], "string")
+            for word in ("restore=true", "sampan switch", "核准", "retired"):
+                self.assertIn(word, prop["description"], (name, word))
+            self.assertNotIn("profile", tools[name]["inputSchema"]["required"])
+
+    def test_profile_is_recorded_on_the_dispatch_and_needs_restore(self):
+        c = self.serve(Client([init(1), call(2, "send", {"session": "b", "message": "hi", "restore": True,
+                                                         "profile": "work"}),
+                               call(3, "send", {"session": "d", "message": "hi", "profile": "work"}),
+                               call(4, "send", {"session": "d", "message": "hi", "restore": True, "profile": 7}),
+                               call(5, "send", {"session": "d", "message": "hi", "restore": True, "profile": "nope"}),
+                               call(6, "send_batch", {"sessions": ["d"], "message": "hi", "profile": "work"})]),
+                       run=FakeRunner(strict=True), confirm=False)
+        [d] = self.dispatches()
+        self.assertEqual((d.to_name, d.extra["restore_profile"]), ("b", "work"))
+        self.assertFalse(c.response(2)["result"]["isError"])
+        for rid, text in ((3, "--profile 要跟 --restore 一起用"), (4, "profile"), (5, "未知的 profile"),
+                          (6, "--profile 要跟 --restore 一起用")):
+            self.assertTrue(c.response(rid)["result"]["isError"], rid)
+            self.assertIn(text, tool_text(c.response(rid)))
+        self.start.assert_not_called()
+
+    def test_send_batch_with_profile_queues_stopped_ones_under_it(self):
+        c = self.serve(Client([init(1), call(2, "send_batch", {"sessions": ["b", "d"], "message": "hi",
+                                                               "restore": True, "profile": "work"})]),
+                       run=FakeRunner(strict=True), confirm=False)
+        self.assertEqual([i["state"] for i in tool_json(c.response(2))["items"]], ["queued", "queued"])
+        self.assertEqual({d.extra["restore_profile"] for d in self.dispatches()}, {"work"})
+

@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from .status import State
 
 RESTORE = "restore"  # extra key: the sender asked for the stopped target to be reattached first
+PROFILE = "restore_profile"  # extra key: reattach under this profile (a permanent switch of the registry row), "" = as registered
 LAUNCHES = "restore_launches"  # extra key: how many times the launch line was claimed for this dispatch
 PHASE = "restore_phase"  # extra key: "", launching, starting, rc or ready
 PHASE_AT = "restore_at"  # extra key: when the phase began (UTC ISO)
@@ -32,6 +33,12 @@ MAX_LAUNCHES = 2  # a dispatch's target is launched at most this often (up, then
 HOLD_MAX_S = START_LIMIT_S + 120  # a place held by a phase older than this is an orphan (nobody advances it): free it
 RC_STALE_S = 120  # a Remote Control reset claim with no result after this long: carry on to the delivery
 
+NEEDS_RESTORE = "--profile 要跟 --restore 一起用"
+PROFILE_RUNNING = "{name} 在執行中，不換 profile；要換用 sampan switch {name} {profile}"
+PROFILE_AGENT = "{name} 是 {agent}，只有 Claude session 能換 profile"
+PROFILE_UNKNOWN = "未知的 profile：{profile}（設定檔裡有：{known}）"
+PROFILE_DISABLED = "profile {profile} 已停用（sampan profile enable {profile}）"
+PROFILE_CONFLICT = "{name} 已有一則排隊中的接回派工要用「{other}」，這則要用「{mine}」；等那則做完或取消再送"
 REASON_NOT_CLAIMED = "對方已停止，等接回"  # restore asked, but this look may not start anything (a tool result's own look)
 REASON_RESTORING = "對方已停止，接回中"
 REASON_STARTING = "對方接回中，等它啟動"

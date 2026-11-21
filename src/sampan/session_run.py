@@ -886,13 +886,70 @@ def gap_line(cfg, old, new):
     return f"⚠ {new} 沒有裝：{'、'.join(gap)}（換過去後這些 plugin 用不到）" if gap else None
 
 
+def rehome_stopped(cfg, run, out, name, row, profile, *, dry_run=False, launch=True):
+    """Change a stopped, active Claude session's registry row to `profile`, moving its transcript where the new profile
+    can see it (never copied: one copy of the conversation). The part of `sampan switch` that is the same whether or
+    not the session is launched afterwards (`switch`, `switch --no-launch`, `send --restore --profile`). None when the
+    row is changed (or, with dry_run, would be); else the exit code: a message was printed, nothing was changed."""
+    if row.state != "active":
+        out(f"❌ {name} 是 {row.state}；要接回請先 sampan activate {name}")
+        return 2
+    if not Path(row.cwd).is_dir():
+        out(f"❌ {name}：目錄不存在 {row.cwd}，不換")
+        return 2
+    from .restore import _observe, _old_agent_alive
+    try:
+        live = _observe(cfg, run)
+    except TmuxUnreadable as e:
+        out(f"❌ {e}；不動 {name}")
+        return 2
+    where = live.by_id.get(row.session_id)
+    if where is not None or _old_agent_alive(live.procs, os.kill, row.pid):
+        out(f"❌ {name}：這個對話{f'已在 {where} 執行' if where else '上次記錄的 claude 還在執行'}，不換（避免兩邊同時寫）")
+        return 1
+    key = (row.session_id, row.cwd, row.profile, row.state)
+    _carry, why = transcript_carry(cfg.profiles.values(), row.profile, profile, row.session_id)
+    if why:
+        out(f"❌ {name}：{why}，不動")
+        return 1
+    if dry_run:
+        moved = f"搬逐字稿到 {profile}、" if _carry else ""
+        then = f"，再用 {profile} 接回" if launch else "，不啟動"
+        out(f"[dry-run] {name}（已停止）：{moved}登記表改成 {profile}{then}")
+        return 0
+    with lock(cfg.state_dir):
+        rows = _load(cfg, out)
+        if rows is None:
+            return 2
+        row = next((r for r in rows if r.tmux == name), None)
+        if row is None or (row.session_id, row.cwd, row.profile, row.state) != key:
+            out(f"❌ {name} 的登記剛被改過，什麼都沒動；再試一次")
+            return 1
+        carry, why = transcript_carry(cfg.profiles.values(), row.profile, profile, row.session_id)  # again, under the lock
+        if why:
+            out(f"❌ {name}：{why}，不動")
+            return 1
+        if carry is not None:
+            try:
+                move_transcript(carry, cfg.profiles[profile].projects_dir)
+            except OSError as e:
+                out(f"❌ {name}：逐字稿搬不過去（{e}），什麼都沒改")
+                return 1
+            out(f"  已把逐字稿搬到 {profile}")
+        row.profile = profile
+        write_rows(cfg.registry_path, rows, now_iso(), cfg.history_dir, machine=registry_machine(cfg))
+    return None
+
+
 def cmd_switch(cfg, run, out, name, profile, *, dry_run=False, own_pane=None, on_prompt=None, warn_gap=True,
-               sleep=time.sleep, timeout=60, proc_root=Path("/proc"), restore_fn=None):
+               sleep=time.sleep, timeout=60, proc_root=Path("/proc"), restore_fn=None, no_launch=False):
     """Continue a Claude session's conversation under another profile (another account, e.g. when one has used up its
     quota). A running session goes through cmd_move's flow in its own directory: /exit → relaunch with the new
     CLAUDE_CONFIG_DIR → trust only that directory → save. A stopped one gets its registry row changed and is restored
     under the new profile right away. A transcript the new profile cannot see is moved to it, never copied, so there is
-    only ever one copy of the conversation."""
+    only ever one copy of the conversation.
+    no_launch: only for a stopped session: move the transcript and change the registry row, but start nothing (several
+    stopped sessions can be moved to another account without reattaching them all at once)."""
     if not dry_run:
         label = f"switch {_who(cfg, name)} → {profile}"
         out = actionlog.tee(cfg, label, out)
@@ -925,55 +982,20 @@ def cmd_switch(cfg, run, out, name, profile, *, dry_run=False, own_pane=None, on
         out(f"❌ {e}；不動 {name}")
         return 2
     if any(p.session == name for p in panes):
+        if no_launch:
+            out(f"❌ {name} 在執行中；--no-launch 只搬已停止的 session（要換就用不帶 --no-launch 的 sampan switch {name} {profile}）")
+            return 2
         return cmd_move(cfg, run, out, name, row.cwd, profile=profile, dry_run=dry_run, sleep=sleep, timeout=timeout,
                         own_pane=own_pane, proc_root=proc_root, on_prompt=on_prompt)
     # stopped: no agent to end; change the registry row, then reattach under the new profile
-    if row.state != "active":
-        out(f"❌ {name} 是 {row.state}；要接回請先 sampan activate {name}")
-        return 2
-    if not Path(row.cwd).is_dir():
-        out(f"❌ {name}：目錄不存在 {row.cwd}，不換")
-        return 2
-    from .restore import _observe, _old_agent_alive
-    try:
-        live = _observe(cfg, run)
-    except TmuxUnreadable as e:
-        out(f"❌ {e}；不動 {name}")
-        return 2
-    where = live.by_id.get(row.session_id)
-    if where is not None or _old_agent_alive(live.procs, os.kill, row.pid):
-        out(f"❌ {name}：這個對話{f'已在 {where} 執行' if where else '上次記錄的 claude 還在執行'}，不換（避免兩邊同時寫）")
-        return 1
-    key = (row.session_id, row.cwd, row.profile, row.state)
-    _carry, why = transcript_carry(cfg.profiles.values(), row.profile, profile, row.session_id)
-    if why:
-        out(f"❌ {name}：{why}，不動")
-        return 1
+    rc = rehome_stopped(cfg, run, out, name, row, profile, dry_run=dry_run, launch=not no_launch)
+    if rc is not None:
+        return rc
     if dry_run:
-        moved = f"搬逐字稿到 {profile}、" if _carry else ""
-        out(f"[dry-run] {name}（已停止）：{moved}登記表改成 {profile}，再用 {profile} 接回")
         return 0
-    with lock(cfg.state_dir):
-        rows = _load(cfg, out)
-        if rows is None:
-            return 2
-        row = next((r for r in rows if r.tmux == name), None)
-        if row is None or (row.session_id, row.cwd, row.profile, row.state) != key:
-            out(f"❌ {name} 的登記剛被改過，什麼都沒動；再試一次")
-            return 1
-        carry, why = transcript_carry(cfg.profiles.values(), row.profile, profile, row.session_id)  # again, under the lock
-        if why:
-            out(f"❌ {name}：{why}，不動")
-            return 1
-        if carry is not None:
-            try:
-                move_transcript(carry, cfg.profiles[profile].projects_dir)
-            except OSError as e:
-                out(f"❌ {name}：逐字稿搬不過去（{e}），什麼都沒改")
-                return 1
-            out(f"  已把逐字稿搬到 {profile}")
-        row.profile = profile
-        write_rows(cfg.registry_path, rows, now_iso(), cfg.history_dir, machine=registry_machine(cfg))
+    if no_launch:
+        out(f"✔ {name}：登記表改成 {profile}，沒有啟動（之後 sampan restore {name}、或 send --restore 時用 {profile}）")
+        return 0
     out(f"✔ {name}：登記表改成 {profile}，接回中…")
     if restore_fn is None:
         from .restore import cmd_restore as restore_fn

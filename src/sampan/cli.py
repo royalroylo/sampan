@@ -70,6 +70,8 @@ def build_parser():
     sw.add_argument("--yes", action="store_true", help="多個一起換時不再問「開始？」")
     sw.add_argument("--timeout", type=int, default=60, help="等 claude 結束／接回的秒數（預設 60）")
     sw.add_argument("--dry-run", action="store_true")
+    sw.add_argument("--no-launch", action="store_true",
+                    help="只搬已停止的 session：搬逐字稿、改登記表，不啟動（執行中的跳過；一次搬很多個又不想同時接回時用）")
     fg = sub.add_parser("forget", help="從登記表移除沒在跑的 session（可一次多個；對話紀錄不刪，會印出手動接回的指令）")
     fg.add_argument("names", nargs="+", metavar="name")
     fg.add_argument("--dry-run", action="store_true")
@@ -86,6 +88,8 @@ def build_parser():
     sd.add_argument("--restore", action="store_true",
                     help="對方已停止時先接回它再送（接回會多吃記憶體，所以預設不做；retired 的不接回）；"
                          "指令會等到訊息送出或接回失敗才結束，不能跟 --raw 一起用")
+    sd.add_argument("--profile", metavar="PROFILE",
+                    help="搭配 --restore：已停止的對方改用這個 profile 接回（等同先 sampan switch：逐字稿搬過去、登記表永久改成它）")
     sb = sub.add_parser("send-batch",
                         usage="sampan send-batch <名稱>... -m 訊息 [--raw] [--restore] [--wait] [--timeout 秒] | "
                               "sampan send-batch --folder <路徑> -m 訊息 [...]",
@@ -100,6 +104,8 @@ def build_parser():
     sb.add_argument("--restore", action="store_true",
                     help="已停止的也送：排隊、接回後再送（同時最多接回 2 個，會多吃記憶體；retired 的跳過）；"
                          "指令會等到都送出或接回失敗才結束，不能跟 --raw 一起用")
+    sb.add_argument("--profile", metavar="PROFILE",
+                    help="搭配 --restore：已停止的對方改用這個 profile 接回（永久改登記表，同 sampan switch）；執行中而且不在這個 profile 的跳過")
     mh = sub.add_parser("machine", help="這台機器的 id 與名稱（--name 改名；id 不變）")
     mh.add_argument("--name", help="新的機器名稱")
     ds = sub.add_parser("dispatches", usage="sampan dispatches [--all] [--by-target] | sampan dispatches show <編號> [--wait 秒] | "
@@ -521,7 +527,7 @@ def _switch_many(cfg, run, out, args, refs):
     on_prompt, want = _prompt_fn()
     rc = cmd_switch_many(cfg, run, out, input if tty else None, refs, args.profile, folder=args.folder,
                          from_profile=args.from_profile, dry_run=args.dry_run, yes=args.yes,
-                         own_pane=os.environ.get("TMUX_PANE"), on_prompt=on_prompt)
+                         own_pane=os.environ.get("TMUX_PANE"), on_prompt=on_prompt, no_launch=args.no_launch)
     return _go_in(run, want, rc)
 
 
@@ -624,7 +630,7 @@ def _dispatch(cfg, args):
             return 2
         message = sys.stdin.read() if args.message == "-" else args.message
         return cmd_send(cfg, run, out, to, message, wait=args.wait, timeout=args.timeout, caller=caller,
-                        raw=args.raw, restore=args.restore)
+                        raw=args.raw, restore=args.restore, profile=args.profile)
     if cmd == "send-batch":
         from .send import cmd_send_batch, command_caller
         if bool(args.names) == (args.folder is not None):
@@ -641,7 +647,7 @@ def _dispatch(cfg, args):
             return 2
         message = sys.stdin.read() if args.message == "-" else args.message
         return cmd_send_batch(cfg, run, out, names, message, raw=args.raw, wait=args.wait, timeout=args.timeout,
-                              caller=caller, restore=args.restore)
+                              caller=caller, restore=args.restore, profile=args.profile)
     if cmd == "dispatches":
         from .send import cmd_cancel, cmd_dispatches, cmd_inbox, cmd_resend, cmd_search, cmd_show
         if args.wait is not None and args.action != "show":
@@ -791,7 +797,7 @@ def _dispatch(cfg, args):
             on_prompt, want = _prompt_fn()
             rc = session_run.cmd_switch(cfg, run, out, args.name, args.profile, dry_run=args.dry_run,
                                         timeout=args.timeout, own_pane=os.environ.get("TMUX_PANE"),
-                                        on_prompt=on_prompt)
+                                        on_prompt=on_prompt, no_launch=args.no_launch)
             return _go_in(run, want, rc)
         if cmd == "move":
             return session_run.cmd_move(cfg, run, out, args.name, args.dest, dry_run=args.dry_run,

@@ -86,6 +86,26 @@ class RunTest(Env):
         self.assertIn("c  已換  work", t)
         self.assertIn("b  略過  已經是 work", t)
 
+    def test_no_launch_moves_only_stopped_ones_and_passes_the_flag(self):
+        self.reg("down", "up", "down2")
+        rows = [status_row("down", State.STOPPED, agent_status="-"), status_row("up"),
+                status_row("down2", State.STOPPED, agent_status="-")]
+        go, skip = plan(self.cfg, rows, ["down", "up", "down2"], "work", no_launch=True)
+        self.assertEqual(go, ["down", "down2"])
+        self.assertEqual([n for n, _ in skip], ["up"])
+        self.assertIn("--no-launch 只搬已停止的", skip[0][1])
+        rc = self.go(rows, ["down", "up", "down2"], yes=True, no_launch=True)
+        self.assertEqual(rc, 0)
+        self.assertEqual([(n, p, kw) for n, p, kw in self.calls],
+                         [("down", "work", {"own_pane": None, "on_prompt": None, "warn_gap": False, "no_launch": True}),
+                          ("down2", "work", {"own_pane": None, "on_prompt": None, "warn_gap": False, "no_launch": True})])
+        self.assertIn("work（沒啟動）", self.text())
+
+    def test_without_no_launch_the_call_is_unchanged(self):
+        self.reg("a")
+        self.go([status_row("a")], ["a"], yes=True)
+        self.assertEqual(self.calls[0][2], {"own_pane": None, "on_prompt": None, "warn_gap": False})
+
     def test_turned_busy_before_start_is_skipped_others_continue(self):
         self.reg("a", "b")
         self.turn_busy = {"a": 1}
