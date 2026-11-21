@@ -329,9 +329,12 @@ MODEL_MAX = 100
 
 def model_problem(model):
     """Why a model string cannot be used, or None. Only what is clearly a typo is refused (empty, a space or any
-    control character, too long); whether Claude knows the model is Claude's business, it is passed on as given."""
+    control character, too long, a leading dash that Claude would take for another option); whether Claude knows the
+    model is Claude's business, it is passed on as given."""
     if not model:
         return "模型不能是空的"
+    if model.startswith("-"):
+        return f"模型不能以 - 開頭：{model!r}（會被當成別的選項）"
     if len(model) > MODEL_MAX:
         return f"模型最多 {MODEL_MAX} 個字，這個有 {len(model)} 個"
     if any(c.isspace() or unicodedata.category(c) == "Cc" for c in model):

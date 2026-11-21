@@ -114,7 +114,7 @@ class LaunchTest(unittest.TestCase):
 
 class ModelProblemTest(unittest.TestCase):
     def test_only_clear_typos_are_refused(self):
-        for bad in ("", "sonnet 5", "a\nb", "x\x1b[0m", "a\tb", "m" * (MODEL_MAX + 1)):
+        for bad in ("", "sonnet 5", "a\nb", "x\x1b[0m", "a\tb", "m" * (MODEL_MAX + 1), "--help", "-p"):
             self.assertIsNotNone(model_problem(bad), repr(bad))
         for good in ("opus[1m]", "sonnet", "claude-sonnet-5-5", "some-future-model@2", "m" * MODEL_MAX):
             self.assertIsNone(model_problem(good), repr(good))
