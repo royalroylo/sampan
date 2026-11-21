@@ -145,6 +145,8 @@ def card_lines(cfg, row, info, now):
         lines.append(_label("agent", "codex"))
     elif row.agent not in ("-", ""):
         lines.append(_label("agent", f"{row.agent} ・ {row.profile or '-'}"))
+    if row.model:
+        lines.append(_label("模型", row.model))
     if info.get("cwd"):
         lines.append(_label("目錄", _short(cfg, info["cwd"])))
     if row.sid:
@@ -167,6 +169,8 @@ def restore_card(cfg, c, now, quote=""):
     r = c.row
     lines = [r.tmux, "─" * 200, StateLine(_label("狀態", "已停止"), State.STOPPED),
              _label("agent", "codex" if r.agent == "codex" else f"{r.agent} ・ {r.profile or '-'}")]
+    if getattr(r, "model", ""):
+        lines.append(_label("模型", r.model))
     lines.append(_label("目錄", _short(cfg, r.cwd) if cfg is not None else r.cwd))
     lines.append(_label("對話", r.session_id[:8]))
     if c.last:

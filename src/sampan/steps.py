@@ -189,7 +189,7 @@ def _on_disconnect(menu):
 def launch_cmd(cfg, row, *, profile=None, cwd=None):
     """The line `launch` sends (also what dry runs print): resume the row's conversation, named by its alias."""
     return launch_line(cfg, row.agent, profile or row.profile, resume=row.session_id, cwd=cwd,
-                       name=display_name(row))
+                       name=display_name(row), model=getattr(row, "model", "") or None)
 
 
 def launch(cfg, tmux, target, row, *, profile=None, cwd=None, sleep, clear=True):

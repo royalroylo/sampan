@@ -37,7 +37,7 @@
   "sessions": [
     {"tmux": "work", "agent": "claude", "profile": "alice", "session_id": "…",
      "cwd": "/Users/u/proj", "state": "active", "seen_at": "2026-01-01T09:00:00+00:00",
-     "server": "…", "pid": 12345, "id": "…", "alias": ""}
+     "server": "…", "pid": 12345, "id": "…", "alias": "", "model": "sonnet[1m]"}
   ]
 }
 ```
@@ -54,6 +54,7 @@
 | `server` | 最後一次看到時的 tmux server 識別（pid 與啟動時間），用來分辨「使用者關掉了」與「重開機後等待接回」 |
 | `pid` | 最後一次看到的 agent 行程，整數或 `null` |
 | `id` | 這個 session 固定的 id（`str(uuid.uuid4())`），改名、搬資料夾、換 profile 都不變；畫面顯示前 8 碼。指令與 MCP 工具可用名稱、完整 id、或 ≥ 8 碼且唯一的前綴指定（不唯一時回錯並列出候選：名稱加前 8 碼） |
+| `model` | 選填（0.20）：這個 Claude session 啟動時帶的 `--model` 值；沒設就**沒有這個 key**（檔案跟舊版寫的一樣）。只是啟動參數，不寫 profile 的 `settings.json`；Codex 的列不能設。舊版 sampan 讀到有 `model` 的列會拒絕讀這份登記表（跟任何不認得的 key 一樣，不會覆蓋檔案）；先 `sampan model <名稱> --clear` 再降版 |
 | `alias` | 別名：自由文字、不可空白、不含控制字元、最長 50 字；`""` 是沒設（以名稱代替）。改別名不動 tmux 也不動 id，下次啟動才套用到 Claude 的 `--name` 與 Remote Control 名稱 |
 
 `version = 1`、`2` 的舊檔仍可讀（缺的 `agent` 視為 `claude`、`pid` 視為 `null`、`id` 與 `alias` 由 `sampan migrate` 補上），0.15 寫入時一律是 3。0.14 以前的 sampan 讀到 3 會拒絕、不覆蓋；要降到 0.14 就先降到 0.16、在那裡跑 `sampan migrate --revert`（見下）。每次改寫前，若 session 有實際變動（`seen_at`、`pid`、`server` 不算），會把舊檔複製到 `history/registry-<時間>.json`（保留最近 20 份）。時間（`saved_at`、`seen_at`、歷史檔名）一律以 UTC 寫入（`+00:00`），畫面上顯示時才換成本地時間；舊版留下的歷史檔名可能是本地時間。
@@ -169,9 +170,9 @@ stdio MCP server（每行一則 JSON-RPC 2.0；協定版本 `2025-06-18`，clien
 
 | 工具 | 參數 | 回傳 | 核准 |
 |---|---|---|---|
-| `list_sessions` | 無 | `machine`（`id`、`name`：這台機器）；`sessions`：每列 `name`、`id`（完整 id；其他工具可用名稱或 id 指定）、`machine`（這台機器的 id）、`alias`（沒設是 `""`）、`agent`、`profile`、`cwd`、`folder`（所在資料夾，`""` 是最上層；`folders.json` 讀不到時全是 `""`，`warning` 說明）、`state`（`running`、`stopped`…）、`activity`（`idle`、`busy`…）、`last`（UTC ISO 或 `null`）；讀不到 tmux 時多一個 `warning` | 不問 |
+| `list_sessions` | 無 | `machine`（`id`、`name`：這台機器）；`sessions`：每列 `name`、`id`（完整 id；其他工具可用名稱或 id 指定）、`machine`（這台機器的 id）、`alias`（沒設是 `""`）、`model`（沒設是 `""`）、`agent`、`profile`、`cwd`、`folder`（所在資料夾，`""` 是最上層；`folders.json` 讀不到時全是 `""`，`warning` 說明）、`state`（`running`、`stopped`…）、`activity`（`idle`、`busy`…）、`last`（UTC ISO 或 `null`）；讀不到 tmux 時多一個 `warning` | 不問 |
 | `send` | `session`（名稱或 id）、`message`、`raw`（預設 `false`，直接送：單行、`/` 開頭、最長 500 字、只限 Claude）、`wait`（預設 `false`） | `dispatch`、`state`，做完時有 `reply`，還沒送出時有 `reason`。`wait` 最多等 60 秒；沒等到的照樣留著，完成或失敗時往呼叫者的 session 送一則通知 | 問 |
-| `new_session` | `name`、`target`（`claude:<profile>`、`<profile>` 或 `codex`）、`cwd`、`message`、`folder`（選填，跟 `sampan new --folder` 一樣，沒有就建立） | `dispatch`（跟 `sampan new --message` 一樣，開場訊息的派工）。新目錄的信任提示：`confirm = true` 而且呼叫的是 Claude Code（它的權限提示顯示完整參數；Codex 還沒確認，不自動信任）時，你已在權限提示看過 `cwd`，sampan 只替你信任「提示上顯示的正是這個 `cwd`」的那一個；其他提示（別的目錄、更新、認不出的選單）和 `confirm = false` 時一律不按鍵，回 `isError` 說停在哪個提示、`tmux attach -t <名稱>` 進去處理，開場訊息處理完才開始（派工照樣可用 `dispatch_result` 看）。Claude 在時限內沒啟動完成（例如停在登入或主題畫面）也回 `isError`；已替你信任的目錄會寫在訊息裡 | 問 |
+| `new_session` | `name`、`target`（`claude:<profile>`、`<profile>` 或 `codex`）、`cwd`、`message`、`folder`（選填，跟 `sampan new --folder` 一樣，沒有就建立）、`model`（選填，跟 `sampan new --model` 一樣，Claude 專用） | `dispatch`（跟 `sampan new --message` 一樣，開場訊息的派工）。新目錄的信任提示：`confirm = true` 而且呼叫的是 Claude Code（它的權限提示顯示完整參數；Codex 還沒確認，不自動信任）時，你已在權限提示看過 `cwd`，sampan 只替你信任「提示上顯示的正是這個 `cwd`」的那一個；其他提示（別的目錄、更新、認不出的選單）和 `confirm = false` 時一律不按鍵，回 `isError` 說停在哪個提示、`tmux attach -t <名稱>` 進去處理，開場訊息處理完才開始（派工照樣可用 `dispatch_result` 看）。Claude 在時限內沒啟動完成（例如停在登入或主題畫面）也回 `isError`；已替你信任的目錄會寫在訊息裡 | 問 |
 | `send_batch` | `sessions`（名稱清單，不能重複）、`message`、`raw`（預設 `false`）、`wait`（預設 `false`，最多 60 秒） | `batch`（批次編號）、`items`（每筆 `session`、`dispatch`、`state`、`reply`／`reason`）、`skipped`（**清單**，每筆 `session`、`reason`）。只送給執行中而且閒著的，其他不排隊；整批做完才送一則通知 | 問（一次） |
 | `dispatch_result` | `id`（派工編號，或 `send_batch` 的批次編號）、`wait`（0–60 秒，預設 0） | `dispatch`、`state`、`label`、`to`、`reply`（最新那一段）、`reason`，加上 0.17 的 `status`、`status_label`、`replies`（每段：`id`、`how`、`how_label`、`at`、`latest`、`late`、`text` 最多 2,000 字）、`deliveries`（每次送達）、`last_ring`（最後一次門鈴）、`merged_with`（一起送的其他派工）；舊的欄位不變。給批次編號時回整批：`batch`、`items`，`skipped` 是**數字**（跳過幾個） | 不問 |
 | `cancel_dispatch` | `id`（派工編號；批次編號會被拒絕，要逐筆取消） | `dispatch`、`state`；排隊中的取消（已按門鈴的也一樣），已送出的改成不再等回覆（多一個 `reason`「寄件者已取消」） | 問 |

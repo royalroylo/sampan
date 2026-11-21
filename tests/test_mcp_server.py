@@ -684,7 +684,7 @@ class SendToolTest(Base):
         rows = {r["name"]: r for r in tool_json(c.response(2))["sessions"]}
         self.assertEqual(rows["b"], {"name": "b", "id": "", "machine": mcp_server.machine.load_or_create(self.cfg.path).id,
                                      "agent": "claude", "profile": "alice", "cwd": "/w/b", "folder": "",
-                                     "alias": "", "state": "running", "activity": "busy",
+                                     "alias": "", "model": "", "state": "running", "activity": "busy",
                                      "last": "2026-10-26T12:00:00+00:00"})
         self.assertEqual(rows["a"]["cwd"], "")
         self.assertIsNone(rows["a"]["last"])
@@ -816,6 +816,36 @@ class NewSessionToolTest(Base):
                                  ("開工", CALLER_A, str(self.cwd.resolve())))
                 d = self.dispatches()[-1]
                 self.assertEqual(tool_json(c.response(2))["dispatch"], d.id)
+
+    def test_new_session_model_is_described_validated_and_passed_on(self):
+        schema = {t["name"]: t for t in mcp_server.tools_list(True)}["new_session"]["inputSchema"]
+        self.assertEqual(schema["properties"]["model"]["type"], "string")
+        self.assertNotIn("model", schema["required"])
+        for word in ("--model", "只影響這個 session", "Codex 不適用"):
+            self.assertIn(word, schema["properties"]["model"]["description"])
+        seen = []
+
+        def fake_new(cfg, run, out, name, target, cwd, *, message=None, caller=None, **kw):
+            seen.append(kw.get("model"))
+            send.submit_new(cfg, caller, name, "claude", "work", message, notify=True, now=NOW)
+            return 0
+        with mock.patch.object(mcp_server.session_run, "cmd_new", fake_new):
+            c = self.serve(Client([init(1), call(2, "new_session", self.args(model=" sonnet[1m] ")),
+                                   call(3, "new_session", self.args(name="n2", model="a b")),
+                                   call(4, "new_session", self.args(name="n3", model=7)),
+                                   call(5, "new_session", self.args(name="n4"))]), confirm=False, run=new_runner())
+        self.assertEqual(seen, ["sonnet[1m]", None])  # stripped; the two bad ones never reached cmd_new
+        self.assertFalse(c.response(2)["result"]["isError"])
+        for rid, text in ((3, "模型不能含空白"), (4, "參數 model 要是字串")):
+            self.assertTrue(c.response(rid)["result"]["isError"], rid)
+            self.assertIn(text, tool_text(c.response(rid)))
+
+    def test_list_sessions_shows_the_model(self):
+        write_rows(self.cfg.registry_path, [Row("b", "claude", "alice", "sb", "/w/b", model="opus[1m]"),
+                                            Row("a", "claude", "alice", "sa", "/w/a")], "t", self.cfg.history_dir)
+        c = self.serve(Client([init(1), call(2, "list_sessions", {})]))
+        rows = {r["name"]: r for r in tool_json(c.response(2))["sessions"]}
+        self.assertEqual((rows["b"]["model"], rows["a"]["model"]), ("opus[1m]", ""))
 
     def test_new_session_failure_is_a_tool_error(self):
         def fake_new(cfg, run, out, name, target, cwd, **kw):

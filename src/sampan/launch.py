@@ -40,7 +40,7 @@ def remote_control_on(profile):
     return False
 
 
-def claude_argv(profile, *, resume=None, session_id=None, name=None, remote_control=None, extra=()):
+def claude_argv(profile, *, resume=None, session_id=None, name=None, remote_control=None, model=None, extra=()):
     if resume and session_id:
         raise ValueError("resume 與 session_id 不可同時給")
     argv = ["claude"]
@@ -52,6 +52,8 @@ def claude_argv(profile, *, resume=None, session_id=None, name=None, remote_cont
         argv += ["--name", name]
     if remote_control:  # keep the Remote Control name the tmux name too: --name alone only names a new conversation
         argv += ["--remote-control", remote_control]
+    if model:  # this session only: --model does not touch the profile's settings.json (a `/model` typed inside does)
+        argv += ["--model", model]
     return argv + list(extra)
 
 
@@ -82,7 +84,7 @@ def codex_env(cfg):
 
 
 def launch_line(cfg, agent, profile_name, *, resume=None, session_id=None, cwd=None, prompt_file=None,
-                name=None):
+                name=None, model=None):
     if resume is not None and not is_uuid(resume):
         # an empty or broken id makes claude/codex start a new conversation or show a picker: reattaching must never turn into a new conversation
         raise ValueError(f"對話 id {resume!r} 不是 UUID，不能接回")
@@ -92,7 +94,7 @@ def launch_line(cfg, agent, profile_name, *, resume=None, session_id=None, cwd=N
         return shell_command(codex_argv(resume=resume, extra=extra), env_set=codex_env(cfg), cwd=cwd, prompt_file=prompt_file)
     profile = cfg.profiles[profile_name]
     argv = claude_argv(profile, resume=resume, session_id=session_id, name=name,
-                       remote_control=name if name and remote_control_on(profile) else None)
+                       remote_control=name if name and remote_control_on(profile) else None, model=model)
     if profile.uses_home:
         return shell_command(argv, env_set={}, env_unset=("CLAUDE_CONFIG_DIR",), cwd=cwd, prompt_file=prompt_file)
     return shell_command(argv, env_set={"CLAUDE_CONFIG_DIR": str(profile.config_dir)}, cwd=cwd,

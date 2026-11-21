@@ -61,6 +61,7 @@ class StatusRow:
     tmux_alive: bool = False  # the tmux session exists (a STOPPED row may still have its tmux, e.g. while starting)
     id: str = ""  # the registry row's sampan id ("" for a live session that is not registered)
     alias: str = ""  # the registry row's alias ("" = unset)
+    model: str = ""  # the registry row's model ("" = unset: the profile's own default)
 
     @property
     def display(self):
@@ -119,7 +120,8 @@ def status_rows(cfg, run, snapshot_fn=None):
         last, tokens, window = _activity(cfg, agent, src.profile if src is not None else None, sid)
         result.append(StatusRow(name, agent, (src.profile or "-") if src else "-", sid, state, detail,
                                 lc.status if lc else "-", last, tokens, window, lc.pane_id if lc else None,
-                                name in alive, row.id if row is not None else "", row.alias if row is not None else ""))
+                                name in alive, row.id if row is not None else "", row.alias if row is not None else "",
+                                row.model if row is not None else ""))
     return result
 
 
@@ -132,7 +134,7 @@ def _unreadable_rows(cfg, rows, warning):
         last, tokens, window = _activity(cfg, row.agent, row.profile, row.session_id)
         result.append(StatusRow(name, row.agent, row.profile or "-", row.session_id,
                                 State.RETIRED if row.state == "retired" else State.UNKNOWN, "", "-", last, tokens, window, None,
-                                False, row.id, row.alias))
+                                False, row.id, row.alias, row.model))
     return result
 
 
@@ -182,13 +184,14 @@ def cmd_status(cfg, run, out):
     warning = rows.warning
     if warning:
         out(f"⚠ {warning}")
-    widths = (38, 6, 12, 8, 8, 16, 7, 11)
+    with_model = any(r.model for r in rows)  # the column only shows once somebody uses it: old output stays as it was
+    widths = (38, 6, 12, 8, 8, 16, 7, 11) if not with_model else (38, 6, 12, 18, 8, 8, 16, 7, 11)
 
     def line(*cells):
         return " ".join(ljust(c, w) for c, w in zip(cells, widths)) + " " + cells[-1]
 
-    out(line("名稱", "agent", "profile", "id", "對話", "狀態", "活動", "最後活動", "context"))
+    out(line("名稱", "agent", "profile", *(["模型"] if with_model else []), "id", "對話", "狀態", "活動", "最後活動", "context"))
     for r in rows:
-        out(line(r.name, r.agent, r.profile, r.id[:8] or "-", r.sid[:8], r.display, r.agent_status,
-                 _fmt_time(r.last), _fmt_tokens(r.tokens, r.context_window)))
+        out(line(r.name, r.agent, r.profile, *([r.model or "-"] if with_model else []), r.id[:8] or "-", r.sid[:8],
+                 r.display, r.agent_status, _fmt_time(r.last), _fmt_tokens(r.tokens, r.context_window)))
     return 1 if warning else 0

@@ -5,6 +5,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-11-21
+
+Upgrading: restart the Claude sessions after updating, so each one runs the new `sampan mcp serve` (the `model` parameter of `new_session` exists only there). Nothing changes for a session that has no model set. Downgrading: a registry with a session that has a model is refused by an older sampan (it never overwrites the file), so run `sampan model <name> --clear` for those first.
+
+### Added
+- A model per session. `sampan model <name> <model>` records the `--model` a Claude session is started with (`--clear` removes it; `sampan model [<name>]` shows it). From then on every start of that session (new, reattach, `sampan restart`, profile switch, directory move, `send --restore`) passes `--model <model>`. It affects that session only: unlike typing `/model` inside Claude it does not write the profile's `settings.json`. A running session keeps its model until it is restarted. Not set means as before. The string is handed to Claude as it is (only a space, a control character or more than 100 characters is refused); Codex has none.
+- `sampan new … --model <model>` and the optional `model` parameter of the MCP `new_session` (the approval prompt shows it).
+- `sampan status` gets a model column once at least one session has a model; the MCP `list_sessions` rows have `model`; the card on the screen shows it. The registry gets an optional `model` per row, written only when set, with the registry version unchanged.
+
 ## [0.19.0] - 2026-11-21
 
 Upgrading: restart the Claude sessions after updating, so each one runs the new `sampan mcp serve` (the `profile` parameter of `send` / `send_batch` exists only there). Nothing changes unless you pass `--profile` or `--no-launch`.

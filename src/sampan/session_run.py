@@ -165,8 +165,10 @@ def cmd_new(cfg, run, out, name, target, cwd, *, folder=None, **kw):
 
 
 def _cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.sleep, timeout=15, uuid4=uuid.uuid4,
-             on_prompt=None, wait=True, message=None, caller=None, notify=None, trust=False):
+             on_prompt=None, wait=True, message=None, caller=None, notify=None, trust=False, model=None):
     """target: claude:<profile>, <profile> (taken as claude) or codex.
+
+    model: start the Claude with `--model <model>` and record it on the row (Claude only).
 
     wait=False: return as soon as the launch command is sent (the ui's n then goes straight into tmux and the user answers the startup menu there). A Claude row is
     registered before launching; Codex only has a conversation once the first prompt is sent, and sampan save registers it afterwards.
@@ -187,11 +189,19 @@ def _cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.slee
         out(f"❌ {checked}")
         return 2
     agent, profile, cwd = checked
+    if model is not None:
+        model = model.strip()
+        if agent != "claude":
+            out("❌ 只有 Claude session 能設模型")
+            return 2
+        if problem := model_problem(model):
+            out(f"❌ {problem}")
+            return 2
     tmux = Tmux(run)
     if _load(cfg, out) is None:  # registry broken: stop first, so no unregistered empty session is left behind
         return 2
     session_id = str(uuid4()) if agent == "claude" else None
-    cmd = launch_line(cfg, agent, profile, session_id=session_id, name=name,
+    cmd = launch_line(cfg, agent, profile, session_id=session_id, name=name, model=model,
                       prompt_file=outbox_path(cfg.state_dir, "<派工編號>") if message is not None else None)
     if dry_run:
         out(f"[dry-run] 建立 tmux session {name}（{cwd}）→ {cmd}")
@@ -204,7 +214,7 @@ def _cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.slee
             out(f"❌ {d}")
             return 2
         did = d.id
-        cmd = launch_line(cfg, agent, profile, session_id=session_id, name=name,
+        cmd = launch_line(cfg, agent, profile, session_id=session_id, name=name, model=model,
                           prompt_file=outbox_path(cfg.state_dir, did))
 
     def abort(reason):
@@ -217,7 +227,8 @@ def _cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.slee
         out(f"❌ tmux new-session 失敗：{name}")
         return 1
     if agent == "claude":
-        row = Row(name, "claude", profile, session_id, cwd, "active", now_iso(), tmux.server_id() or "", None, ids.new_id())
+        row = Row(name, "claude", profile, session_id, cwd, "active", now_iso(), tmux.server_id() or "", None, ids.new_id(),
+                  model=model or "")
         if not _register(cfg, out, row):
             abort("session 沒登記成功，開場訊息沒送")
             return 2
@@ -313,6 +324,72 @@ def alias_problem(alias):
     return None
 
 
+MODEL_MAX = 100
+
+
+def model_problem(model):
+    """Why a model string cannot be used, or None. Only what is clearly a typo is refused (empty, a space or any
+    control character, too long); whether Claude knows the model is Claude's business, it is passed on as given."""
+    if not model:
+        return "模型不能是空的"
+    if len(model) > MODEL_MAX:
+        return f"模型最多 {MODEL_MAX} 個字，這個有 {len(model)} 個"
+    if any(c.isspace() or unicodedata.category(c) == "Cc" for c in model):
+        return f"模型不能含空白或控制字元：{model!r}（例如 opus[1m]、sonnet、claude-sonnet-5-5）"
+    return None
+
+
+def cmd_model(cfg, out, name=None, model=None, *, clear=False):
+    """Set (or with clear, remove) the model a Claude session is started with. Touches neither tmux nor the running
+    agent: it applies at the next launch (`sampan restart`, restore, switch, move). Without a model, list: one row, or
+    every row that has one."""
+    if model is None and not clear:  # read only
+        rows = _load(cfg, out)
+        if rows is None:
+            return 2
+        if name is not None:
+            row = next((r for r in rows if r.tmux == name), None)
+            if row is None:
+                out(f"❌ 登記表沒有 {name}")
+                return 2
+            out(f"{name}：{row.model or '（沒設，用 profile 的預設）'}" if row.agent == "claude" else f"{name}：Codex 沒有模型設定")
+            return 0
+        shown = [r for r in rows if r.model]
+        for r in shown:
+            out(f"{r.tmux}  {r.model}")
+        if not shown:
+            out("沒有 session 設了模型（都用各自 profile 的預設）")
+        return 0
+    if name is None:
+        out("❌ 要指定 session 名稱")
+        return 2
+    out = actionlog.tee(cfg, f"model {_who(cfg, name)}", out)
+    model = "" if clear else (model or "").strip()
+    if not clear:
+        problem = model_problem(model)
+        if problem:
+            out(f"❌ {problem}")
+            return 2
+    with lock(cfg.state_dir):
+        rows = _load(cfg, out)
+        if rows is None:
+            return 2
+        row = next((r for r in rows if r.tmux == name), None)
+        if row is None:
+            out(f"❌ 登記表沒有 {name}")
+            return 2
+        if row.agent != "claude":
+            out(f"❌ {name} 是 {row.agent}，只有 Claude session 能設模型")
+            return 2
+        row.model = model
+        write_rows(cfg.registry_path, rows, now_iso(), cfg.history_dir, machine=registry_machine(cfg))
+    if clear:
+        out(f"✔ {name} 的模型清掉了；下次啟動（sampan restart {name}、接回、換 profile）起用 profile 的預設")
+    else:
+        out(f"✔ {name} 的模型設成 {model}；正在跑的不變，下次啟動（sampan restart {name}、接回、換 profile）套用（只影響這個 session，不改 profile 的設定）")
+    return 0
+
+
 def cmd_alias(cfg, out, name, alias, *, clear=False):
     """Set (or with clear, remove) the alias of a registry row. Touches neither tmux nor the id; it applies at the next launch."""
     out = actionlog.tee(cfg, f"alias {_who(cfg, name)}", out)
@@ -402,7 +479,7 @@ def cmd_forget(cfg, run, out, name, *, dry_run=False):
     if not dry_run:
         folder_cmd.sync_session(cfg, out, "forget", name)  # after the lock: the registry lock is not reentrant
     try:
-        out(f"  對話還在：{launch_line(cfg, row.agent, row.profile, resume=row.session_id, cwd=row.cwd, name=display_name(row))}")
+        out(f"  對話還在：{launch_line(cfg, row.agent, row.profile, resume=row.session_id, cwd=row.cwd, name=display_name(row), model=row.model or None)}")
     except (ValueError, KeyError):
         out(f"  對話 id {row.session_id}")
     return 0

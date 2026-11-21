@@ -34,6 +34,7 @@ class Row:
     pid: int | None = None  # agent process last seen
     id: str = ""  # stable sampan id (uuid4), kept across saves and renames; "" until write_rows fills it
     alias: str = ""  # free-form name people recognise; "" = unset (the session name stands in)
+    model: str = ""  # Claude model this session is started with (`--model`); "" = unset: the profile's own default. Not written to the file when empty
 
 
 @dataclass(frozen=True)
@@ -91,7 +92,8 @@ def merge(old, observed, tmux_sessions, now, server, keep_silently=frozenset()):
             used.add(prev.tmux)
         state = prev.state if prev is not None else "active"
         new_rows[ob.tmux] = Row(ob.tmux, ob.agent, ob.profile, ob.session_id, ob.cwd, state, now, server, ob.pid,
-                                prev.id if prev is not None else ids.new_id(), prev.alias if prev is not None else "")
+                                prev.id if prev is not None else ids.new_id(), prev.alias if prev is not None else "",
+                                prev.model if prev is not None else "")
     for r in old:
         if r.tmux in used:
             continue
@@ -200,7 +202,7 @@ def write_rows(path, rows, now, history_dir, keep=20, *, machine=""):
             r.id = ids.new_id()
     history_dir = Path(history_dir)
     private_dir(path.parent)
-    sessions = [asdict(r) for r in rows]
+    sessions = [{k: v for k, v in asdict(r).items() if k != "model" or v} for r in rows]  # an empty model is no key: files stay as older sampan wrote them
     if path.exists() and not _only_volatile_changes(path, sessions):
         private_dir(history_dir)
         snap = history_dir / f"registry-{now_stamp()}.json"

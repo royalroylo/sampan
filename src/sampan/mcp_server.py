@@ -101,7 +101,9 @@ TOOLS = [
          "target": _str("claude:<profile>、<profile>（當成 claude）或 codex"),
          "cwd": _str("工作目錄"),
          "message": _str("開場訊息"),
-         "folder": _str("選填：放進哪個 sampan 資料夾（例如 客戶/甲），沒有就建立")},
+         "folder": _str("選填：放進哪個 sampan 資料夾（例如 客戶/甲），沒有就建立"),
+         "model": _str("選填：這個 Claude session 用的模型（--model 的值，例如 opus[1m]、sonnet）；記在登記表、之後每次啟動都帶，"
+                       "只影響這個 session，不改 profile 的設定；Codex 不適用；核准畫面看得到")},
          "required": ["name", "target", "cwd", "message"]}},
     {"name": "folder_move",
      "description": "把 session 搬進 sampan 畫面上的資料夾（沒有就建立；folder 給 \"/\" 是搬回最上層）。"
@@ -494,7 +496,8 @@ class Server:
         mach = machine.load_or_create(self.cfg.path)
         out = {"machine": {"id": mach.id, "name": mach.name},
                "sessions": [{"name": r.name, "id": r.id, "machine": mach.id, "agent": r.agent, "profile": r.profile, "cwd": reg[r.name].cwd if r.name in reg else "",
-                             "folder": where.get(r.name, ""), "alias": reg[r.name].alias if r.name in reg else "", "state": r.state.value, "activity": r.agent_status,
+                             "folder": where.get(r.name, ""), "alias": reg[r.name].alias if r.name in reg else "", "model": reg[r.name].model if r.name in reg else "",
+                             "state": r.state.value, "activity": r.agent_status,
                              "last": r.last.astimezone(timezone.utc).isoformat(timespec="seconds") if r.last else None}
                             for r in rows]}
         warning = "；".join(w for w in warnings if w)
@@ -613,6 +616,13 @@ class Server:
             if not isinstance(folder, str):
                 raise ToolError("參數 folder 要是字串")
             folder = _folder(folder) or None
+        model = args.get("model")
+        if model is not None:
+            if not isinstance(model, str):
+                raise ToolError("參數 model 要是字串")
+            model = model.strip()
+            if problem := session_run.model_problem(model):
+                raise ToolError(problem)
         checked = session_run.check_new(self.cfg, self.run, name, target, cwd)
         if isinstance(checked, str):
             raise ToolError(checked)
@@ -630,7 +640,7 @@ class Server:
         # with confirm, Claude Code showed the user this cwd in the tool's permission prompt: its own trust prompt is
         # answered. Not for Codex: whether its approval shows the whole arguments is not verified
         rc = session_run.cmd_new(self.cfg, self.run, lines.append, name, target, cwd, message=message,
-                                 caller=caller, sleep=self.sleep, folder=folder, on_prompt=stop,
+                                 caller=caller, sleep=self.sleep, folder=folder, on_prompt=stop, model=model,
                                  trust=self.cfg.mcp_confirm and self.client_name == CLAUDE_CODE)  # checks everything again before creating
         said = "\n".join(str(x).removeprefix("❌ ") for x in lines).strip()
         new = [d for d in dispatch.load(self.cfg.state_dir) if d.id not in before and d.to_name == name]

@@ -35,6 +35,7 @@ def build_parser():
     nw.add_argument("--dry-run", action="store_true")
     nw.add_argument("--folder", help="放進這個資料夾（沒有就建；用 / 分層）；開成功才記")
     nw.add_argument("--message", help="開場訊息，當作 agent 啟動時的第一個 prompt（會建一筆派工）；- 從 stdin 讀")
+    nw.add_argument("--model", help="這個 Claude session 用的模型（--model 的值，例如 opus[1m]、sonnet）；記在登記表，之後每次啟動都帶；只影響這個 session")
     rs = sub.add_parser("restore", help="挑選並逐一接回登記表裡的原對話（不開新對話、不送訊息）")
     rs.add_argument("names", nargs="*", help="只看這些 session（有終端機時會先確認）")
     rs.add_argument("--all", action="store_true", help="勾選所有可接回的（要有終端機確認）")
@@ -58,6 +59,10 @@ def build_parser():
     al.add_argument("name")
     al.add_argument("alias", nargs="?")
     al.add_argument("--clear", action="store_true", help="清掉別名")
+    md = sub.add_parser("model", help="設定 Claude session 的模型（只影響這個 session，不改 profile 的設定；下次啟動才套用）；不帶模型就列出")
+    md.add_argument("name", nargs="?", help="session 名稱；不給就列出所有設了模型的")
+    md.add_argument("model", nargs="?", help="模型（--model 的值，例如 opus[1m]、sonnet、claude-sonnet-5-5）；不給就只列出")
+    md.add_argument("--clear", action="store_true", help="清掉，之後用 profile 的預設")
     mv = sub.add_parser("move", help="換到另一個目錄繼續同一段對話（自動信任新目錄、更新登記表）")
     mv.add_argument("name")
     mv.add_argument("dest", help="新的工作目錄；不存在會建立")
@@ -738,6 +743,19 @@ def _dispatch(cfg, args):
             return 1
         on_prompt, _want = _prompt_fn()
         return restart.cmd_restart(cfg, run, out, input, plan, own_pane=own, on_prompt=on_prompt)
+    if cmd == "model":
+        from . import session_run
+        from .send import command_caller
+        if args.clear and args.model is not None:
+            out("用法：sampan model NAME MODEL，或 sampan model NAME --clear，或 sampan model [NAME]（列出）")
+            return 2
+        setting = args.clear or args.model is not None
+        if setting and _agent_refused(cfg, command_caller(cfg, run, os.getpid()) if cfg.mcp_confirm else None, out):
+            return 2
+        name = _resolve_one(cfg, args.name, out) if args.name is not None else None
+        if args.name is not None and name is None:
+            return 2
+        return session_run.cmd_model(cfg, out, name, args.model, clear=args.clear)
     if cmd in ("new", "stop", "move", "switch", "rename", "alias", "forget", "retire", "activate"):
         from . import session_run
         if cmd == "new":
@@ -752,6 +770,8 @@ def _dispatch(cfg, args):
                     return 2
                 extra["message"] = sys.stdin.read() if args.message == "-" else args.message
                 extra.update(caller=caller, notify=False)
+            if args.model is not None:
+                extra["model"] = args.model
             rc = session_run.cmd_new(cfg, run, out, args.name, args.target, args.cwd, dry_run=args.dry_run,
                                      on_prompt=on_prompt, **extra)
             if rc == 0 and not args.dry_run and not want:  # the command returns to the shell: say where the session went
