@@ -5,6 +5,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-11-21
+
+Upgrading: nothing to restart. `sampan doctor` has a new line per running Claude Code version; nothing else changes.
+
 ### Added
 - `sampan doctor` says whether the Claude Code versions that are running are ones sampan has checked its screen reading against. sampan reads words off Claude's screen (the input box, the trust and startup menus, the Remote Control menu), so a release that changes them can break it; the doctor now prints one line per running version: checked (`verified.py`: 2.1.287, 2.1.311, 2.1.330), newer than the newest checked (a warning, with what it means and to run `sampan update`), or older and not listed (information). The version is read from each running session's own session file, and from `claude --version` only when no session is running. It only reports.
 
