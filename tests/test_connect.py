@@ -300,6 +300,15 @@ class CheckTest(unittest.TestCase):
         self.assertEqual((self.b.delivered, self.b.replies), ([], []))
         self.assertTrue(any("unsafe-characters" in line for line in self.b.logs))
 
+    def test_a_sender_name_the_hub_stamped_with_a_control_character_is_refused(self):
+        env = self.a.conn.sign(hp.new_envelope("message", "id-desktop", "proj-a", "hi", now=self.clock()))
+        for name in ("laptop\x1b[201~", "lap\u202etop", "lap\ntop"):
+            bad = self.stamped(env, sender_machine_name=name)
+            self.assertEqual(self.inject(bad)["rejected"], 1, repr(name))
+        self.assertEqual(self.b.delivered, [])
+        newline = self.a.conn.sign(hp.new_envelope("message", "id-desktop", "proj-a", "hi", now=self.clock(), from_session="a b"))
+        self.assertEqual(self.inject(self.stamped({**newline, "from_session": "a\nb"}))["rejected"], 1)
+
     def test_the_hubs_unsigned_receipt_is_limited_to_its_own_phases_about_a_real_envelope(self):
         for phase, ref in (("sent", hp.new_id()), ("taken", "not-an-id"), ("taken", None)):
             rec = {**hp.new_envelope("receipt", "id-desktop", "proj-a", "", now=self.clock(), phase="taken", ref=hp.new_id()),

@@ -205,6 +205,14 @@ class AddressingTest(unittest.TestCase):
         self.assertIsNone(hp.resolve_target("nobody", local, people))
         self.assertIsNone(hp.resolve_target("/x", local, people))
 
+    def test_names_cannot_carry_control_format_or_separator_characters(self):
+        for bad in ("la\x9bptop", "lap\u202etop", "lap\u200btop", "lap\u2028top", "lap\ntop", "lap\ttop", "lap\x1btop", "lap\ufefftop"):
+            self.assertFalse(hp.valid_name(bad), repr(bad))
+            self.assertIsNotNone(hp.unsafe_name(bad), repr(bad))
+        self.assertIsNone(hp.unsafe_name("讀書 PM-1"))
+        self.assertEqual(hp.check_envelope({**msg(), "from_session": "a\nb"}, now=NOW).code, "bad-envelope")
+        self.assertEqual(hp.check_envelope({**msg(), "from_session": "a\u202eb"}, now=NOW).code, "bad-envelope")
+
     def test_valid_name(self):
         for ok in ("laptop", "desktop-mini", "讀書", "a" * 64):
             self.assertTrue(hp.valid_name(ok), ok)

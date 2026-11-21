@@ -141,6 +141,35 @@ class HardeningTest(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 3)
         self.assertEqual(out, b"")  # closed without an answer
 
+    def test_a_client_that_drips_a_byte_at_a_time_is_cut_off_by_the_total_deadline(self):
+        # each read is quick (a byte every 0.15 s, under the per-read timeout), but the request as a whole is not
+        srv = self.server(request_timeout=0.6)
+        sock = socket.create_connection(srv.server_address[:2], timeout=5)
+        started = time.monotonic()
+        closed = False
+        try:
+            for ch in b"POST /v1/hello HTTP/1.0\r\nUser-Agent: x\r\nX-Pad: " + b"a" * 60:
+                sock.sendall(bytes([ch]))
+                time.sleep(0.15)
+                if time.monotonic() - started > 4:
+                    break
+        except OSError:
+            closed = True
+        finally:
+            sock.close()
+        elapsed = time.monotonic() - started
+        self.assertTrue(closed or elapsed < 4, "the connection was never cut")
+        self.assertLess(elapsed, 3.5)
+
+    def test_the_slot_of_a_slow_client_comes_back(self):
+        srv = self.server(max_connections=1, request_timeout=0.4)
+        slow = socket.create_connection(srv.server_address[:2])
+        time.sleep(0.1)
+        self.assertTrue(self.raw(srv, b"GET /health HTTP/1.0\r\n\r\n").startswith(b"HTTP/1.0 503"))
+        time.sleep(0.8)  # the watchdog has closed the slow one
+        slow.close()
+        self.assertTrue(self.raw(srv, b"GET /health HTTP/1.0\r\n\r\n").startswith(b"HTTP/1.0 200"))
+
     def test_a_body_that_never_arrives_is_cut_off(self):
         srv = self.server(request_timeout=0.4)
         started = time.monotonic()

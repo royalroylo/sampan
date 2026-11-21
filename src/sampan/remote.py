@@ -308,9 +308,13 @@ def make_deliver_local(cfg, run, store, now_fn=_utcnow, status_fn=status_rows):
         entry = _published_entry(store, session)
         if entry is None:
             raise Rejected("這個 session 沒有發布")
-        for text in (env.get("body"), env.get("from_session")):  # a second gate: nothing with an ESC reaches the paste
-            if isinstance(text, str) and hp.unsafe_char(text):
-                raise Rejected("訊息含不能貼進 session 的控制字元")
+        stamp = env.get("stamp") or {}
+        # a second gate: nothing with an ESC reaches the paste, in the text or in the names put on its first line
+        if isinstance(env.get("body"), str) and hp.unsafe_char(env["body"]):
+            raise Rejected("訊息含不能貼進 session 的控制字元")
+        for name in (env.get("from_session"), stamp.get("sender_machine_name")):
+            if isinstance(name, str) and hp.unsafe_name(name):
+                raise Rejected("寄件者名稱含不能貼進 session 的控制字元")
         row = next((r for r in status_fn(cfg, run) if r.name == entry["session"]), None)
         if row is None or row.state != State.RUNNING:
             raise Rejected(f"{entry['session']} 沒在執行")

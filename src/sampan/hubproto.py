@@ -126,6 +126,15 @@ def unsafe_char(text):
     return None
 
 
+def unsafe_name(text):
+    """Like unsafe_char, for what is a name (a machine, a person, the sender's own session name): newline and tab are no more
+    allowed than an ESC, because the name is pasted on the first line of the message the session reads."""
+    for ch in text or "":
+        if unicodedata.category(ch) in BAD_CATEGORIES:
+            return f"U+{ord(ch):04X}"
+    return None
+
+
 def clean_newlines(text):
     """CRLF and a lone CR become a newline (what a Windows editor sends); nothing else is touched."""
     return (text or "").replace("\r\n", "\n").replace("\r", "\n")
@@ -287,7 +296,7 @@ def check_envelope(env, *, now, max_body=MAX_BODY, max_lifetime=EXPIRY_SELF):
     if envelope_size(env) > MAX_ENVELOPE:
         return ProtoError("too-large", "整個信封太大")
     fs = env.get("from_session", "")
-    if not isinstance(fs, str) or len(fs) > MAX_FROM_SESSION or any(ord(c) < 32 for c in fs) or unsafe_char(fs):
+    if not isinstance(fs, str) or len(fs) > MAX_FROM_SESSION or unsafe_name(fs):
         return ProtoError("bad-envelope", "from_session 不合規")
     created, expires = parse_time(env.get("created")), parse_time(env.get("expires"))
     if created is None or expires is None or expires <= created:
@@ -311,7 +320,7 @@ NAME_MAX = 64
 def valid_name(text):
     """A machine or person name: not empty, no slash, no control characters, at most NAME_MAX characters."""
     return (isinstance(text, str) and 0 < len(text.strip()) <= NAME_MAX and text == text.strip()
-            and "/" not in text and not any(ord(c) < 32 or ord(c) == 127 for c in text))
+            and "/" not in text and unsafe_name(text) is None)
 
 
 def parse_target(text):

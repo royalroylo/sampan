@@ -51,7 +51,7 @@ The hub is a relay: every machine connects to it (HTTPS long polling), so no mac
 - Expiry: what nobody took expires after 7 days (the text is deleted at once); after it was taken the text stays 14 more days; the metadata (who sent what to whom, when, how big) stays 90 days.
 - Limits: 8,000 characters per message, 200 messages or 1 MB per mailbox by default, a daily limit per sender; going over gives a readable reason. At most 20 machines wait for approval at once.
 - Text rules: a message cannot contain control characters (only newline and tab pass: ESC, `\r`, zero-width and bidi characters, U+2028/2029 are all refused; CRLF is turned into a newline first), because an ESC can end a bracketed paste early so the rest is typed as keys. The sender, the hub and the receiver each check. `expires` may be at most 7 days after `created`.
-- The hub server gives a client 15 seconds to send its request (a long poll is not affected) and serves at most 64 connections at once (503 beyond that).
+- The hub server gives a client 15 seconds in total to send its request (line, headers, body), so a client that drips one byte at a time is cut off too (the time a long poll waits for mail does not count), and serves at most 64 connections at once (503 beyond that). Machine names and the sender's session name cannot contain control characters, zero-width characters or newlines either (they go on the first line of what is pasted into a session).
 - Versions: a client that is too old is refused with a request to update; the signature cannot be downgraded (a hub that says "no signing needed" is ignored).
 - Clocks: `doctor` warns at a 5 minute difference; past 15 minutes messages are refused.
 - There is no read receipt: only `replied` means the other agent answered.

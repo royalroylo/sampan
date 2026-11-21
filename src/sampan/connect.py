@@ -201,9 +201,12 @@ class Connector:
             return "clock-skew"  # from the future: it could be replayed once the ids it was taken under are forgotten
         if expires - created > hp.EXPIRY_SELF:
             return "bad-envelope"
-        for text in (env.get("body"), env.get("reason"), env.get("from_session")):
+        for text in (env.get("body"), env.get("reason")):
             if isinstance(text, str) and hp.unsafe_char(text):
                 return "unsafe-characters"  # never reaches a session: an ESC could end a bracketed paste early
+        for text in (env.get("from_session"), stamp.get("sender_machine_name"), stamp.get("sender_sub")):
+            if isinstance(text, str) and hp.unsafe_name(text):
+                return "unsafe-characters"  # names are pasted on the first line of a message: no newline either
         if env.get("kind") == "receipt" and stamp.get("hub") and not env.get("sig"):
             # the hub's own receipt: it says it itself, no owner signature; but only these phases, about a real envelope.
             # `sent` (pasted into the session) is the other machine's word and needs the owner signature.

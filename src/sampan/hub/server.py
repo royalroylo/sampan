@@ -74,8 +74,27 @@ class _Handler(BaseHTTPRequestHandler):
     sys_version = ""
 
     def setup(self):
-        self.timeout = self.server.request_timeout  # reads (the request line, headers, body) give up after this
+        self.timeout = self.server.request_timeout  # one read waits at most this long...
         super().setup()
+        # ...and the whole request (line, headers, body) has this long in total: a client that sends a byte just before
+        # each read would give up would otherwise hold its connection, and so one of the few slots, for ever
+        self._watchdog = threading.Timer(self.server.request_timeout, self._cut_off)
+        self._watchdog.daemon = True
+        self._watchdog.start()
+
+    def _cut_off(self):
+        try:
+            self.connection.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+    def _request_read(self):
+        """The request has been read in full: stop the clock (a long poll that waits for mail is not a slow client)."""
+        self._watchdog.cancel()
+
+    def finish(self):
+        self._watchdog.cancel()
+        super().finish()
 
     def log_message(self, *args):  # the default would print the client address and the request line
         pass
@@ -143,6 +162,7 @@ class _Handler(BaseHTTPRequestHandler):
                 raise hp.ProtoError("not-found")
             who = self._principal()
             body = self._body() if self.command == "POST" else {}
+            self._request_read()
             result = handler(self.server, who, body, query)
         except hp.ProtoError as e:
             return self._error(e)

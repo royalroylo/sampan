@@ -144,6 +144,12 @@ class ReviewFixesTest(unittest.TestCase):
                       {"k1": b"o" * 32}, "k1", "id-laptop")
         self.assertEqual(code_of(lambda: hub.send(L, env)), "bad-envelope")
 
+    def test_a_machine_name_with_a_control_or_format_character_is_refused_at_hello(self):
+        hub, _, _ = new_hub()
+        for name in ("la\x9bptop", "lap\u202etop", "lap\u200btop", "lap\nop"):
+            self.assertEqual(code_of(lambda name=name: hub.hello(principal("x"), hello_payload(name, machine_id="id-x"))), "bad-request", repr(name))
+        self.assertEqual(hub.machines(), [])
+
     def test_pending_machines_are_capped(self):
         hub, clock, _ = new_hub(limits=Limits(max_pending=2))
         for n in ("a", "b"):

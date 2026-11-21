@@ -157,6 +157,16 @@ class SafetyTest(Setup):
         self.assertEqual([x for x in dispatch.load(self.b.cfg.state_dir, ids=()) if remote.info(x)], [])
         self.assertFalse((Path(self.b.cfg.state_dir) / "outbox").exists() and any((Path(self.b.cfg.state_dir) / "outbox").iterdir()))
 
+    def test_the_names_on_the_pasted_first_line_cannot_carry_escapes(self):
+        from sampan.connect import Rejected
+        base = {"to": {"machine": self.b.machine.id, "session": "proj-a"}, "body": "hello"}
+        for stamp_name, from_session in (("laptop\x1b[201~", "proj-b"), ("laptop", "p\u202eb"), ("lap\ntop", "proj-b"), ("laptop", "a\nb")):
+            env = {**base, "id": hp.new_id(), "from_session": from_session,
+                   "stamp": {"sender_machine_name": stamp_name, "sender_machine": "id-laptop"}}
+            with self.assertRaises(Rejected, msg=(stamp_name, from_session)):
+                self.b.hooks.deliver_local(env)
+        self.assertEqual([x for x in dispatch.load(self.b.cfg.state_dir, ids=()) if remote.info(x)], [])
+
     def test_an_alias_never_reaches_a_session_that_is_not_published(self):
         from sampan.connect import Rejected
         self.b.store.publish("proj-a", "private")  # an alias that is also the name of an unpublished session of this machine
