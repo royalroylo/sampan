@@ -5,6 +5,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.20.1] - 2026-11-21
+
+Upgrading: nothing to restart; the next start or reattach of a Claude session uses the new reset. Fixes the Remote Control name that was not corrected on machines with a newer Claude Code.
+
+### Fixed
+- The Remote Control reset ("RC 校正沒做：選單沒出現") did not recognise the menu of Claude Code 2.1.330, whose footer reads `↑/↓ to navigate · Enter to select · Esc to close` instead of `Enter to select · Esc to continue`. The footer now only has to say `Enter to select … Esc to …`; the title and the options still have to be there, and Enter is still pressed only with the cursor verified on Disconnect.
+- A `/remote-control` typed while Remote Control was not up yet (an old "is active" line in a resumed conversation passes the first step) connects instead of opening the menu. The reset now gives the menu a few seconds to follow, and asks once more if it does not come.
+- The wait for the menu and for the disconnect is 15 seconds (was 5): a large resumed conversation redraws slowly.
+
+### Added
+- When a reset does not get done, the last 40 lines of the screen (cut to 160 characters) go into `actions.log`, so the cause can be read afterwards. Only that local file gets them: the screen can hold part of the conversation, so they are not printed or reported anywhere else.
+
 ## [0.20.0] - 2026-11-21
 
 Upgrading: restart the Claude sessions after updating, so each one runs the new `sampan mcp serve` (the `model` parameter of `new_session` exists only there). Nothing changes for a session that has no model set. Downgrading: a registry with a session that has a model is refused by an older sampan (it never overwrites the file), so run `sampan model <name> --clear` for those first.

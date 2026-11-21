@@ -8,6 +8,7 @@ not recognise → Escape and a reason."""
 import re
 from dataclasses import dataclass
 
+from . import actionlog
 from .launch import launch_line, remote_control_on, send_line
 from .registry import display_name
 from .screens import ANSI_RE, claude_input_state
@@ -15,16 +16,21 @@ from .screens import ANSI_RE, claude_input_state
 RC_ACTIVE = "/remote-control is active"
 RC_DISCONNECTED = "Remote Control disconnected."
 RC_DISCONNECT = "Disconnect this session"
-RC_MENU_FOOT = "Enter to select · Esc to continue"
+# the menu's footer: "Enter to select · Esc to continue" (Claude Code 2.1.311), "↑/↓ to navigate · Enter to select ·
+# Esc to close" (2.1.330); the title line and the options are what make the screen the menu, the footer only anchors it
+RC_MENU_FOOT_RE = re.compile(r"Enter to select\b.*\bEsc to \w")
 RC_TITLE = "Remote Control"
 RC_COMMAND = "/remote-control"
 RC_WAIT = 20  # seconds for the bridge to come up (at boot, and after reconnecting)
-MENU_WAIT = 5  # seconds for the menu to show, and for the disconnect to be confirmed
+MENU_WAIT = 15  # seconds for the menu to show, and for the disconnect to be confirmed (a big resumed context redraws slowly)
 MOVE_WAIT = 2  # seconds for the cursor to move after Up
+SETTLE_WAIT = 5  # seconds the menu gets to follow a /remote-control that connected (Claude opens it right after)
 MAX_UPS = 3
 POLL = 0.5  # waits are counted in polls of this many seconds (sleep is injected), not wall clock
 MENU_LINES = 12  # how far above the footer the menu's title may be
 FOOT_SLACK = 2  # non-blank lines allowed under the footer
+SNAPSHOT_LINES = 40  # the last lines of the screen kept in actions.log when a reset fails
+SNAPSHOT_WIDTH = 160
 SEGMENT_RE = re.compile(r"\s{2,}")  # "Show QR code   Scan with your phone…": an option's text is its first segment
 
 
@@ -43,9 +49,9 @@ def _indent(line):
 
 
 def rc_menu(screen):
-    """The Remote Control menu at the bottom of the screen (its title and RC_MENU_FOOT), or None for any other screen."""
+    """The Remote Control menu at the bottom of the screen (its title and footer), or None for any other screen."""
     lines = _plain(screen)
-    foot = next((i for i in range(len(lines) - 1, -1, -1) if RC_MENU_FOOT in lines[i]), None)
+    foot = next((i for i in range(len(lines) - 1, -1, -1) if RC_MENU_FOOT_RE.search(lines[i])), None)
     if foot is None or sum(1 for ln in lines[foot + 1:] if ln.strip()) > FOOT_SLACK:
         return None
     title = next((i for i in range(foot - 1, max(foot - MENU_LINES, -1), -1) if lines[i].strip() == RC_TITLE), None)
@@ -114,9 +120,42 @@ def _reconnected(screen, alias):
     return "".join(typed.split()) == "".join(alias.split())
 
 
-def rc_reset(tmux, pane, alias, *, sleep, wait=RC_WAIT):
+class _Watched:
+    """A tmux whose last capture is kept, so a failed reset can say what the screen looked like."""
+
+    def __init__(self, tmux):
+        self._tmux = tmux
+        self.last = None
+
+    def send_keys(self, *args, **kw):
+        return self._tmux.send_keys(*args, **kw)
+
+    def capture(self, *args, **kw):
+        screen = self._tmux.capture(*args, **kw)
+        self.last = screen
+        return screen
+
+
+def snapshot(screen):
+    """The last SNAPSHOT_LINES lines of a screen, plain and cut to SNAPSHOT_WIDTH, for actions.log (a local file)."""
+    lines = [ln[:SNAPSHOT_WIDTH] for ln in _plain(screen)]
+    return lines[-SNAPSHOT_LINES:]
+
+
+def rc_reset(tmux, pane, alias, *, sleep, wait=RC_WAIT, report=None):
     """Disconnect Remote Control and reconnect it as `alias`. None when done, else why it was not (nothing pressed
-    blindly: a step that does not see what it expects presses Escape if a menu may be open, and stops)."""
+    blindly: a step that does not see what it expects presses Escape if a menu may be open, and stops). report(reason,
+    screen) is called with the last screen seen when it was not done (screen None when nothing was captured)."""
+    if report is None:
+        return _rc_reset(tmux, pane, alias, sleep=sleep, wait=wait)
+    watched = _Watched(tmux)
+    reason = _rc_reset(watched, pane, alias, sleep=sleep, wait=wait)
+    if reason is not None:
+        report(reason, watched.last)
+    return reason
+
+
+def _rc_reset(tmux, pane, alias, *, sleep, wait):
     screen = _wait(tmux, pane, lambda s: any(RC_ACTIVE in ln for ln in _plain(s)), wait, sleep)
     if screen is None:
         return "沒看到 Remote Control 連上"
@@ -158,13 +197,36 @@ def _tmux_literal(text):
     return text[:-1] + "\\;" if text.endswith(";") else text
 
 
-def _to_disconnect(tmux, pane, sleep):
+def _bare_connected(screen):
+    """RC_ACTIVE after the last bare `❯ /remote-control` and no menu: Remote Control was not up, so the command
+    connected it (under its default name) instead of opening the menu."""
+    lines = _plain(screen)
+    cmd = _last(lines, lambda ln: ln.strip() == f"❯ {RC_COMMAND}")
+    if cmd is None or rc_menu(screen) is not None:
+        return False
+    rest = lines[cmd + 1:]  # an older reset in a resumed transcript has a disconnect or a named reconnect after it
+    if any(RC_DISCONNECTED in ln or ln.strip().startswith(f"❯ {RC_COMMAND} ") for ln in rest):
+        return False
+    return any(RC_ACTIVE in ln for ln in rest)
+
+
+def _to_disconnect(tmux, pane, sleep, retried=False):
     """Steps 3-4: wait for the menu, move the cursor to Disconnect and press Enter. None once Enter is pressed, else
-    the reason (Escape already sent)."""
-    screen = _wait(tmux, pane, lambda s: rc_menu(s) is not None, MENU_WAIT, sleep)
+    the reason (Escape already sent). A bare /remote-control that connected instead of showing the menu (the bridge was
+    not up yet, and an old "is active" line passed step 1) normally gets its menu a moment later; if it does not, it is
+    asked once more."""
+    screen = _wait(tmux, pane, lambda s: rc_menu(s) is not None or _bare_connected(s), MENU_WAIT, sleep)
     if screen is None:
         tmux.send_keys(pane, "Escape")
         return "選單沒出現"
+    if rc_menu(screen) is None:  # it connected: Claude opens the menu right after, so give it a moment first
+        screen = _wait(tmux, pane, lambda s: rc_menu(s) is not None, SETTLE_WAIT, sleep)
+        if screen is None:
+            if retried or claude_input_state(tmux.capture(pane, escapes=True)) != "empty":
+                tmux.send_keys(pane, "Escape")
+                return "選單沒出現"
+            tmux.send_keys(pane, RC_COMMAND, "Enter")
+            return _to_disconnect(tmux, pane, sleep, retried=True)
     menu = rc_menu(screen)
     ups = 0
     # a redraw slower than MOVE_WAIT may let a second Up queue behind the first, and the Enter then lands on another
@@ -215,8 +277,12 @@ def rc_step(cfg, tmux, row, pane, out, *, sleep, profile=None):
         return
     alias = display_name(row)
     out(f"  … {row.tmux}：RC 校正中（最多約 {RC_WAIT} 秒）")  # the wait for the bridge can be long: say so first
+    def report(why, screen):
+        if screen is not None:  # a local file only: the screen may hold part of the conversation
+            actionlog.append(cfg, "RC 校正", [f"{row.tmux}：{why}；最後的畫面："] + ["  | " + ln for ln in snapshot(screen)])
+
     try:
-        reason = rc_reset(tmux, pane, alias, sleep=sleep)
+        reason = rc_reset(tmux, pane, alias, sleep=sleep, report=report)
     except Exception as e:  # a tmux failure mid-way is a reason like any other
         reason = str(e) or type(e).__name__
     if reason is None:

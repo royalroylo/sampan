@@ -22,6 +22,10 @@ ACTIVE = fx("active_idle")
 MENU_CONTINUE = fx("menu_cursor_continue")
 MENU_QR = fx("menu_cursor_qr")
 MENU_DISCONNECT = fx("menu_cursor_disconnect")
+MENU330_CONTINUE = fx("menu_v330_cursor_continue")  # Claude Code 2.1.330: footer "↑/↓ to navigate · … · Esc to close"
+MENU330_QR = fx("menu_v330_cursor_qr")
+MENU330_DISCONNECT = fx("menu_v330_cursor_disconnect")
+MENU330_FIRST = fx("menu_v330_first_frame")
 DISCONNECTED = fx("disconnected")
 RECONNECTED = fx("reconnected")
 # the boot screen before the bridge is up: the same screen without the "/remote-control is active" lines
@@ -44,6 +48,12 @@ OLD_THEN_DISCONNECTED = (_split(RECONNECTED)[0] + "❯ /remote-control\n  ⎿  R
 OLD_THEN_RECONNECTED = (_split(OLD_THEN_DISCONNECTED)[0] + f"❯ /remote-control {ALIAS}\n"
                         "  /remote-control is active · Continue here, on your phone, or at\n"
                         "  https://claude.ai/code/session_XXXX\n" + _split(DISCONNECTED)[1])
+# the bare /remote-control of a bridge that was not up: it connected (no menu); the old "is active" line above it
+# is what passed step 1
+BARE_CONNECTED = (_split(ACTIVE)[0] + "❯ /remote-control\n  /remote-control is active · Continue here, on your phone, or at\n"
+                  "  https://claude.ai/code/session_YYYY\n" + _split(ACTIVE)[1])
+BARE_TWICE = (_split(BARE_CONNECTED)[0] + "❯ /remote-control\n  /remote-control is active · Continue here, on your phone, or at\n"
+              "  https://claude.ai/code/session_ZZZZ\n" + _split(ACTIVE)[1])
 # the input box with Claude's dim placeholder (needs the escape codes to be told from typed text)
 PLACEHOLDER_BOX = "\n".join((Path(__file__).parent / "fixtures" / "claude_empty_placeholder.ansi")
                             .read_text(encoding="utf-8").rstrip("\n").split("\n")[-6:]) + "\n"
@@ -97,6 +107,13 @@ class RcMenuTest(unittest.TestCase):
         self.assertEqual(rc_menu(MENU_DISCONNECT), RcMenu(opts, 0))
         self.assertEqual(rc_menu(MENU_DISCONNECT).options[0], RC_DISCONNECT)
 
+    def test_rc_menu_parses_the_2_1_330_menu(self):
+        opts = ["Disconnect this session", "Show QR code", "Continue"]
+        self.assertEqual(rc_menu(MENU330_CONTINUE), RcMenu(opts, 2))
+        self.assertEqual(rc_menu(MENU330_QR), RcMenu(opts, 1))
+        self.assertEqual(rc_menu(MENU330_DISCONNECT), RcMenu(opts, 0))
+        self.assertEqual(rc_menu(MENU330_FIRST), RcMenu(opts, 2))  # the first frame: a one-line description, no URL
+
     def test_rc_menu_no_cursor_is_minus_one(self):
         self.assertEqual(rc_menu(MENU_CONTINUE.replace("❯ Continue", "  Continue")).cursor, -1)
 
@@ -118,6 +135,62 @@ class RcResetTest(unittest.TestCase):
         tmux = happy_tmux()
         self.assertIsNone(self.reset(tmux))
         self.assertEqual(tmux.sent, HAPPY_KEYS)
+
+    def test_rc_reset_happy_path_on_the_2_1_330_menu(self):
+        tmux = FakeTmux(ACTIVE, [MENU330_FIRST, MENU330_QR, MENU330_DISCONNECT, DISCONNECTED, RECONNECTED])
+        self.assertIsNone(self.reset(tmux))
+        self.assertEqual(tmux.sent, HAPPY_KEYS)
+
+    def test_rc_reset_waits_for_a_slow_menu(self):
+        slow = [ACTIVE] * 24 + [MENU_CONTINUE]  # 12 s of redraw: the 5 s wait of 0.20.0 gave up here
+        tmux = FakeTmux(ACTIVE, [slow, MENU_QR, MENU_DISCONNECT, DISCONNECTED, RECONNECTED])
+        self.assertIsNone(self.reset(tmux))
+        self.assertEqual(tmux.sent, HAPPY_KEYS)
+
+    def test_bare_command_that_connected_gets_its_menu_without_a_second_command(self):
+        # a bridge that was not up: the command connects, and Claude opens the menu right after (seen on 2.1.311)
+        tmux = FakeTmux(ACTIVE, [[BARE_CONNECTED, BARE_CONNECTED, MENU_CONTINUE], MENU_QR, MENU_DISCONNECT,
+                                 DISCONNECTED, RECONNECTED])
+        self.assertIsNone(self.reset(tmux))
+        self.assertEqual(tmux.sent, HAPPY_KEYS)
+
+    def test_bare_command_that_connected_and_shows_no_menu_is_asked_again(self):
+        keys = [["/remote-control", "Enter"], ["/remote-control", "Enter"], ["Up"], ["Up"], ["Enter"],
+                [f"/remote-control {ALIAS}", "Enter"]]
+        tmux = FakeTmux(ACTIVE, [[BARE_CONNECTED] * 12, MENU_CONTINUE, MENU_QR, MENU_DISCONNECT, DISCONNECTED,
+                                 RECONNECTED])
+        self.assertIsNone(self.reset(tmux))
+        self.assertEqual(tmux.sent, keys)
+
+    def test_bare_command_is_asked_again_only_once(self):
+        tmux = FakeTmux(ACTIVE, [[BARE_CONNECTED] * 12, [BARE_TWICE] * 12])
+        self.assertEqual(self.reset(tmux), "選單沒出現")
+        self.assertEqual(tmux.sent, [["/remote-control", "Enter"], ["/remote-control", "Enter"], ["Escape"]])
+
+    def test_bare_command_that_connected_is_not_asked_again_over_a_draft(self):
+        tmux = FakeTmux(ACTIVE, [[BARE_CONNECTED.replace("❯\xa0\n", "❯\xa0typed\n")] * 12])
+        self.assertEqual(self.reset(tmux), "選單沒出現")
+        self.assertEqual(tmux.sent, [["/remote-control", "Enter"], ["Escape"]])
+
+    def test_report_gets_the_reason_and_the_last_screen(self):
+        got = []
+        tmux = FakeTmux(ACTIVE, [OTHER_MENU])
+        self.assertEqual(self.reset(tmux, report=lambda why, screen: got.append((why, screen))), "選單沒出現")
+        [(why, screen)] = got
+        self.assertEqual(why, "選單沒出現")
+        self.assertIn("Some other dialog", screen)
+
+    def test_report_is_not_called_on_success(self):
+        got = []
+        self.assertIsNone(self.reset(happy_tmux(), report=lambda *a: got.append(a)))
+        self.assertEqual(got, [])
+
+    def test_snapshot_keeps_the_last_lines_cut_short(self):
+        screen = "\n".join(f"line {i} " + "x" * 300 for i in range(100))
+        lines = steps.snapshot(screen)
+        self.assertEqual(len(lines), steps.SNAPSHOT_LINES)
+        self.assertTrue(lines[-1].startswith("line 99 "))
+        self.assertTrue(all(len(ln) <= steps.SNAPSHOT_WIDTH for ln in lines))
 
     def test_rc_reset_waits_for_the_bridge(self):
         tmux = FakeTmux([BOOTING, BOOTING, ACTIVE], [MENU_CONTINUE, MENU_QR, MENU_DISCONNECT, DISCONNECTED,
@@ -321,6 +394,21 @@ class RcStepTest(unittest.TestCase):
     def test_rc_step_failure_line(self):
         rc_step(rc_cfg(True), FakeTmux(DRAFT), row(ALIAS), "%1", self.out.append, sleep=self.sleep)
         self.assertEqual(self.out, ["  … rc-probe：RC 校正中（最多約 20 秒）", "  ⚠ rc-probe：RC 校正沒做：輸入框有字；之後按 S 重開（或 sampan restart rc-probe）會再校正"])
+
+    def test_rc_step_failure_saves_the_last_screen_in_actions_log(self):
+        cfg = rc_cfg(True)
+        rc_step(cfg, FakeTmux(ACTIVE, [OTHER_MENU]), row(ALIAS), "%1", self.out.append, sleep=self.sleep)
+        log = (cfg.state_dir / "actions.log").read_text(encoding="utf-8")
+        self.assertIn("RC 校正", log)
+        self.assertIn("rc-probe：選單沒出現；最後的畫面：", log)
+        self.assertIn("  | ", log)
+        self.assertIn("Some other dialog", log)
+        self.assertNotIn("Some other dialog", "\n".join(self.out))  # the screen stays out of what is printed
+
+    def test_rc_step_success_writes_no_screen(self):
+        cfg = rc_cfg(True)
+        rc_step(cfg, happy_tmux(), row(ALIAS), "%1", self.out.append, sleep=self.sleep)
+        self.assertFalse((cfg.state_dir / "actions.log").exists())
 
     def test_rc_step_profile_override(self):
         tmux = happy_tmux()
