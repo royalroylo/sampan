@@ -5,11 +5,15 @@ When Claude resumes a conversation it reattaches the old Remote Control bridge u
 sampan disconnects and reconnects under the alias, without judging whether the name already is right. It presses only
 text+Enter, Up, Enter and Escape, and Enter on the menu only with the cursor verified on Disconnect; anything it does
 not recognise → Escape and a reason."""
+import json
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 from . import actionlog
+from .claude_state import read_session_files
 from .launch import launch_line, remote_control_on, send_line
+from .procs import claude_pids, list_procs
 from .registry import display_name
 from .screens import ANSI_RE, claude_input_state
 
@@ -24,6 +28,9 @@ RC_COMMAND = "/remote-control"
 RC_WAIT = 20  # seconds for the bridge to come up (at boot, and after reconnecting)
 MENU_WAIT = 15  # seconds for the menu to show, and for the disconnect to be confirmed (a big resumed context redraws slowly)
 MOVE_WAIT = 2  # seconds for the cursor to move after Up
+RENAME_WAIT = 10  # seconds for a /rename to show in the session file (or on the screen)
+RC_RENAME = "/rename"
+RC_RENAMED = "Session renamed to:"
 SETTLE_WAIT = 5  # seconds the menu gets to follow a /remote-control that connected (Claude opens it right after)
 MAX_UPS = 3
 POLL = 0.5  # waits are counted in polls of this many seconds (sleep is injected), not wall clock
@@ -120,6 +127,79 @@ def _reconnected(screen, alias):
     return "".join(typed.split()) == "".join(alias.split())
 
 
+@dataclass(frozen=True)
+class SessionInfo:
+    """What the session file of a running Claude says about its Remote Control and its name."""
+    bridge: str  # bridgeSessionId: a value while Remote Control is connected, none when it is off or disconnected
+    name: str
+    name_since: int
+    updated_at: int
+
+
+class SessionPeek:
+    """Reads the session file of the Claude in one pane (called again and again while waiting): SessionInfo, or None
+    when the file cannot be found or read. Which file it is gets looked up once (the pane's live Claude process)."""
+
+    def __init__(self, cfg, run, pane):
+        self.cfg, self.run, self.pane = cfg, run, pane
+        self._path = None
+
+    def _locate(self):
+        profiles = list(self.cfg.profiles.values())
+        live, _warnings = read_session_files(profiles, claude_pids(list_procs(self.run)))
+        for lc in live:
+            if lc.pane_id == self.pane and lc.profile in self.cfg.profiles:
+                return Path(self.cfg.profiles[lc.profile].config_dir) / "sessions" / f"{lc.pid}.json"
+        return None
+
+    def __call__(self):
+        try:
+            if self._path is None:
+                self._path = self._locate()
+            if self._path is None:
+                return None
+            data = json.loads(self._path.read_text())
+            return SessionInfo(str(data.get("bridgeSessionId") or ""), str(data.get("name") or ""),
+                               int(data.get("nameSince") or 0), int(data.get("updatedAt") or 0))
+        except (OSError, ValueError, TypeError, AttributeError):
+            self._path = None  # the process may have been replaced: look again next time
+            return None
+
+
+def peek_for(cfg, tmux, pane):
+    """A SessionPeek for the Claude in `pane`, or None when this tmux has no way to run `ps` (then the screen alone
+    decides, as before 0.23)."""
+    run = getattr(tmux, "run", None)
+    return SessionPeek(cfg, run, pane) if run is not None else None
+
+
+def _rename_commands(lines):
+    return [i for i, ln in enumerate(lines) if ln.strip().startswith(f"❯ {RC_RENAME} ")]
+
+
+def _renamed(screen, alias, seen=0):
+    """`Session renamed to: <alias>` after our `❯ /rename …` line (the name may wrap onto the next lines). `seen` is how
+    many `/rename` command lines the screen had before ours was typed: a screen that still shows an earlier identical
+    rename (a second `sampan rc`) must not count, so ours has to be one more than that."""
+    lines = _plain(screen)
+    cmds = _rename_commands(lines)
+    if len(cmds) <= seen:
+        return False
+    for i in range(cmds[-1] + 1, len(lines)):
+        if RC_RENAMED in lines[i]:
+            shown = "".join(" ".join(lines[i:i + 3]).split(RC_RENAMED, 1)[1].split())
+            return shown.startswith("".join(alias.split()))
+    return False
+
+
+def _rename_confirmed(info, before, alias):
+    """The session file says the name is the alias and that the rename happened (the name was set again, or the file
+    was written since: naming a session what it is already called does not move nameSince), with Remote Control still
+    connected."""
+    return (info is not None and info.bridge != "" and info.name == alias
+            and (info.name_since != before.name_since or info.updated_at > before.updated_at))
+
+
 class _Watched:
     """A tmux whose last capture is kept, so a failed reset can say what the screen looked like."""
 
@@ -142,34 +222,50 @@ def snapshot(screen):
     return lines[-SNAPSHOT_LINES:]
 
 
-def _run_reset(tmux, pane, alias, *, sleep, wait, report, bridge):
+def _run_reset(tmux, pane, alias, *, sleep, wait, report, bridge, peek):
     if report is None:
-        return _rc_reset(tmux, pane, alias, sleep=sleep, wait=wait, bridge=bridge)
+        return _rc_reset(tmux, pane, alias, sleep=sleep, wait=wait, bridge=bridge, peek=peek)
     watched = _Watched(tmux)
-    reason = _rc_reset(watched, pane, alias, sleep=sleep, wait=wait, bridge=bridge)
+    reason = _rc_reset(watched, pane, alias, sleep=sleep, wait=wait, bridge=bridge, peek=peek)
     if reason is not None:
         report(reason, watched.last)
     return reason
 
 
-def rc_reset(tmux, pane, alias, *, sleep, wait=RC_WAIT, report=None):
+def rc_reset(tmux, pane, alias, *, sleep, wait=RC_WAIT, report=None, peek=None):
     """Disconnect Remote Control and reconnect it as `alias`. None when done, else why it was not (nothing pressed
     blindly: a step that does not see what it expects presses Escape if a menu may be open, and stops). report(reason,
-    screen) is called with the last screen seen when it was not done (screen None when nothing was captured)."""
-    return _run_reset(tmux, pane, alias, sleep=sleep, wait=wait, report=report, bridge=True)
+    screen) is called with the last screen seen when it was not done (screen None when nothing was captured).
+    peek (a SessionPeek) lets it read Remote Control off the session file: it waits for the bridge there instead of for
+    a line on the screen, and with the bridge connected it only renames (`/rename <alias>`, the phone follows) instead
+    of going through the menu; without peek, or when the file has no bridge, it is the menu way."""
+    return _run_reset(tmux, pane, alias, sleep=sleep, wait=wait, report=report, bridge=True, peek=peek)
 
 
-def rc_rename(tmux, pane, alias, *, sleep, wait=RC_WAIT, report=None):
+def rc_rename(tmux, pane, alias, *, sleep, wait=RC_WAIT, report=None, peek=None):
     """rc_reset for a session that has been running for a while: its screen has no "is active" line to wait for (that
     line only shows after a /remote-control), so it starts from the input box. Everything after is the same."""
-    return _run_reset(tmux, pane, alias, sleep=sleep, wait=wait, report=report, bridge=False)
+    return _run_reset(tmux, pane, alias, sleep=sleep, wait=wait, report=report, bridge=False, peek=peek)
 
 
-def _rc_reset(tmux, pane, alias, *, sleep, wait, bridge):
+def _bridge_up(peek):
+    info = peek() if peek is not None else None
+    return info is not None and info.bridge != ""
+
+
+def _rc_reset(tmux, pane, alias, *, sleep, wait, bridge, peek=None):
     if bridge:
-        screen = _wait(tmux, pane, lambda s: any(RC_ACTIVE in ln for ln in _plain(s)), wait, sleep)
-        if screen is None:
-            return "沒看到 Remote Control 連上"
+        if peek is not None:
+            # the session file says when the bridge is up; an "is active" line left in a resumed conversation does not
+            screen = _wait(tmux, pane, lambda s: _bridge_up(peek), wait, sleep)
+            if screen is None:  # no bridgeSessionId (an older or a changed file format): the old way, by the screen
+                screen = tmux.capture(pane, escapes=True)
+                if not any(RC_ACTIVE in ln for ln in _plain(screen)):
+                    return "沒看到 Remote Control 連上"
+        else:
+            screen = _wait(tmux, pane, lambda s: any(RC_ACTIVE in ln for ln in _plain(s)), wait, sleep)
+            if screen is None:
+                return "沒看到 Remote Control 連上"
     else:
         screen = tmux.capture(pane, escapes=True)
     state = claude_input_state(screen)
@@ -177,6 +273,9 @@ def _rc_reset(tmux, pane, alias, *, sleep, wait, bridge):
         return "輸入框有字"
     if state != "empty":
         return "找不到空的輸入框"
+    before = peek() if peek is not None else None
+    if before is not None and before.bridge:
+        return _rename_session(tmux, pane, alias, sleep, peek, before)
     tmux.send_keys(pane, RC_COMMAND, "Enter")
     try:
         reason = _to_disconnect(tmux, pane, sleep)
@@ -196,6 +295,21 @@ def _rc_reset(tmux, pane, alias, *, sleep, wait, bridge):
     if _wait(tmux, pane, lambda s: _reconnected(s, alias), wait, sleep) is None:
         return "重新連線沒確認"
     return None
+
+
+def _rename_session(tmux, pane, alias, sleep, peek, before):
+    """Remote Control is connected: `/rename <alias>` renames the session and the phone's list follows, with no menu,
+    no disconnect and no new entry in that list. Done when the session file shows the new name (and the bridge still
+    connected), or the screen says `Session renamed to: <alias>`."""
+    seen = len(_rename_commands(_plain(tmux.capture(pane, escapes=True))))
+    tmux.send_keys(pane, _tmux_literal(f"{RC_RENAME} {alias}"), "Enter")
+    done = _wait(tmux, pane, lambda s: _rename_confirmed(peek(), before, alias) or _renamed(s, alias, seen),
+                 RENAME_WAIT, sleep)
+    if done is not None:
+        return None
+    if claude_input_state(tmux.capture(pane, escapes=True)) == "blocked":
+        tmux.send_keys(pane, "Escape")  # a menu or dialog may have opened
+    return "改名沒確認"
 
 
 def _escape(tmux, pane):
@@ -295,7 +409,7 @@ def rc_step(cfg, tmux, row, pane, out, *, sleep, profile=None):
             actionlog.append(cfg, "RC 校正", [f"{row.tmux}：{why}；最後的畫面："] + ["  | " + ln for ln in snapshot(screen)])
 
     try:
-        reason = rc_reset(tmux, pane, alias, sleep=sleep, report=report)
+        reason = rc_reset(tmux, pane, alias, sleep=sleep, report=report, peek=peek_for(cfg, tmux, pane))
     except Exception as e:  # a tmux failure mid-way is a reason like any other
         reason = str(e) or type(e).__name__
     if reason is None:

@@ -1,6 +1,6 @@
 """sampan rc: correct the Remote Control name of running Claude sessions, in place (no restart, no new conversation).
 
-Only sessions that are running, idle, Claude, on a profile with Remote Control on get the reset (steps.rc_rename); every
+Only sessions that are running, idle, Claude, on a profile with Remote Control on get the rename (steps.rc_rename); every
 other session is skipped with its reason. One session at a time; the state of each is looked at again just before its
 turn, because the plan may be minutes old."""
 import time
@@ -13,7 +13,7 @@ from .status import State, status_rows
 from .tmux import Tmux
 
 PAUSE = steps.POLL  # between two sessions, so one redraw settles before the next starts
-CLUTTER = "校正會讓手機 app 的 Remote Control 列表每個 session 多出一筆新的（舊的那筆變離線）；只想改幾個就指定名稱。"
+CLUTTER = "Remote Control 已連上的 session 只改名（不斷開，手機列表不多一筆）；連不上的才斷開重連，那時列表會多一筆新的（舊的離線）。"
 
 
 @dataclass
@@ -110,7 +110,8 @@ def cmd_rc(cfg, run, out, plan, *, own_pane=None, sleep=time.sleep, rows_fn=None
                                      + ["  | " + ln for ln in steps.snapshot(screen)])
 
             try:
-                reason = steps.rc_rename(tmux, now.pane, alias, sleep=sleep, report=report)
+                reason = steps.rc_rename(tmux, now.pane, alias, sleep=sleep, report=report,
+                                         peek=steps.peek_for(cfg, tmux, now.pane))
             except Exception as e:  # a tmux failure mid-way is a reason like any other
                 reason = str(e) or type(e).__name__
             if reason is None:

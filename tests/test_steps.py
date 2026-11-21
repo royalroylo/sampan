@@ -6,7 +6,18 @@ from pathlib import Path
 from sampan import steps
 from sampan.registry import Row
 from sampan.screens import ANSI_RE, claude_input_state
-from sampan.steps import RC_DISCONNECT, RcMenu, rc_menu, rc_rename, rc_reset, rc_step, rc_wanted
+from sampan.steps import (
+    RC_DISCONNECT,
+    RcMenu,
+    SessionInfo,
+    SessionPeek,
+    peek_for,
+    rc_menu,
+    rc_rename,
+    rc_reset,
+    rc_step,
+    rc_wanted,
+)
 from tests.helpers import make_env
 
 A = "aaaaaaaa-0000-4000-8000-000000000001"
@@ -348,6 +359,187 @@ class RcResetTest(unittest.TestCase):
                                       f"❯ /remote-control {alias[:30]}\n  {alias[30:]}\n")
         tmux = FakeTmux(ACTIVE, [MENU_CONTINUE, MENU_QR, MENU_DISCONNECT, DISCONNECTED, wrapped])
         self.assertIsNone(rc_reset(tmux, "%1", alias, sleep=self.sleep))
+
+
+RENAMED_SCREEN = (_split(ACTIVE)[0] + f"❯ /rename {ALIAS}\n  ⎿  Session renamed to: {ALIAS}\n" + _split(ACTIVE)[1])
+BRIDGE = "session_AAAA"
+
+
+class Peek:
+    """A session file that changes as keys are sent: `before` until a /rename was sent to the pane, then `after`."""
+
+    def __init__(self, tmux, before, after=None):
+        self.tmux, self.before, self.after, self.calls = tmux, before, after or before, 0
+
+    def __call__(self):
+        self.calls += 1
+        sent = any(k[0].startswith("/rename ") for k in self.tmux.sent)
+        return self.after if sent else self.before
+
+
+def info(bridge=BRIDGE, name=ALIAS, since=100, updated=200):
+    return SessionInfo(bridge, name, since, updated)
+
+
+class RcViaRenameTest(unittest.TestCase):
+    """With Remote Control connected (the session file has a bridge) the reset is one `/rename <alias>`."""
+
+    def setUp(self):
+        self.sleep = Sleeps()
+
+    def reset(self, tmux, peek, **kw):
+        return rc_reset(tmux, "%1", ALIAS, sleep=self.sleep, peek=peek, **kw)
+
+    def test_name_already_the_alias_is_confirmed_by_the_file_being_written(self):
+        tmux = FakeTmux(ACTIVE)
+        self.assertIsNone(self.reset(tmux, Peek(tmux, info(), info(updated=250))))
+        self.assertEqual(tmux.sent, [[f"/rename {ALIAS}", "Enter"]])  # no menu, no disconnect, no /remote-control
+
+    def test_a_new_name_is_confirmed_by_the_file(self):
+        tmux = FakeTmux(ACTIVE)
+        self.assertIsNone(self.reset(tmux, Peek(tmux, info(name="old"), info(since=300, updated=300))))
+        self.assertEqual(tmux.sent, [[f"/rename {ALIAS}", "Enter"]])
+
+    def test_the_screen_line_confirms_when_the_file_does_not_move(self):
+        tmux = FakeTmux(ACTIVE, [RENAMED_SCREEN])
+        self.assertIsNone(self.reset(tmux, Peek(tmux, info())))
+
+    def test_an_earlier_identical_rename_on_the_screen_does_not_confirm_ours(self):
+        # a second `sampan rc`: the transcript already shows `/rename <alias>` and its "renamed" line
+        tmux = FakeTmux(RENAMED_SCREEN)
+        self.assertEqual(self.reset(tmux, Peek(tmux, info())), "改名沒確認")
+        self.assertEqual(tmux.sent, [[f"/rename {ALIAS}", "Enter"]])
+
+    def test_the_second_rename_is_confirmed_by_its_own_new_lines(self):
+        twice = (_split(RENAMED_SCREEN)[0] + f"❯ /rename {ALIAS}\n  ⎿  Session renamed to: {ALIAS}\n" + _split(ACTIVE)[1])
+        tmux = FakeTmux(RENAMED_SCREEN, [twice])
+        self.assertIsNone(self.reset(tmux, Peek(tmux, info())))
+
+    def test_not_confirmed_says_so_and_presses_nothing_more(self):
+        tmux = FakeTmux(ACTIVE)
+        self.assertEqual(self.reset(tmux, Peek(tmux, info())), "改名沒確認")
+        self.assertEqual(tmux.sent, [[f"/rename {ALIAS}", "Enter"]])
+        self.assertEqual(sum(self.sleep), steps.RENAME_WAIT)
+
+    def test_a_dialog_after_the_rename_gets_escape(self):
+        tmux = FakeTmux(ACTIVE, [OTHER_MENU])
+        self.assertEqual(self.reset(tmux, Peek(tmux, info())), "改名沒確認")
+        self.assertEqual(tmux.sent, [[f"/rename {ALIAS}", "Enter"], ["Escape"]])
+
+    def test_a_bridge_that_dropped_is_not_confirmed(self):
+        tmux = FakeTmux(ACTIVE)
+        self.assertEqual(self.reset(tmux, Peek(tmux, info(), info(bridge="", updated=999))), "改名沒確認")
+
+    def test_draft_in_the_box_presses_nothing(self):
+        tmux = FakeTmux(DRAFT)
+        self.assertEqual(self.reset(tmux, Peek(tmux, info())), "輸入框有字")
+        self.assertEqual(tmux.sent, [])
+
+    def test_alias_ending_in_semicolon_is_sent_literally(self):
+        tmux = FakeTmux(ACTIVE)
+        peek = Peek(tmux, info(name="PM;"), info(name="PM;", updated=999))
+        self.assertIsNone(rc_reset(tmux, "%1", "PM;", sleep=self.sleep, peek=peek))
+        self.assertEqual(tmux.sent, [["/rename PM\\;", "Enter"]])
+
+    def test_waits_for_the_bridge_in_the_file_not_for_an_old_line_on_the_screen(self):
+        # ACTIVE has an "is active" line (an earlier reset in the resumed conversation); the bridge is not up yet
+        tmux = FakeTmux(ACTIVE)
+        calls = []
+
+        def peek():
+            calls.append(1)
+            return info(bridge="" if len(calls) < 4 else BRIDGE, updated=200 if len(calls) < 6 else 300)
+        self.assertIsNone(self.reset(tmux, peek))
+        self.assertEqual(tmux.sent, [[f"/rename {ALIAS}", "Enter"]])
+        self.assertGreaterEqual(len(self.sleep), 3)  # it waited for the bridge
+
+    def test_no_bridge_in_the_file_falls_back_to_the_screen_and_the_menu(self):
+        tmux = happy_tmux()
+        self.assertIsNone(self.reset(tmux, lambda: info(bridge=""), wait=2))
+        self.assertEqual(tmux.sent, HAPPY_KEYS)
+
+    def test_no_bridge_and_no_line_on_the_screen_is_not_connected(self):
+        tmux = FakeTmux(BOOTING)
+        self.assertEqual(self.reset(tmux, lambda: info(bridge=""), wait=2), "沒看到 Remote Control 連上")
+        self.assertEqual(tmux.sent, [])
+
+    def test_no_session_file_is_the_menu_way(self):
+        tmux = happy_tmux()
+        self.assertIsNone(self.reset(tmux, lambda: None, wait=2))
+        self.assertEqual(tmux.sent, HAPPY_KEYS)
+
+    def test_rc_rename_uses_it_for_a_running_session_and_the_menu_when_not_connected(self):
+        tmux = FakeTmux(BOOTING)
+        self.assertIsNone(rc_rename(tmux, "%1", ALIAS, sleep=self.sleep, peek=Peek(tmux, info(), info(updated=999))))
+        self.assertEqual(tmux.sent, [[f"/rename {ALIAS}", "Enter"]])
+        tmux = FakeTmux(BOOTING, [MENU_CONTINUE, MENU_QR, MENU_DISCONNECT, DISCONNECTED, RECONNECTED])
+        self.assertIsNone(rc_rename(tmux, "%1", ALIAS, sleep=self.sleep, peek=lambda: info(bridge="")))
+        self.assertEqual(tmux.sent, HAPPY_KEYS)
+
+    def test_a_failed_rename_reports_the_last_screen(self):
+        got = []
+        tmux = FakeTmux(ACTIVE)
+        self.reset(tmux, Peek(tmux, info()), report=lambda why, screen: got.append((why, screen)))
+        self.assertEqual(got[0][0], "改名沒確認")
+        self.assertIsNotNone(got[0][1])
+
+    def test_renamed_line_must_come_after_our_command_and_name_the_alias(self):
+        self.assertTrue(steps._renamed(RENAMED_SCREEN, ALIAS))
+        self.assertFalse(steps._renamed(RENAMED_SCREEN, "other"))
+        self.assertFalse(steps._renamed(ACTIVE, ALIAS))
+        old_then_new = (_split(RENAMED_SCREEN)[0] + f"❯ /rename {ALIAS}\n" + _split(ACTIVE)[1])
+        self.assertFalse(steps._renamed(old_then_new, ALIAS))  # an earlier rename in the transcript is not ours
+        alias = "很長的名字" * 10
+        wrapped = _split(ACTIVE)[0] + f"❯ /rename {alias}\n  ⎿  Session renamed to: {alias[:20]}\n  {alias[20:]}\n" + _split(ACTIVE)[1]
+        self.assertTrue(steps._renamed(wrapped, alias))
+
+
+class SessionPeekTest(unittest.TestCase):
+    def setUp(self):
+        from tests.fakes import FakeRunner, cp, ps_line
+        from tests.test_claude_state import write_session
+        self.cfg = rc_cfg(True)
+        self.write_session = write_session
+        self.runner = FakeRunner().on(["ps", "-A"], cp(out=ps_line(4000, 1, "claude", "claude --name x") + "\n"))
+
+    def write(self, **extra):
+        import json
+        write = self.write_session
+        write(self.cfg, "alice", 4000, tmux="x:@1.%7",
+              raw=json.dumps({"pid": 4000, "sessionId": "e70d5dbc-0000-4000-8000-000000000001", "cwd": "/w",
+                              "status": "idle", "tmux": "x:@1.%7", "name": "n", "nameSince": 5, "updatedAt": 9, **extra}))
+
+    def test_reads_the_session_file_of_the_claude_in_the_pane(self):
+        self.write(bridgeSessionId="session_X")
+        self.assertEqual(SessionPeek(self.cfg, self.runner, "%7")(), SessionInfo("session_X", "n", 5, 9))
+
+    def test_no_bridge_is_an_empty_string(self):
+        self.write()
+        self.assertEqual(SessionPeek(self.cfg, self.runner, "%7")().bridge, "")
+
+    def test_other_pane_or_no_file_is_none_and_reads_again_next_time(self):
+        self.assertIsNone(SessionPeek(self.cfg, self.runner, "%7")())  # no file yet
+        self.write(bridgeSessionId="session_X")
+        peek = SessionPeek(self.cfg, self.runner, "%9")
+        self.assertIsNone(peek())
+        peek = SessionPeek(self.cfg, self.runner, "%7")
+        self.assertEqual(peek().bridge, "session_X")
+        self.write(bridgeSessionId="session_Y")  # re-read at every call, the path is only looked up once
+        self.assertEqual(peek().bridge, "session_Y")
+
+    def test_unreadable_file_is_none(self):
+        self.write(bridgeSessionId="session_X")
+        peek = SessionPeek(self.cfg, self.runner, "%7")
+        peek()
+        (self.cfg.profiles["alice"].config_dir / "sessions" / "4000.json").write_text("{not json")
+        self.assertIsNone(peek())
+
+    def test_peek_for_needs_a_tmux_that_can_run_ps(self):
+        self.assertIsNone(peek_for(self.cfg, FakeTmux(ACTIVE), "%1"))
+
+        class WithRun(FakeTmux):
+            run = staticmethod(lambda args, **kw: None)
+        self.assertIsInstance(peek_for(self.cfg, WithRun(ACTIVE), "%1"), SessionPeek)
 
 
 class RcRenameTest(unittest.TestCase):

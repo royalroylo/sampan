@@ -250,7 +250,7 @@ class CliTest(unittest.TestCase):
         ask.assert_not_called()
         self.assertIn("將校正 2 個：a、b", out)
         self.assertIn("略過（已停止；下次接回會自動套用）：c", out)
-        self.assertIn("Remote Control 列表每個 session 多出一筆", out)
+        self.assertIn("只改名（不斷開，手機列表不多一筆）", out)
 
     def test_all_asks_in_a_terminal_and_runs_on_y(self):
         rc_, out, run, ask = self.main(["rc", "--all"], tty=True)

@@ -5,6 +5,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- The Remote Control reset (after a reattach, restart, switch, move, adopt, and `sampan rc`) is one `/rename <alias>` when Remote Control is connected. Claude Code's `/rename` also renames the session in the phone app's list (checked on 2.1.311 and 2.1.330, also for a conversation that was resumed under an old name), so there is no menu, no disconnect and no new entry in that list, and nothing depends on the menu's wording any more. sampan reads Remote Control off the session file now: it waits for `bridgeSessionId` to have a value (instead of for an "is active" line on the screen, which a resumed conversation can already hold) and counts the rename as done when the file shows the alias as the name, or the screen says `Session renamed to:`. With no `bridgeSessionId` in the file (an older or a changed format) or Remote Control not connected, the old way (`/remote-control` → Disconnect → `/remote-control <alias>`) is still used, and that way still adds an entry to the phone's list. A rename that is not seen within 10 seconds is reported as `改名沒確認`. `sampan rc` keeps its options; its plan now says only unconnected sessions add an entry.
+
 ## [0.22.0] - 2026-11-21
 
 Upgrading: nothing to restart. `sampan doctor` has a new line per running Claude Code version; nothing else changes.
