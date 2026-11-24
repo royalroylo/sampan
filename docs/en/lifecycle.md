@@ -17,7 +17,7 @@ A session has two independent facts: **what the registry says about it** (active
 | retired | ⚠ fault "retired but still running": only from `retire --no-stop`, an old registry or someone starting it by hand; `sampan status` and `sampan doctor` warn; `retire`, `stop` and `activate` are the ways out | parked (the end state; only `forget` or `activate` leave it) | unknown |
 | no row | unregistered (what `sampan adopt` is for) | does not exist | unknown |
 
-The faults that existed before stay: agent or profile mismatch, several agents in one tmux session, a trust prompt. A retired session that also has one of them keeps `state` `retired` in MCP `list_sessions` (as in 0.26); the 狀態 column of `sampan status`, the screen's card and `sampan doctor` say what else is wrong (for example "profile 不符（登記 alice）").
+The faults that existed before stay: agent or profile mismatch, several agents in one tmux session, a trust prompt. A retired session that also has a profile or agent mismatch or sits at a trust prompt keeps `state` `retired` in MCP `list_sessions` (as in 0.26); the one exception is several agents in one tmux session, which already was one: `state` stays `multi` (also as in 0.26); the 狀態 column of `sampan status`, the screen's card and `sampan doctor` say what else is wrong (for example "profile 不符（登記 alice）").
 
 ## How each command changes the state
 

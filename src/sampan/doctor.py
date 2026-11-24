@@ -25,7 +25,7 @@ from .observe import PROC_ROOT, SPLIT_HINT, live_by_pane, multi_agent_sessions
 from .plugins import read_state
 from .procs import claude_pids, list_procs
 from .registry import RegistryError, load_rows
-from .status import State, status_rows
+from .status import LABELS, State, status_rows
 from .tmux import Tmux, unreadable_message
 
 ICON = {"ok": "✅", "info": "ℹ️ ", "warn": "⚠️ ", "fail": "❌"}
@@ -338,8 +338,11 @@ def _lifecycle(cfg, run, rows_fn):
                          f"要下線：sampan retire {first}（會補停；忙的先等它閒）或 sampan stop {first}；要留著：sampan activate {first}"))
     for r in rows:
         if r.state is State.RETIRED and r.anomaly:
-            out.append(Check("warn", f"{r.name}：retired，但{r.anomaly}",
-                             f"sampan status 看詳情；不要它了就 sampan retire {r.name}（補停），要用就 sampan activate {r.name}"))
+            trust = r.anomaly == LABELS[State.AWAIT_TRUST]
+            how = (f"停在信任提示，sampan 不替你回答：tmux attach -t {r.name} 進去選 No, exit（它結束後登記就是乾淨的 retired）；"
+                   f"要用它就 sampan activate {r.name}" if trust else
+                   f"sampan status 看詳情；不要它了就 sampan retire {r.name}（補停），要用就 sampan activate {r.name}")
+            out.append(Check("warn", f"{r.name}：retired，但{r.anomaly}", how))
     off, gone = {}, {}
     for r in rows:
         if r.registry != "active" or r.live != "stopped" or r.agent != "claude":

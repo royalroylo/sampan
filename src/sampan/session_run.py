@@ -15,7 +15,7 @@ from .codex_state import _is_codex, codex_pid_in_pane, find_rollout
 from .dispatch import outbox_path
 from .launch import disabled_problem, launch_line, send_line
 from .machine import registry_machine
-from .observe import PROC_ROOT, SPLIT_HINT, live_by_pane, multi_agent_sessions
+from .observe import PROC_ROOT, SPLIT_HINT, agent_panes, live_by_pane, multi_agent_sessions
 from .procs import codex_resume_id, descendant_claude, is_descendant, list_procs
 from .prompts import ANSWERED, ATTACH, SKIP, Relay
 from .registry import STATES, RegistryError, Row, display_name, id_problem, load_rows, lock, set_state, write_rows
@@ -324,9 +324,7 @@ def _agent_in(cfg, run, name, proc_root=PROC_ROOT):
     panes = Tmux(run).require_panes()
     procs = list_procs(run)
     found, _w = live_by_pane(cfg, run, panes, procs, proc_root)
-    mine = [p for p in panes if p.session == name]
-    return (any(p.pane_id in found or descendant_claude(procs, p.pane_pid) is not None for p in mine)
-            or name in multi_agent_sessions(procs, panes, found))
+    return name in agent_panes(procs, panes, found)
 
 
 def cmd_retire(cfg, run, out, name, *, no_stop=False, dry_run=False, force=False, timeout=90, own_pane=None,
@@ -368,20 +366,27 @@ def cmd_retire(cfg, run, out, name, *, no_stop=False, dry_run=False, force=False
             out(f"⚠ tmux 讀不到，不知道 {name} 有沒有在跑；若還在跑，它就是 retired 但還在跑：sampan stop {name} 下線，"
                 f"或 sampan activate {name} 還原")
         return rc
-    stopped, left, lines, why = [], [], [], {}
+    stopped, left, lines, why, timed = [], [], [], {}, []
     rc = cmd_stop(cfg, run, lines.append, names=(name,), force=force, dry_run=dry_run, timeout=timeout,
-                  own_pane=own_pane, sleep=sleep, proc_root=proc_root, kill=kill, stopped=stopped, left=left, why=why)
+                  own_pane=own_pane, sleep=sleep, proc_root=proc_root, kill=kill, stopped=stopped, left=left, why=why,
+                  timed=timed)
     for line in lines:
         out(line)
     if rc == 2:
         return 2
-    if force and not dry_run and name in left and "沒結束" in why.get(name, ""):
+    if force and not dry_run and name in timed:
         # the stop timed out and SIGTERM went out: give the agent a few seconds to leave, then close its tmux session
-        for _ in range(5):
-            sleep(2)
-            if not _agent_in(cfg, run, name, proc_root):
-                break
-        if not _agent_in(cfg, run, name, proc_root):
+        try:
+            for _ in range(5):
+                sleep(2)
+                if not _agent_in(cfg, run, name, proc_root):
+                    break
+            gone = not _agent_in(cfg, run, name, proc_root)
+        except TmuxUnreadable as e:
+            out(f"❌ {e}；SIGTERM 已送給 {name}，但不知道它結束了沒有，沒標成 retired；稍後 sampan status 確認，"
+                f"結束了再 sampan retire {name}")
+            return 1
+        if gone:
             from .save import cmd_save
             closed, _kept = _close_sessions(Tmux(run), [name])
             cmd_save(cfg, run, lambda _line: None, quiet=True, proc_root=proc_root)
@@ -389,8 +394,12 @@ def cmd_retire(cfg, run, out, name, *, no_stop=False, dry_run=False, force=False
             left.remove(name)
             stopped.append(name)
     if name in left or (name not in stopped and not dry_run and rc != 0):
-        out(f"❌ {name} 沒有停下來，沒標成 retired：等它閒了再 retire；或 sampan retire {name} --no-stop 只標記"
-            f"（之後它還在跑，sampan doctor 會提醒，要自己 sampan stop {name}）")
+        if why.get(name) == "無法判斷是否閒置":  # a claude with no session file yet: usually at the trust prompt
+            out(f"❌ {name} 沒有停下來，沒標成 retired：它可能停在信任提示（sampan 不替你回答）：tmux attach -t {name} 進去選 No, exit，"
+                f"再 sampan retire {name}；或 sampan retire {name} --no-stop 只標記（之後它還在跑，要自己停）")
+        else:
+            out(f"❌ {name} 沒有停下來，沒標成 retired：等它閒了再 retire；或 sampan retire {name} --no-stop 只標記"
+                f"（之後它還在跑，sampan doctor 會提醒，要自己 sampan stop {name}）")
         return 1
     if dry_run:
         out(f"（dry-run）會停掉 {name}，成功後標成 retired，什麼都沒改")
@@ -599,9 +608,10 @@ def cmd_forget(cfg, run, out, name, *, dry_run=False):
 
 def cmd_stop(cfg, run, out, *, names=(), profile=None, force=False, dry_run=False, keep_tmux=False,
              sleep=time.sleep, timeout=90, own_pane=None, kill=os.kill, proc_root=Path("/proc"),
-             stopped=None, left=None, why=None, verbose=False):
+             stopped=None, left=None, why=None, timed=None, verbose=False):
     """stopped / left: when given lists, receive the names of sessions that ended, and of wanted sessions that were not stopped.
     why: when given a dict, receives {name: reason} for each one in left (shown next to the name by a restart).
+    timed: when given a list, receives the names of the ones that were sent /exit and did not end in time.
     verbose: the save before stopping lists every stopped session (otherwise just their count; warnings always)."""
     from .save import cmd_save
     if not dry_run:
@@ -700,6 +710,8 @@ def cmd_stop(cfg, run, out, *, names=(), profile=None, force=False, dry_run=Fals
     if left is not None:
         left.extend(busy_names + worktrees + blind + multi_hit + unknown + skipped_self
                     + [p.session for p, _lc in timed_out])
+    if timed is not None:
+        timed.extend(p.session for p, _lc in timed_out)
     if why is not None:
         why.update({s: "忙碌中" for s in busy_names} | {s: "在問要不要保留 worktree" for s in worktrees}
                    | {s: "同一個 tmux session 有多個 agent" for s in multi_hit} | {s: "無法判斷是否閒置" for s in unknown}

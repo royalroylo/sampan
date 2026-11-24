@@ -29,6 +29,8 @@ class Base(unittest.TestCase):
         self.exit_on_keys = True
         self.unreadable = False
         self.sigterm_works = True
+        self.unreadable_after_sigterm = False
+        self.extra_ps = []
         self.sigtermed = []
         self.msgs = []
         self.panes = [pane_line("a", "%1", 100, "claude", "/c"), pane_line("b", "%2", 101, "claude", "/c"),
@@ -40,6 +42,7 @@ class Base(unittest.TestCase):
     def ps(self, _args):
         lines = [ps_line(pp, 1, "-zsh", "-zsh") for pp in (100, 101, 102, 103)]
         lines += [ps_line(pid, PANE_OF[pid], "claude", "claude") for pid in sorted(self.alive)]
+        lines += self.extra_ps
         return cp(out="\n".join(lines) + "\n")
 
     def runner(self):
@@ -68,6 +71,8 @@ class Base(unittest.TestCase):
 
     def kill(self, pid, sig):
         self.sigtermed.append((pid, sig))
+        if self.unreadable_after_sigterm:
+            self.unreadable = True
         if self.sigterm_works:
             self.alive.discard(pid)
 
@@ -143,6 +148,37 @@ class RetireTest(Base):
         self.assertEqual(self.sigtermed, [(200, 15)])
         self.assertEqual(self.state("a"), "active")
         self.assertEqual(self.killed(r), [])
+
+    def test_tmux_unreadable_after_the_sigterm_is_not_a_traceback_and_does_not_mark(self):
+        self.exit_on_keys = False
+        self.unreadable_after_sigterm = True
+        r = self.runner()
+        self.assertEqual(self.retire(r, "a", timeout=4, force=True), 1)
+        self.assertEqual(self.sigtermed, [(200, 15)])
+        self.assertEqual(self.state("a"), "active")
+        self.assertIn("SIGTERM 已送給 a", self.text())
+        self.assertIn("sampan status", self.text())
+
+    def test_a_codex_that_is_still_closing_counts_as_an_agent(self):
+        from sampan.session_run import _agent_in
+        r = self.runner()
+        self.panes.append(pane_line("cx", "%5", 105, "zsh", "/c"))
+        self.extra_ps = [ps_line(105, 1, "-zsh", "-zsh"), ps_line(205, 105, "codex", "codex")]
+        from unittest import mock
+        with mock.patch("sampan.session_run.live_by_pane", return_value=({}, [])):  # codex not identified (closing down)
+            self.assertTrue(_agent_in(self.cfg, r, "cx", NO_PROC))
+            self.assertFalse(_agent_in(self.cfg, r, "sh", NO_PROC))
+
+    def test_a_claude_without_a_session_file_is_refused_with_a_way_through_the_trust_prompt(self):
+        import os
+        for f in (self.cfg.profiles["alice"].config_dir / "sessions").glob("200.*"):
+            os.unlink(f)  # a claude with no session file (at the trust prompt)
+        r = self.runner()
+        self.assertEqual(self.retire(r, "a"), 1)
+        self.assertEqual((self.state("a"), self.sent(r)), ("active", []))
+        self.assertIn("信任提示", self.text())
+        self.assertIn("tmux attach -t a", self.text())
+        self.assertNotIn("等它閒了", self.text())
 
     def test_force_does_not_override_a_busy_session(self):
         r = self.runner()

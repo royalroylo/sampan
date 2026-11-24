@@ -881,6 +881,14 @@ class LifecycleChecksTest(unittest.TestCase):
         titles = [c.title for c in self.checks(r)]
         self.assertIn("old：retired，但profile 不符（登記 alice）", titles)
 
+    def test_a_retired_session_at_the_trust_prompt_gets_advice_that_works(self):
+        import dataclasses
+        r = dataclasses.replace(status_row("old", State.RETIRED), anomaly="等待信任確認")
+        [c] = self.checks(r)
+        self.assertIn("tmux attach -t old", c.detail)
+        self.assertIn("No, exit", c.detail)
+        self.assertNotIn("sampan retire", c.detail)
+
     def test_the_gone_profile_advice_does_not_suggest_a_switch_that_cannot_work(self):
         [c] = self.checks(status_row("a", State.STOPPED, profile="ghost"))
         self.assertNotIn("sampan switch", c.detail)
