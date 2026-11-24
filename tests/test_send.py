@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-from sampan import deliver, deliveries, dispatch, send, store
+from sampan import deliver, deliveries, dispatch, doorbell, send, store
 from sampan.send import Caller
 from sampan.status import State
 from tests.fakes import FakeRunner, cp
@@ -297,6 +297,14 @@ class SubmitTest(Base):
 
 
 class AdvanceClaudeTest(Base):
+    def test_a_paste_for_a_missing_heartbeat_is_logged_once(self):
+        d = self.submit()
+        self.advance(tmux_runner(), d.id)  # b has no heartbeat: the full text is pasted, and actions.log says why
+        log = (self.cfg.state_dir / "actions.log").read_text().splitlines()
+        hits = [ln for ln in log if doorbell.REASON_NO_MCP in ln]
+        self.assertEqual(len(hits), 1)
+        self.assertIn(f"派工 {d.id}：{doorbell.REASON_NO_MCP}", hits[0])  # one line per paste: counted before / after
+
     def test_idle_target_sent_then_done(self):
         d = self.submit()
         run = tmux_runner()

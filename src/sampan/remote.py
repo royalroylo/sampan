@@ -22,7 +22,7 @@ from . import hubproto as hp
 from .connect import KEY_FILE, KEY_KID, Hooks, Rejected, load_keys
 from .deliver import compose
 from .remote_store import RemoteStore
-from .status import State, status_rows
+from .status import State, status_rows_light
 
 REMOTE = "remote"
 OUT, IN = "out", "in"
@@ -299,7 +299,7 @@ def _untrack(store, did):
     store.put(OPEN, [x for x in store.get(OPEN, []) if x != did])
 
 
-def make_deliver_local(cfg, run, store, now_fn=_utcnow, status_fn=status_rows):
+def make_deliver_local(cfg, run, store, now_fn=_utcnow, status_fn=None):
     """The hook that turns an envelope from another machine into a local message for the session it names. Idempotent by
     envelope id: an envelope that comes again finds its message and does not make another."""
     def deliver_local(env):
@@ -315,7 +315,7 @@ def make_deliver_local(cfg, run, store, now_fn=_utcnow, status_fn=status_rows):
         for name in (env.get("from_session"), stamp.get("sender_machine_name")):
             if isinstance(name, str) and hp.unsafe_name(name):
                 raise Rejected("寄件者名稱含不能貼進 session 的控制字元")
-        row = next((r for r in status_fn(cfg, run) if r.name == entry["session"]), None)
+        row = next((r for r in (status_fn or status_rows_light)(cfg, run) if r.name == entry["session"]), None)
         if row is None or row.state != State.RUNNING:
             raise Rejected(f"{entry['session']} 沒在執行")
         stamp = env.get("stamp") or {}
@@ -343,13 +343,13 @@ def make_deliver_local(cfg, run, store, now_fn=_utcnow, status_fn=status_rows):
     return deliver_local
 
 
-def published_status(cfg, run, store, status_fn=status_rows):
+def published_status(cfg, run, store, status_fn=None):
     """[{session, alias, status}] of what this machine publishes: idle, busy, or offline (not running)."""
     out = []
     published = store.published()
     if not published:
         return out
-    rows = status_fn(cfg, run)
+    rows = (status_fn or status_rows_light)(cfg, run)
     for p in published:
         row = next((r for r in rows if r.name == p["session"]), None)
         if row is None or row.state != State.RUNNING:
@@ -418,7 +418,7 @@ def pump_inbound(cfg, run, store, conn, *, sleep, advance=None, now_fn=_utcnow, 
     return queued
 
 
-def make_hooks(cfg, run, store, log=lambda line: None, now_fn=_utcnow, status_fn=status_rows):
+def make_hooks(cfg, run, store, log=lambda line: None, now_fn=_utcnow, status_fn=None):
     return Hooks(
         deliver_local=make_deliver_local(cfg, run, store, now_fn, status_fn), apply_receipt=on_receipt(cfg, now_fn),
         apply_reply=on_reply(cfg, now_fn), accepted=on_accepted(cfg), failed=on_failed(cfg, now_fn),

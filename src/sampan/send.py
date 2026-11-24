@@ -24,7 +24,7 @@ from .machine import registry_machine
 from .procs import is_descendant, list_procs
 from .registry import RegistryError, load_rows
 from .screens import claude_input_state
-from .status import State, status_rows
+from .status import State, status_rows_light
 from .textwidth import text_width
 from .tmux import Tmux
 from .update import current_version
@@ -208,7 +208,8 @@ def _iso(now):
 
 
 def _rows(cfg, run, snapshot_fn, status_fn):
-    return {r.name: r for r in (status_fn or status_rows)(cfg, run, snapshot_fn=snapshot_fn)}
+    """{name: StatusRow}; no status_fn: status_rows_light (no decision here reads last activity or context)."""
+    return {r.name: r for r in (status_fn or status_rows_light)(cfg, run, snapshot_fn=snapshot_fn)}
 
 
 def _row_of(rows, id, name):

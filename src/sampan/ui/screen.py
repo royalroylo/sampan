@@ -1,7 +1,11 @@
 """curses adapter layer: CursesScreen provides pick / checklist / choose_dir / ask / out to cmd_ui, and handles keys, redrawing and preview capture."""
+import fcntl
 import json
 import os
+import select
+import struct
 import tempfile
+import termios
 import time
 from datetime import datetime, timezone
 
@@ -152,14 +156,36 @@ def tmp_roots():
     return tuple(dict.fromkeys(roots))
 
 
+class TerminalGone(BaseException):
+    """The screen's terminal is gone (its other end closed) and no SIGHUP ended the process: curses_ui leaves quietly.
+    A BaseException, so the `except Exception` around actions and refreshes does not keep the screen going."""
+
+
+def terminal_gone(fd=0):
+    """True when fd is a terminal whose other end has closed: it polls readable but holds nothing to read (a hang-up
+    reads as end of file). False for a live terminal, with or without a key waiting, and for anything not a terminal.
+    Reads nothing, so a key typed meanwhile is never taken."""
+    try:
+        if not os.isatty(fd) or not select.select([fd], [], [], 0)[0]:
+            return False
+        waiting = struct.unpack("i", fcntl.ioctl(fd, termios.FIONREAD, b"\0\0\0\0"))[0]
+    except OSError:
+        return True  # EIO / EBADF on a terminal that polled readable: it is gone
+    except ValueError:
+        return False
+    return waiting == 0
+
+
 class CursesScreen:
     """One curses screen: pick / restore_checklist / adopt_checklist swap the left-hand content, ask asks in the message area, out redraws immediately.
     scr only uses getmaxyx, erase, addstr, refresh, get_wch (tests use a fake object)."""
 
     def __init__(self, scr, cfg=None, run=None, now_fn=_now, *, clock=time.monotonic, rows_fn=status_rows,
                  own_pane=None, updater=None, usage_fn=None, interactive=None, sampan_path=None, watcher=None,
-                 dispatch_watcher=None, dispatches_load=dispatch.load, cancel_fn=None):
+                 dispatch_watcher=None, dispatches_load=dispatch.load, cancel_fn=None, tty_gone=None):
         self.scr, self.cfg, self.run, self.now_fn = scr, cfg, run, now_fn
+        # tty_gone() -> bool, asked whenever a read returns no key (terminal_gone; None: never asked, the tests)
+        self.tty_gone = tty_gone
         # watcher: daemon_watch.DaemonWatcher (curses_ui starts / stops it); its latest snapshot colours the Codex rows
         self.watcher, self._snap = watcher, None
         # dispatch_watcher: dispatch_watch.DispatchWatcher; its items feed the summary line (dispatches_load reads the D list)
@@ -265,10 +291,14 @@ class CursesScreen:
         return ch
 
     def _read(self):
+        """The next key, or None when the wait ran out. A terminal that is gone also makes get_wch fail, at once and
+        every time (no wait): that raises TerminalGone instead of a loop that never sleeps."""
         import curses
         try:
             ch = self.scr.get_wch()
         except curses.error:
+            if self.tty_gone is not None and self.tty_gone():
+                raise TerminalGone() from None
             return None
         if isinstance(ch, int):
             try:
@@ -1140,7 +1170,8 @@ def curses_ui(cfg, run, out, *, current_session=None, own_pane=None, exec_fn=os.
     def main(scr):
         screen = box["screen"] = CursesScreen(scr, cfg, run, rows_fn=rows_fn, own_pane=own_pane,
                                               updater=updater, interactive=lambda args, env: run_outside(scr, args, env),
-                                              watcher=watcher, dispatch_watcher=dispatch_watcher)
+                                              watcher=watcher, dispatch_watcher=dispatch_watcher,
+                                              tty_gone=terminal_gone)
 
         def set_cfg(c):
             screen.cfg = c
@@ -1176,15 +1207,24 @@ def curses_ui(cfg, run, out, *, current_session=None, own_pane=None, exec_fn=os.
         watcher.start()
     if dispatch_watcher is not None:
         dispatch_watcher.start()
+    gone = False
     try:
         rc = wrapper(main)
     except KeyboardInterrupt:
         rc = 0
+    except TerminalGone:
+        rc, gone = 0, True
+    except Exception as e:  # noqa: BLE001  closing curses on a terminal that is gone may fail too
+        if not isinstance(e.__context__, TerminalGone):
+            raise
+        rc, gone = 0, True
     finally:
         if watcher is not None:
             watcher.stop()
-        if dispatch_watcher is not None:
-            dispatch_watcher.stop(notice=out)  # curses is closed: let a delivery in flight finish before exec / exit
+        if dispatch_watcher is not None:  # curses is closed: let a delivery in flight finish before exec / exit
+            dispatch_watcher.stop(notice=None if gone else out)
+    if gone:  # nobody to print to, nothing to start in its place
+        return rc
     screen = box.get("screen")
     for line in (screen.messages if screen else []):
         out(line)

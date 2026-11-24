@@ -4,7 +4,7 @@ from .. import folders as F
 from ..adopt import GUESSED, _ago, _short
 from ..registry import RegistryError, load_rows
 from ..restart import BUSY
-from ..status import State, _fmt_time, _fmt_tokens
+from ..status import State, _fmt_time, _fmt_tokens, display_transcript
 from ..tmux import TMUX, Tmux
 from .state import show_state
 from .text import pad
@@ -58,6 +58,25 @@ def message_style(line):
     return ""
 
 
+_QUOTES = {}  # transcript path → ((mtime_ns, size), quote): read again only when the file changed
+
+
+def _claude_quote(path):
+    try:
+        st = path.stat()
+    except OSError:
+        return ""
+    stamp = (st.st_mtime_ns, st.st_size)
+    hit = _QUOTES.get(path)
+    if hit is not None and hit[0] == stamp:
+        return hit[1]
+    text = claude_state.last_user_text(path)
+    if len(_QUOTES) >= 1024:
+        _QUOTES.clear()
+    _QUOTES[path] = (stamp, text)
+    return text
+
+
 def _quote_of(cfg, agent, profile, sid):
     """The last user message of the conversation (whitespace collapsed to one space); "" when unreadable."""
     if not sid:
@@ -67,8 +86,8 @@ def _quote_of(cfg, agent, profile, sid):
             path = codex_state.find_rollout(cfg.codex.home, sid)
             text = codex_state.last_user_text(path) if path is not None else ""
         elif agent == "claude":
-            path = claude_state.find_transcript(cfg.profiles.values(), sid, prefer=profile)
-            text = claude_state.last_user_text(path) if path is not None else ""
+            path = display_transcript(cfg.profiles.values(), sid, prefer=profile)
+            text = _claude_quote(path) if path is not None else ""
         else:
             text = ""
     except OSError:

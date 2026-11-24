@@ -79,12 +79,14 @@ def _at_trust_prompt(tmux, panes, session, agent):
     return any(at_trust_prompt(tmux.capture(p.pane_id), agent) for p in panes if p.session == session)
 
 
-def status_rows(cfg, run, snapshot_fn=None):
+def status_rows(cfg, run, snapshot_fn=None, *, activity=True):
+    """One StatusRow per registry row and live tmux session. activity False leaves last / tokens / context_window
+    None and reads no transcript (status_rows_light: the dispatch paths, which never read them)."""
     rows = {r.tmux: r for r in load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)}
     tmux = Tmux(run)
     panes = tmux.panes()
     if panes is None:
-        return _unreadable_rows(cfg, rows, unreadable_message(tmux.unreadable_reason))
+        return _unreadable_rows(cfg, rows, unreadable_message(tmux.unreadable_reason), activity=activity)
     procs = list_procs(run)
     found, _w = live_by_pane(cfg, run, panes, procs, snapshot_fn=snapshot_fn)
     multi = multi_agent_sessions(procs, panes, found)
@@ -117,7 +119,8 @@ def status_rows(cfg, run, snapshot_fn=None):
         # before Codex has its first prompt, lc has no thread id: keep the registry row's
         sid = (lc.session_id if lc is not None else None) or (row.session_id if row is not None else "")
         agent = src.agent if src is not None else "-"
-        last, tokens, window = _activity(cfg, agent, src.profile if src is not None else None, sid)
+        last, tokens, window = (_activity(cfg, agent, src.profile if src is not None else None, sid) if activity
+                                else (None, None, None))
         result.append(StatusRow(name, agent, (src.profile or "-") if src else "-", sid, state, detail,
                                 lc.status if lc else "-", last, tokens, window, lc.pane_id if lc else None,
                                 name in alive, row.id if row is not None else "", row.alias if row is not None else "",
@@ -125,13 +128,20 @@ def status_rows(cfg, run, snapshot_fn=None):
     return result
 
 
-def _unreadable_rows(cfg, rows, warning):
+def status_rows_light(cfg, run, snapshot_fn=None):
+    """status_rows without the conversation activity (last / tokens / context_window are None): what sending,
+    watching, settling and heartbeats use. Same signature as status_rows, so it goes wherever a status_fn does."""
+    return status_rows(cfg, run, snapshot_fn=snapshot_fn, activity=False)
+
+
+def _unreadable_rows(cfg, rows, warning, *, activity=True):
     """tmux unreadable: list only the registry rows, state always UNKNOWN (cannot tell) (retired stays as is); do not guess which are running."""
     result = Rows()
     result.warning = warning
     for name in sorted(rows):
         row = rows[name]
-        last, tokens, window = _activity(cfg, row.agent, row.profile, row.session_id)
+        last, tokens, window = (_activity(cfg, row.agent, row.profile, row.session_id) if activity
+                                else (None, None, None))
         result.append(StatusRow(name, row.agent, row.profile or "-", row.session_id,
                                 State.RETIRED if row.state == "retired" else State.UNKNOWN, "", "-", last, tokens, window, None,
                                 False, row.id, row.alias, row.model))
@@ -148,16 +158,43 @@ def _parse_ts(ts):
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
+_DISPLAY_PATHS = {}  # display-path cache: key → transcript path found (never a miss)
+_DISPLAY_PATHS_MAX = 2048
+
+
+def _cached_path(key, find):
+    """The path find() returns, remembered under key while it still exists. A miss is never remembered (a transcript
+    that shows up later is found the next time), and a remembered path that is gone (moved, deleted) is looked up
+    again. Display only: dispatch decisions call find_transcript / find_rollout themselves every time."""
+    path = _DISPLAY_PATHS.get(key)
+    if path is not None and path.exists():
+        return path
+    _DISPLAY_PATHS.pop(key, None)
+    path = find()
+    if path is not None:
+        if len(_DISPLAY_PATHS) >= _DISPLAY_PATHS_MAX:
+            _DISPLAY_PATHS.clear()
+        _DISPLAY_PATHS[key] = path
+    return path
+
+
+def display_transcript(profiles, sid, prefer=None):
+    """find_transcript for what is only shown (the list's last activity and context, the info card's quote)."""
+    profiles = list(profiles)
+    key = ("claude", tuple(str(p.projects_dir) for p in profiles), sid, prefer)
+    return _cached_path(key, lambda: find_transcript(profiles, sid, prefer=prefer))
+
+
 def _activity(cfg, agent, profile, sid):
     """(last activity datetime | None, context tokens | None, context window | None) of a conversation; the window is Codex only."""
     if not sid:
         return None, None, None
     if agent == "codex":
-        path = find_rollout(cfg.codex.home, sid)
+        path = find_rollout(cfg.codex.home, sid)  # not cached: a resumed thread may write a newer rollout
         if path is None:
             return None, None, None
         return (rollout_last_time(path), *rollout_context(path))
-    t = find_transcript(cfg.profiles.values(), sid, prefer=profile)
+    t = display_transcript(cfg.profiles.values(), sid, prefer=profile)
     if t is None:
         return None, None, None
     last, tokens = transcript_stats(t)

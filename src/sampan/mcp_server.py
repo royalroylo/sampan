@@ -24,7 +24,7 @@ from .procs import list_procs
 from .prompts import SKIP
 from .registry import RegistryError, load_rows
 from .send import Caller, CallerUnsure, lookup_caller  # noqa: F401  (CallerUnsure, lookup_caller re-exported)
-from .status import status_rows
+from .status import status_rows, status_rows_light
 from .update import current_version
 
 PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26")  # the first is answered when the client asks for another one
@@ -276,7 +276,11 @@ class Server:
         self.parent_agent = parent_agent  # started by claude / codex (parent_is_agent); False refuses the acting tools
         self.resolve = resolve  # () -> Caller, asked again before every tool that acts or reads a dispatch
         self.sleep, self.clock, self.now_fn = sleep, clock, now_fn
+        # two row functions: status_fn (list_sessions shows last activity: the full status_rows) and watch_status_fn
+        # (sending, watching, settling, heartbeats: None = send's own default, status_rows_light). An injected
+        # status_fn (tests) serves both.
         self.status_fn, self.snapshot_fn = status_fn or status_rows, snapshot_fn
+        self.watch_status_fn = status_fn
         self.client_name = None  # clientInfo.name from initialize
         self.start_of = start_of  # pid -> start time (procs.start_time); None writes no heartbeat
         self.nonce = secrets.token_hex(8)  # this instance's key in the inboxes table
@@ -450,9 +454,11 @@ class Server:
             raise ToolError(f"沒有派工 {did}（或不是這個 session 發出的）")
         return d
 
-    def _rows(self):
+    def _rows(self, light=True):
+        """The status rows; light (no last activity / context) unless the tool shows them (list_sessions)."""
+        fn = self.status_fn if not light else (self.watch_status_fn or status_rows_light)
         try:
-            return self.status_fn(self.cfg, self.run, snapshot_fn=self.snapshot_fn)
+            return fn(self.cfg, self.run, snapshot_fn=self.snapshot_fn)
         except RegistryError as e:
             raise ToolError(str(e)) from e
 
@@ -460,7 +466,7 @@ class Server:
         """One round for a tool that returns the result: a finished dispatch owes no notice any more (report)."""
         try:
             return send.advance(self.cfg, self.run, did, sleep=self.sleep, snapshot_fn=self.snapshot_fn,
-                                status_fn=self.status_fn, now=self.now_fn(), report=True,
+                                status_fn=self.watch_status_fn, now=self.now_fn(), report=True,
                                 restore=False)  # a tool result returns at once: the watcher does the reattaching
         except (dispatch.DispatchError, RegistryError) as e:
             raise ToolError(str(e)) from e
@@ -480,7 +486,7 @@ class Server:
         while True:
             try:
                 items = send.advance_batch(self.cfg, self.run, bid, sleep=self.sleep, snapshot_fn=self.snapshot_fn,
-                                           status_fn=self.status_fn, now=self.now_fn(), report=True, restore=False)
+                                           status_fn=self.watch_status_fn, now=self.now_fn(), report=True, restore=False)
             except (dispatch.DispatchError, RegistryError) as e:
                 raise ToolError(str(e)) from e
             if all(d.state in dispatch.FINISHED for d in items) or self.clock() - start >= seconds:
@@ -488,7 +494,7 @@ class Server:
             self.sleep(send.POLL_S)
 
     def tool_list_sessions(self, args):
-        rows = self._rows()
+        rows = self._rows(light=False)
         try:
             reg = {r.tmux: r for r in load_rows(self.cfg.registry_path, codex_profile=self.cfg.codex.profile)}
         except RegistryError:
@@ -574,7 +580,7 @@ class Server:
         if problem:
             raise ToolError(problem)
         d = send.submit(self.cfg, self.run, caller, to, message, notify=not wait, now=self.now_fn(),
-                        snapshot_fn=self.snapshot_fn, status_fn=self.status_fn, raw=raw, restore=restore,
+                        snapshot_fn=self.snapshot_fn, status_fn=self.watch_status_fn, raw=raw, restore=restore,
                         profile=profile)
         if isinstance(d, str):
             raise ToolError(d)
@@ -638,7 +644,7 @@ class Server:
             raise ToolError(send_restore.NEEDS_RESTORE)
         caller = self._refresh_caller()
         b = send.submit_batch(self.cfg, self.run, caller, names, message, raw=raw, notify=not wait, now=self.now_fn(),
-                              snapshot_fn=self.snapshot_fn, status_fn=self.status_fn, restore=restore, profile=profile)
+                              snapshot_fn=self.snapshot_fn, status_fn=self.watch_status_fn, restore=restore, profile=profile)
         if isinstance(b, str):
             raise ToolError(b)
         self.mine.update([b.id] + [d.id for d in b.items])
@@ -807,8 +813,8 @@ class Server:
         try:
             if self.started is None:
                 self.started = self.start_of(os.getpid())
-            row = next((r for r in self.status_fn(self.cfg, self.run, snapshot_fn=self.snapshot_fn)
-                        if r.id == caller.id), None)
+            rows = (self.watch_status_fn or status_rows_light)(self.cfg, self.run, snapshot_fn=self.snapshot_fn)
+            row = next((r for r in rows if r.id == caller.id), None)
             if self.started is None or row is None or not row.sid:
                 return
             with dispatch.transaction(self.cfg.state_dir, wait_s=2) as items:
@@ -843,14 +849,14 @@ class Server:
                 self.beat()  # a reattach inside an advance takes a minute: keep the heartbeat fresh between dispatches
                 try:
                     send.advance(self.cfg, self.run, d.id, sleep=self.sleep, snapshot_fn=self.snapshot_fn,
-                                 status_fn=self.status_fn, now=self.now_fn())
+                                 status_fn=self.watch_status_fn, now=self.now_fn())
                 except (dispatch.DispatchError, RegistryError, OSError) as e:
                     _log(f"派工 {d.id}：{e}")
         inbound = [d.id for d in items if send.needs_settling(d, self.caller.id)]
         if inbound:
             try:
                 send.settle_mail(self.cfg, self.run, self.caller.id, inbound, sleep=self.sleep,
-                                 snapshot_fn=self.snapshot_fn, status_fn=self.status_fn, now=self.now_fn())
+                                 snapshot_fn=self.snapshot_fn, status_fn=self.watch_status_fn, now=self.now_fn())
             except (dispatch.DispatchError, RegistryError, OSError) as e:
                 _log(f"收件 {'、'.join(inbound)}：{e}")
 
