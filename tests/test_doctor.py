@@ -12,8 +12,9 @@ from unittest import mock
 from sampan import codex_approval, launchd
 from sampan.doctor import current_sampan, run_checks
 from sampan.hook import install_hook
+from sampan.status import State
 from tests.fakes import FakeRunner, cp, pane_line, ps_line
-from tests.helpers import TOML, local_tz, make_env
+from tests.helpers import TOML, local_tz, make_env, status_row
 from tests.test_claude_state import write_session
 from tests.test_codex_state import make_db
 from tests.test_plugins import GOOD_KNOWN, NO_OFFICIAL, write_plugins
@@ -838,3 +839,45 @@ class DispatchStoreDoctorTest(DoctorTest):
         broken = [c for c in checks if "登記表" in c.title and "心跳" in c.title]
         self.assertEqual([c.level for c in broken], ["warn"])
         self.assertIn("登記表壞了", broken[0].detail)
+
+
+class LifecycleChecksTest(unittest.TestCase):
+    def setUp(self):
+        self.cfg = make_env(Path(tempfile.mkdtemp()))
+
+    def checks(self, *rows):
+        from sampan.doctor import _lifecycle
+        return _lifecycle(self.cfg, None, lambda cfg, run: list(rows))
+
+    def test_nothing_to_report_prints_nothing(self):
+        self.assertEqual(self.checks(status_row("a"), status_row("b", State.STOPPED), status_row("c", State.RETIRED)), [])
+
+    def test_retired_but_running_warns_with_both_exits(self):
+        [c] = self.checks(status_row("zed", State.RETIRED, live="running"), status_row("amy", State.RETIRED, live="running"),
+                          status_row("ok", State.RETIRED))
+        self.assertEqual((c.level, c.title), ("warn", "retired 但仍在執行：amy、zed"))
+        self.assertIn("sampan retire amy", c.detail)
+        self.assertIn("sampan stop amy", c.detail)
+        self.assertIn("sampan activate amy", c.detail)
+
+    def test_active_sessions_on_a_disabled_profile_are_information(self):
+        import dataclasses
+        work = dataclasses.replace(self.cfg.all_profiles["work"], disabled=True)
+        self.cfg = dataclasses.replace(self.cfg, all_profiles=self.cfg.all_profiles | {"work": work})
+        out = self.checks(status_row("a", State.STOPPED, profile="work"), status_row("b", State.STOPPED, profile="work"),
+                          status_row("c", State.STOPPED, profile="alice"), status_row("d", State.RETIRED, profile="work"))
+        self.assertEqual([(c.level, c.title) for c in out],
+                         [("info", "已停用的 profile work 上還登記著 2 個 active session：a、b")])
+        self.assertIn("sampan profile enable work", out[0].detail)
+
+    def test_active_sessions_on_a_profile_that_left_the_config_warn(self):
+        out = self.checks(status_row("a", State.STOPPED, profile="ghost"))
+        self.assertEqual([(c.level, c.title) for c in out],
+                         [("warn", "profile ghost 已不在設定檔，登記在它上面的 active session 接不回：a")])
+
+    def test_a_failing_status_read_never_stops_doctor(self):
+        from sampan.doctor import _lifecycle
+
+        def boom(cfg, run):
+            raise RuntimeError("x")
+        self.assertEqual(_lifecycle(self.cfg, None, boom), [])

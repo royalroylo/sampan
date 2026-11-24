@@ -52,6 +52,77 @@ class StatusTest(unittest.TestCase):
         self.assertEqual(rows["extra"].state, State.UNREGISTERED)
         self.assertEqual(rows["running"].tokens, 300001)
 
+    def test_rows_carry_registry_and_live(self):
+        rows = {x.name: x for x in status_rows(self.cfg, self.r)}
+        got = {n: (r.registry, r.live) for n, r in rows.items()}
+        self.assertEqual(got["running"], ("active", "running"))
+        self.assertEqual(got["down"], ("active", "stopped"))
+        self.assertEqual(got["wrongprof"], ("active", "running"))  # a mismatch still runs
+        self.assertEqual(got["old"], ("retired", "stopped"))
+        self.assertEqual(got["extra"], ("", "running"))
+
+    def test_retired_but_running_keeps_state_retired_and_live_running(self):
+        panes = [pane_line("old", "%5", 104, "claude", "/c")]
+        self.r.on(["tmux", "-u", "list-panes"], cp(out="\n".join(panes) + "\n"))
+        write_session(self.cfg, "alice", 205, sid=D, tmux="old:@5.%5", status="idle")
+        procs = [ps_line(104, 1, "-zsh", "-zsh"), ps_line(205, 104, "claude", "claude")]
+        self.r.on(["ps", "-A"], cp(out="\n".join(procs) + "\n"))
+        old = {x.name: x for x in status_rows(self.cfg, self.r)}["old"]
+        self.assertEqual((old.state, old.registry, old.live, old.agent_status), (State.RETIRED, "retired", "running", "idle"))
+
+    def test_a_mismatch_shows_before_retired(self):
+        write_rows(self.cfg.registry_path, [Row("old", "claude", "alice", D, "/c", "retired")], "t", self.cfg.history_dir)
+        panes = [pane_line("old", "%5", 104, "claude", "/c")]
+        self.r.on(["tmux", "-u", "list-panes"], cp(out="\n".join(panes) + "\n"))
+        write_session(self.cfg, "work", 205, sid=D, tmux="old:@5.%5", status="idle")
+        procs = [ps_line(104, 1, "-zsh", "-zsh"), ps_line(205, 104, "claude", "claude")]
+        self.r.on(["ps", "-A"], cp(out="\n".join(procs) + "\n"))
+        old = {x.name: x for x in status_rows(self.cfg, self.r)}["old"]
+        self.assertEqual((old.state, old.registry, old.live), (State.PROFILE_MISMATCH, "retired", "running"))
+
+    def test_retired_at_the_trust_prompt_shows_the_prompt(self):
+        panes = [pane_line("old", "%4", 103, "claude", "/c")]
+        self.r.on(["tmux", "-u", "list-panes"], cp(out="\n".join(panes) + "\n"))
+        self.r.on(["tmux", "-u", "capture-pane"], cp(out="Do you trust this folder?\n ❯ No, exit\n   Yes, I trust this folder\n"))
+        old = {x.name: x for x in status_rows(self.cfg, self.r)}["old"]
+        self.assertEqual((old.state, old.live), (State.AWAIT_TRUST, "stopped"))
+
+    def test_unreadable_tmux_gives_live_unknown(self):
+        from sampan.status import _unreadable_rows
+        rows = {r.name: r for r in _unreadable_rows(self.cfg, {r.tmux: r for r in load_rows(self.cfg.registry_path)}, "x")}
+        self.assertEqual((rows["old"].registry, rows["old"].live, rows["old"].state), ("retired", "unknown", State.RETIRED))
+        self.assertEqual((rows["down"].registry, rows["down"].live), ("active", "unknown"))
+
+    def test_no_retired_row_output_has_no_registry_column(self):
+        write_rows(self.cfg.registry_path, [Row("running", "claude", "alice", A, "/c")], "t", self.cfg.history_dir)
+        msgs = []
+        cmd_status(self.cfg, self.r, msgs.append)
+        self.assertNotIn("登記", msgs[0])
+        self.assertFalse(any("⚠ retired" in m for m in msgs))
+
+    def test_retired_row_adds_registry_column_and_state_column_never_says_retired(self):
+        msgs = []
+        cmd_status(self.cfg, self.r, msgs.append)
+        head = msgs[0].split()
+        self.assertIn("登記", head)
+        old = next(m for m in msgs if m.startswith("old "))
+        self.assertIn("retired", old.split())
+        self.assertIn("已停止", old)
+        self.assertEqual(old.split().count("retired"), 1)
+
+    def test_retired_but_running_is_flagged_with_a_footer(self):
+        panes = [pane_line("old", "%5", 104, "claude", "/c")]
+        self.r.on(["tmux", "-u", "list-panes"], cp(out="\n".join(panes) + "\n"))
+        write_session(self.cfg, "alice", 205, sid=D, tmux="old:@5.%5", status="idle")
+        procs = [ps_line(104, 1, "-zsh", "-zsh"), ps_line(205, 104, "claude", "claude")]
+        self.r.on(["ps", "-A"], cp(out="\n".join(procs) + "\n"))
+        msgs = []
+        self.assertEqual(cmd_status(self.cfg, self.r, msgs.append), 0)  # a warning, not a failure
+        line = next(m for m in msgs if m.startswith("old "))
+        self.assertIn("retired ⚠", line)
+        self.assertIn("執行中", line)
+        self.assertIn("⚠ retired 但還在執行：old（sampan stop old 下線；sampan activate old 還原）", msgs)
+
     def test_status_row_carries_id(self):
         rows = {x.name: x for x in status_rows(self.cfg, self.r)}
         reg = {r.tmux: r.id for r in load_rows(self.cfg.registry_path)}

@@ -232,9 +232,11 @@ def target_problem(row, to, restore=False):
         return f"找不到 session「{to}」：不在 sampan 登記表裡（sampan status 看名稱）"
     if restore and row.state == State.STOPPED:
         return None
+    if row.state == State.RETIRED:  # parked on purpose: never takes a message, whether or not it still runs
+        where = "但還在執行" if row.live == "running" else "已停止"
+        return f"「{to}」已 retired（{where}）：retired 的不收訊息{'，--restore 也不接回' if restore else ''}；要送請先 sampan activate {to}"
     if row.state != State.RUNNING:
-        hint = f"；--restore 不接回 retired 的，先 sampan activate {to}" if restore and row.state == State.RETIRED else ""
-        return f"「{to}」不是執行中（{row.display}），不送{hint}"
+        return f"「{to}」不是執行中（{row.display}），不送"
     return None
 
 

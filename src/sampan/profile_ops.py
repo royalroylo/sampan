@@ -238,9 +238,30 @@ def _running_refusal(cfg, run, out, name, verb, proc_root):
         out(f"❌ {e}；不知道 profile {name} 有沒有 session 在跑，什麼都沒改")
         return 2
     if running:
-        out(f"❌ profile {name} 還有 session 在跑：{'、'.join(running)}；先停掉再{verb}")
+        parked = _retired_among(cfg, running)
+        out(f"❌ profile {name} 還有 session 在跑：{'、'.join(f'{n}（retired）' if n in parked else n for n in running)}；先停掉再{verb}")
+        if parked:
+            out(f"  retired 但還在跑的：sampan retire {parked[0]} 會補停（或 sampan stop {parked[0]}）")
         return 1
     return None
+
+
+def _retired_among(cfg, names):
+    """Which of these sessions the registry marks retired (none when the registry cannot be read)."""
+    try:
+        return [r.tmux for r in registry.load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)
+                if r.state == "retired" and r.tmux in names]
+    except registry.RegistryError:
+        return []
+
+
+def _stopped_active_on(cfg, name):
+    """Active registry rows on profile `name` (none of them runs: disable is refused otherwise)."""
+    try:
+        return sorted(r.tmux for r in registry.load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)
+                      if r.state == "active" and r.profile == name)
+    except registry.RegistryError:
+        return []
 
 
 def cmd_profile_disable(cfg, run, out, name, *, proc_root=PROC_ROOT):
@@ -262,6 +283,10 @@ def cmd_profile_disable(cfg, run, out, name, *, proc_root=PROC_ROOT):
         if edit_config(cfg, out, lambda text: set_profile_flag(text, name, "disabled", True)) is None:
             return 1
     out(f"✔ 已停用 {name}；目錄 {_disp(p.config_dir, cfg.home)} 保留（要刪的話先確認裡面沒有連到別處的捷徑）")
+    stuck = _stopped_active_on(cfg, name)
+    if stuck:
+        out(f"登記在 {name}、目前已停止的 session：{'、'.join(stuck)}"
+            f"（接不回；sampan profile enable {name} 後恢復，或 sampan retire 讓它們停放）")
     return 0
 
 

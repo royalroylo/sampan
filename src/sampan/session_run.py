@@ -133,6 +133,12 @@ def check_new(cfg, run, name, target, cwd):
         return f"目錄不能含換行或控制字元：{cwd!r}"
     if Tmux(run).has_session(name):
         return f"tmux session {name} 已存在"
+    try:
+        taken = next((r for r in load_rows(cfg.registry_path, codex_profile=cfg.codex.profile) if r.tmux == name), None)
+    except RegistryError:
+        taken = None  # an unreadable registry is reported where it is written, not here
+    if taken is not None:
+        return f"登記表已有 {name}（{taken.state}）：sampan forget {name} 移除它，或換一個名字（直接蓋掉會讓它的對話不再被 sampan 認得）"
     resolved = str(Path(cwd).expanduser().resolve())
     if has_control(resolved):  # a clean symlink may point at a directory whose name is not
         return f"目錄（解析後）不能含換行或控制字元：{resolved!r}"
@@ -309,6 +315,87 @@ def cmd_set_state(cfg, out, name, state):
             return 2
         write_rows(cfg.registry_path, rows, now_iso(), cfg.history_dir, machine=registry_machine(cfg))
     out(f"{name} → {state}")
+    return 0
+
+
+def cmd_retire(cfg, run, out, name, *, no_stop=False, dry_run=False, force=False, timeout=90, own_pane=None,
+               sleep=time.sleep, proc_root=PROC_ROOT):
+    """Take a session out of the work list: stop it first, and mark it retired only when the stop worked (the other way
+    round, a stop that fails would leave a retired session that still runs). Only an idle session is stopped; a busy
+    one, one at a worktree question, several agents, or sampan's own pane is refused with nothing changed. A session
+    that is not running is only marked (its tmux session, if only a shell is left, is not closed). no_stop: only mark.
+    Running it again on a retired session that still runs finishes the stop. Exit codes: 0 done, 1 refused or the stop
+    did not finish, 2 nothing changed because the name is unknown or tmux cannot be read."""
+    if not dry_run:
+        out = actionlog.tee(cfg, f"retire {_who(cfg, name)}", out)
+    rows = _load(cfg, out)
+    if rows is None:
+        return 2
+    row = next((r for r in rows if r.tmux == name), None)
+    if row is None:
+        out(f"❌ 登記表沒有 {name}")
+        return 2
+    try:
+        panes = Tmux(run).require_panes()
+    except TmuxUnreadable as e:
+        if not no_stop:
+            out(f"❌ {e}；不知道 {name} 有沒有在跑，什麼都沒改（要只標記就加 --no-stop）")
+            return 2
+        panes = None
+    here = panes is not None and any(p.session == name for p in panes)
+    if no_stop or not here:
+        if row.state == "retired" and not here:
+            out(f"{name} 已經是 retired")
+            return 0
+        if dry_run:
+            out(f"（dry-run）會把 {name} 標成 retired{'（--no-stop：不停它）' if here else ''}，什麼都沒改")
+            return 0
+        rc = cmd_set_state(cfg, out, name, "retired")
+        if rc == 0 and here:
+            out(f"⚠ {name} 仍在執行：retired 但還在跑；sampan stop {name} 下線，或 sampan activate {name} 還原")
+        return rc
+    stopped, left, lines = [], [], []
+    rc = cmd_stop(cfg, run, lines.append, names=(name,), force=force, dry_run=dry_run, timeout=timeout,
+                  own_pane=own_pane, sleep=sleep, proc_root=proc_root, stopped=stopped, left=left)
+    if rc == 2:
+        for line in lines:
+            out(line)
+        return 2
+    if name not in stopped and name not in left and not dry_run and rc == 0:
+        pass  # nothing ran in the tmux session (only a shell): nothing to stop, and its output is not worth showing
+    else:
+        for line in lines:
+            out(line)
+    if name in left or (name not in stopped and not dry_run and rc != 0):
+        out(f"❌ {name} 沒有停下來，沒標成 retired：等它閒了再 retire；或 sampan retire {name} --no-stop 只標記"
+            f"（之後它還在跑，sampan doctor 會提醒，要自己 sampan stop {name}）")
+        return 1
+    if dry_run:
+        out(f"（dry-run）會停掉 {name}，成功後標成 retired，什麼都沒改")
+        return 0
+    return cmd_set_state(cfg, out, name, "retired")
+
+
+def cmd_activate(cfg, run, out, name):
+    """Put a retired session back on the work list (only the flag), then say what is left to do: a stopped one is not
+    reattached here (that needs memory and a usable profile), a running one is back as it was."""
+    rc = cmd_set_state(cfg, out, name, "active")
+    if rc != 0:
+        return rc
+    from .status import status_rows_light
+    try:
+        row = next((r for r in status_rows_light(cfg, run) if r.name == name), None)
+    except RegistryError:
+        return 0
+    if row is None or row.live == "unknown":
+        return 0
+    if row.live == "running":
+        out(f"  {name} 在執行中，已恢復，不需其他動作")
+        return 0
+    out(f"  {name} 是已停止的：sampan restore {name} 接回")
+    prof = cfg.all_profiles.get(row.profile)
+    if prof is not None and prof.disabled:
+        out(f"  ⚠ 它的 profile {row.profile} 已停用：接回前要先 sampan profile enable {row.profile}")
     return 0
 
 
@@ -1063,13 +1150,19 @@ def cmd_switch(cfg, run, out, name, profile, *, dry_run=False, own_pane=None, on
         out(f"❌ {name} 是 {row.agent}，只有 Claude session 能換 profile")
         return 2
     if profile not in cfg.profiles:
-        out(f"❌ 未知的 profile：{profile}（設定檔裡有：{'、'.join(cfg.profiles)}）")
+        if disabled_problem(cfg, profile):
+            out(disabled_problem(cfg, profile))
+        else:
+            out(f"❌ 未知的 profile：{profile}（設定檔裡有：{'、'.join(cfg.profiles)}）")
         return 2
     if profile == row.profile:
         out(f"= {name} 已經是 {profile}")
         return 0
     if row.profile not in cfg.profiles:
-        out(f"❌ {name}：profile {row.profile} 不在設定檔")
+        if disabled_problem(cfg, row.profile):
+            out(f"❌ {name}：{disabled_problem(cfg, row.profile).removeprefix('❌ ')}，要換先啟用它")
+        else:
+            out(f"❌ {name}：profile {row.profile} 不在設定檔")
         return 2
     gap = gap_line(cfg, row.profile, profile) if warn_gap else None
     if gap:
@@ -1080,6 +1173,9 @@ def cmd_switch(cfg, run, out, name, profile, *, dry_run=False, own_pane=None, on
         out(f"❌ {e}；不動 {name}")
         return 2
     if any(p.session == name for p in panes):
+        if row.state == "retired":
+            out(f"❌ {name} 是 retired 但還在執行（不該有的狀態）：sampan retire {name} 補停，或 sampan activate {name} 還原")
+            return 2
         if no_launch:
             out(f"❌ {name} 在執行中；--no-launch 只搬已停止的 session（要換就用不帶 --no-launch 的 sampan switch {name} {profile}）")
             return 2

@@ -87,8 +87,14 @@ class TargetProblemTest(unittest.TestCase):
         self.assertIn("不是執行中", send.target_problem(stop, "b"))
         self.assertIsNone(send.target_problem(stop, "b", restore=True))
         retired = status_row("b", State.RETIRED)
-        self.assertNotIn("activate", send.target_problem(retired, "b"))  # as before without the flag
+        self.assertIn("已 retired（已停止）", send.target_problem(retired, "b"))
+        self.assertIn("sampan activate b", send.target_problem(retired, "b"))
+        self.assertIn("--restore 也不接回", send.target_problem(retired, "b", restore=True))
         self.assertIn("sampan activate b", send.target_problem(retired, "b", restore=True))
+        running = status_row("b", State.RETIRED, live="running")  # retired but still running: say so, do not say "not running"
+        text = send.target_problem(running, "b")
+        self.assertIn("已 retired（但還在執行）", text)
+        self.assertNotIn("不是執行中", text)
         for state in (State.AWAIT_TRUST, State.UNKNOWN, State.MULTI):
             self.assertIn("不是執行中", send.target_problem(status_row("b", state), "b", restore=True), state)
         self.assertIn("找不到", send.target_problem(None, "b", restore=True))

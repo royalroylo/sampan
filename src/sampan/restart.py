@@ -55,7 +55,7 @@ def plan_restart(rows, names, *, resume_stopped, own_pane=None):
             else:
                 plan.skip.append((name, "已停止"))
         elif row.state is State.RETIRED:
-            plan.skip.append((name, "retired"))
+            plan.skip.append((name, "retired（仍在執行）" if row.live == "running" else "retired"))
         elif row.state is State.UNKNOWN:
             plan.skip.append((name, "狀態不明"))
         else:

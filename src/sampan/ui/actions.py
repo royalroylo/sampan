@@ -254,6 +254,20 @@ def _alias(cfg, out, ask, name, alias_fn):
     return alias_fn(cfg, out, name, new) if new else alias_fn(cfg, out, name, "", clear=True)
 
 
+def _retire(cfg, run, out, ask, name, rows, retire_fn, set_state_fn, own_pane):
+    """r: a stopped session is marked right away; a running idle one is stopped first (after confirming), a busy one is left alone."""
+    row = next((r for r in rows if r.name == name), None)
+    if row is None or row.live != "running":
+        return set_state_fn(cfg, out, name, "retired")
+    if row.agent_status != "idle":
+        out(f"⏸ {name} 忙（{row.agent_status}），沒動；等它閒了再 retire")
+        return 0
+    if (_ask(ask, f"會停掉 {name} 並標成 retired (y/N): ") or "").lower() != "y":
+        out("已取消")
+        return 0
+    return retire_fn(cfg, run, out, name, own_pane=own_pane)
+
+
 def _forget(cfg, run, out, ask, name, forget_fn):
     """X: confirm, then remove the row from the registry (the conversation itself is not deleted)."""
     if (_ask(ask, f"從登記表移除 {name}？之後不會再列出，也不會被 R 接回；對話紀錄不刪 (y/N): ") or "").lower() != "y":
@@ -452,7 +466,7 @@ def _first_opened(out, opened, verb):
 
 def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, picker_fn=None,
            rows_fn=status_rows, exec_fn=os.execvp, stop_fn=session_run.cmd_stop,
-           new_fn=session_run.cmd_new, set_state_fn=session_run.cmd_set_state, move_fn=session_run.cmd_move,
+           new_fn=session_run.cmd_new, set_state_fn=session_run.cmd_set_state, retire_fn=session_run.cmd_retire, move_fn=session_run.cmd_move,
            rename_fn=session_run.cmd_rename, alias_fn=session_run.cmd_alias, switch_fn=session_run.cmd_switch, forget_fn=session_run.cmd_forget,
            restore_fn=restore_mod.cmd_restore, restore_picker_fn=None,
            adopt_fn=adopt_mod.cmd_adopt, adopt_picker_fn=None, save_fn=save_mod.cmd_save, loop=False,
@@ -646,7 +660,7 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
         "tell": lambda names, rows, kw: (tell_flow(cfg, run, out, answer, names), None),
         "rename_folder": lambda names, rows, kw: (folder_actions.rename_flow(cfg, out, answer, names[0]), None),
         "rm_folder": lambda names, rows, kw: (folder_actions.remove_flow(cfg, out, answer, names[0]), None),
-        "retired": lambda names, rows, kw: (set_state_fn(cfg, out, names[0], "retired"), None),
+        "retired": lambda names, rows, kw: (_retire(cfg, run, out, ask, names[0], rows, retire_fn, set_state_fn, own_pane), None),
         "active": lambda names, rows, kw: (set_state_fn(cfg, out, names[0], "active"), None),
     }
 

@@ -39,7 +39,7 @@ def skip_reason(cfg, row, own_pane=None):
     if row.state is State.STOPPED:
         return "已停止；下次接回會自動套用"
     if row.state is State.RETIRED:
-        return "retired"
+        return "retired（仍在執行）" if row.live == "running" else "retired"
     if row.state is State.UNKNOWN:
         return "狀態不明"
     return _other_state(row)

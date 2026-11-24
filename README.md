@@ -30,7 +30,7 @@ curl -fsSL https://raw.githubusercontent.com/royalroylo/sampan/main/install.sh |
 或手動兩行：
 
 ```
-uv tool install git+https://github.com/royalroylo/sampan@v0.26.1
+uv tool install git+https://github.com/royalroylo/sampan@v0.27.0
 sampan init
 ```
 
@@ -84,6 +84,7 @@ sampan init
 
 - [安裝](docs/install.md)
 - [使用說明](docs/usage.md)
+- [session 生命週期：active、retired、執行中的組合](docs/lifecycle.md)
 - [SSH 與 tmux 設定](docs/setup.md)
 - [hub：自己的幾台機器之間互傳訊息](docs/hub.md)
 - [設定檔與登記表格式](docs/reference.md)

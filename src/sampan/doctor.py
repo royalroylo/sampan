@@ -322,6 +322,38 @@ def _profile_mismatch(cfg, run, rows_fn):
     return out
 
 
+def _lifecycle(cfg, run, rows_fn):
+    """Sessions in a state nobody should leave them in: retired but still running (`retire --no-stop`, an older sampan, or
+    started by hand), and active ones that are stopped on a profile that cannot start them (disabled, or gone from the
+    config). Only warns: stopping a session interrupts things, so it is the user's call."""
+    try:
+        rows = rows_fn(cfg, run)
+    except Exception:  # noqa: BLE001  (a doctor check never stops the others)
+        return []
+    out = []
+    parked = sorted(r.name for r in rows if r.registry == "retired" and r.live == "running")
+    if parked:
+        first = parked[0]
+        out.append(Check("warn", f"retired 但仍在執行：{'、'.join(parked)}",
+                         f"要下線：sampan retire {first}（會補停；忙的先等它閒）或 sampan stop {first}；要留著：sampan activate {first}"))
+    off, gone = {}, {}
+    for r in rows:
+        if r.registry != "active" or r.live != "stopped" or r.agent != "claude":
+            continue
+        owner = cfg.all_profiles.get(r.profile)
+        if owner is None:
+            gone.setdefault(r.profile, []).append(r.name)
+        elif owner.disabled:
+            off.setdefault(r.profile, []).append(r.name)
+    for prof, names in sorted(off.items()):
+        out.append(Check("info", f"已停用的 profile {prof} 上還登記著 {len(names)} 個 active session：{'、'.join(sorted(names))}",
+                         f"接不回，直到 sampan profile enable {prof}；不要它們了就 sampan retire"))
+    for prof, names in sorted(gone.items()):
+        out.append(Check("warn", f"profile {prof} 已不在設定檔，登記在它上面的 active session 接不回：{'、'.join(sorted(names))}",
+                         f"補回 profile（sampan profile add {prof}），或 sampan switch 換到別的 profile，或 sampan retire／forget"))
+    return out
+
+
 def _dispatch_store(cfg, run, now, rows_fn, alive, start_of):
     """The state dir must not be on a Windows drive (/mnt under WSL); and the registered, running Claude sessions that
     have no valid heartbeat (their sampan MCP is not up for this conversation) are listed."""
@@ -652,6 +684,7 @@ def run_checks(cfg, run, *, now, uid, sampan_path=None, proc_root=PROC_ROOT, whi
     return (_version(current, latest_fn) + _deps(cfg, which, env, platform) + _claude_versions(cfg, run) + _profile_dirs(cfg) + _owners(cfg, uid) + _plugins(cfg) + _auth(cfg, run) + _two_logins(cfg, run, platform) + _stale(cfg, run)
             + _hooks(cfg) + _statusline(cfg, now) + _codex(cfg) + _codex_daemon(cfg, run, daemon_fn) + _mcp(cfg) + _detach_key(cfg, run) + _tmux_conf(cfg, run) + _multi_agent(cfg, run, proc_root) + _action_log(cfg) + _data_format(cfg)
             + _profile_mismatch(cfg, run, rows_fn)
+            + _lifecycle(cfg, run, rows_fn)
             + _dispatch_store(cfg, run, now, rows_fn, alive, start_of)
             + (_launchd(cfg, run, sampan_path) + _save_log(cfg, now) if platform == "darwin" else
                [Check("info", "這台不是 macOS，沒有自動存檔排程（需要時自己跑 sampan save，或用 cron／systemd timer）")]))

@@ -18,10 +18,11 @@ class PlanTest(unittest.TestCase):
             status_row("me", pane="%9"),
             status_row("stopped", State.STOPPED),
             status_row("retired", State.RETIRED),
+            status_row("retiredrun", State.RETIRED, live="running"),
             status_row("unknown", State.UNKNOWN),
             status_row("mismatch", State.PROFILE_MISMATCH),
         ]
-        names = ["idle", "busy", "waiting", "me", "stopped", "retired", "unknown", "mismatch", "ghost"]
+        names = ["idle", "busy", "waiting", "me", "stopped", "retired", "retiredrun", "unknown", "mismatch", "ghost"]
         plan = plan_restart(rows, names, resume_stopped=True, own_pane="%9")
         self.assertEqual(plan.restart, ["idle"])
         self.assertEqual(plan.resume, ["stopped"])
@@ -30,6 +31,7 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(skip["waiting"], "忙")
         self.assertEqual(skip["me"], "sampan 就在這個 pane")
         self.assertEqual(skip["retired"], "retired")
+        self.assertEqual(skip["retiredrun"], "retired（仍在執行）")
         self.assertEqual(skip["unknown"], "狀態不明")
         self.assertEqual(skip["mismatch"], "prof 不符")
         self.assertEqual(skip["ghost"], "找不到")

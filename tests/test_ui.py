@@ -22,19 +22,23 @@ ROWS = [row("a"), row("b", agent_status="busy", tokens=300_000), row("old", stat
 class UiTest(unittest.TestCase):
     def setUp(self):
         self.cfg = make_env(Path(tempfile.mkdtemp()))
-        self.msgs, self.calls, self.execs = [], [], []
+        self.msgs, self.calls, self.execs, self.prompted = [], [], [], []
         self.r = FakeRunner()
         self.r.on(["tmux", "-u", "has-session"], cp())
+
+    def prompts(self):
+        return self.prompted
 
     def ui(self, answers, *, current=None, rows=ROWS, restore_picker=None, adopt_picker=None):
         answers = iter(answers)
         return cmd_ui(
-            self.cfg, self.r, self.msgs.append, lambda _prompt: next(answers),
+            self.cfg, self.r, self.msgs.append, lambda prompt: self.prompted.append(prompt) or next(answers),
             current_session=current, own_pane="%9", rows_fn=lambda cfg, run: rows,
             exec_fn=lambda *a: self.execs.append(a),
             stop_fn=lambda *a, **kw: self.calls.append(("stop", kw)) or 0,
             new_fn=lambda cfg, run, out, name, profile, cwd, **kw: self.calls.append(("new", name, profile, cwd)) or 0,
             set_state_fn=lambda cfg, out, name, state: self.calls.append(("state", name, state)) or 0,
+            retire_fn=lambda cfg, run, out, name, **kw: self.calls.append(("retire", name, kw)) or 0,
             move_fn=lambda cfg, run, out, name, dest, **kw: self.calls.append(("move", name, dest, kw)) or 0,
             switch_fn=lambda cfg, run, out, name, prof, **kw: self.calls.append(("switch", name, prof, kw)) or 0,
             rename_fn=lambda cfg, run, out, old, new: self.calls.append(("rename", old, new)) or 0,
@@ -352,10 +356,34 @@ class UiTest(unittest.TestCase):
         self.assertEqual(self.ui(["s", "1 9"]), 1)
         self.assertEqual(self.calls, [])
 
-    def test_retire_and_activate(self):
-        self.ui(["r", "1"])
+    def test_retire_a_running_idle_session_stops_it_after_a_confirmation(self):
+        self.ui(["r", "1", "y"])  # a: running, idle
+        self.assertEqual(self.calls, [("retire", "a", {"own_pane": "%9"})])
+        self.assertTrue(any("會停掉 a 並標成 retired" in p for p in self.prompts()))
+
+    def test_retire_declined_changes_nothing(self):
+        self.ui(["r", "1", ""])
+        self.assertEqual(self.calls, [])
+        self.assertIn("已取消", self.text())
+
+    def test_retire_a_busy_session_is_left_alone(self):
+        self.ui(["r", "2"])  # b: busy
+        self.assertEqual(self.calls, [])
+        self.assertIn("b 忙", self.text())
+
+    def test_retire_a_stopped_session_is_marked_straight_away(self):
+        stopped = [row("s", state=State.STOPPED, agent_status="-")]
+        self.ui(["r", "1"], rows=stopped)
+        self.assertEqual(self.calls, [("state", "s", "retired")])
+
+    def test_retire_a_retired_but_running_session_finishes_the_stop(self):
+        parked = [status_row("p", State.RETIRED, live="running")]
+        self.ui(["r", "1", "y"], rows=parked)
+        self.assertEqual(self.calls, [("retire", "p", {"own_pane": "%9"})])
+
+    def test_activate(self):
         self.ui(["a", "3"])
-        self.assertEqual(self.calls, [("state", "a", "retired"), ("state", "old", "active")])
+        self.assertEqual(self.calls, [("state", "old", "active")])
 
     def test_unknown_action_raises_instead_of_being_written_as_a_state(self):
         # a Picker key without an act branch used to fall through to set_state(<action>)
@@ -1122,6 +1150,7 @@ class InteractiveUiTest(UiTest):
             stop_fn=lambda *a, **kw: self.calls.append(("stop", kw["names"])) or 0,
             new_fn=lambda cfg, run, out, name, profile, cwd, **kw: self.calls.append(("new", name, profile, cwd)) or 0,
             set_state_fn=lambda cfg, out, name, state: self.calls.append(("state", name, state)) or 0,
+            retire_fn=lambda cfg, run, out, name, **kw: self.calls.append(("retire", name, kw)) or 0,
             move_fn=lambda cfg, run, out, name, dest, **kw: self.calls.append(("move", name, dest)) or 0,
             switch_fn=lambda cfg, run, out, name, prof, **kw: self.calls.append(("switch", name, prof, kw)) or 0,
             rename_fn=lambda cfg, run, out, old, new: self.calls.append(("rename", old, new)) or 0,
@@ -1187,10 +1216,10 @@ class InteractiveUiTest(UiTest):
         self.assertEqual(self.calls, [("forget", "old")])
 
     def test_state_and_new_and_quit(self):
-        self.ui_keys(("retired", ["a"]))
+        self.ui_keys(("retired", ["old"]))  # stopped: marked straight away
         self.ui_keys(("new", []), ["fresh", "", "", "/tmp"])
         self.assertEqual(self.ui_keys(("quit", [])), 0)
-        self.assertEqual(self.calls, [("state", "a", "retired"), ("new", "fresh", "claude:alice", "/tmp")])
+        self.assertEqual(self.calls, [("state", "old", "retired"), ("new", "fresh", "claude:alice", "/tmp")])
 
     def test_rename_asks_new_name(self):
         self.ui_keys(("rename", ["a"]), ["fresh"])

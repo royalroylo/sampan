@@ -103,9 +103,14 @@ def build_parser():
     fg = sub.add_parser("forget", help="從登記表移除沒在跑的 session（可一次多個；對話紀錄不刪，會印出手動接回的指令）")
     fg.add_argument("names", nargs="+", metavar="name")
     fg.add_argument("--dry-run", action="store_true")
-    for verb, help_ in (("retire", "標記為不再重開"), ("activate", "恢復為重開")):
-        sv = sub.add_parser(verb, help=help_)
-        sv.add_argument("name")
+    rt = sub.add_parser("retire", help="停放：閒著的先停掉再標成 retired（忙的拒絕）；--no-stop 只標記、不停")
+    rt.add_argument("name")
+    rt.add_argument("--no-stop", action="store_true",
+                    help="只標記，不停它（之後它還在跑，sampan doctor 會提醒；要自己 sampan stop）")
+    rt.add_argument("--dry-run", action="store_true")
+    rt.add_argument("--force", action="store_true", help="停的時候逾時再送 SIGTERM（同 sampan stop --force）")
+    av = sub.add_parser("activate", help="恢復為重開（只改標記；已停止的要再 sampan restore 接回）")
+    av.add_argument("name")
     sd = sub.add_parser("send", help="傳訊息給一個執行中的 session（對方閒著才送，忙就排隊）")
     sd.add_argument("name")
     sd.add_argument("message", help="訊息；- 從 stdin 讀")
@@ -927,7 +932,10 @@ def _dispatch(cfg, args):
         if cmd == "move":
             return session_run.cmd_move(cfg, run, out, args.name, args.dest, dry_run=args.dry_run,
                                         timeout=args.timeout, own_pane=os.environ.get("TMUX_PANE"))
-        return session_run.cmd_set_state(cfg, out, args.name, "retired" if cmd == "retire" else "active")
+        if cmd == "retire":
+            return session_run.cmd_retire(cfg, run, out, args.name, no_stop=args.no_stop, dry_run=args.dry_run,
+                                          force=args.force, own_pane=os.environ.get("TMUX_PANE"))
+        return session_run.cmd_activate(cfg, run, out, args.name)
     if cmd == "plugins":
         from . import plugins
         if args.action == "status":

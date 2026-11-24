@@ -693,6 +693,34 @@ class SwitchTest(MoveFixture):
         log = actionlog.log_path(self.cfg).read_text()
         self.assertRegex(log, r"\[switch 994-monitor#[0-9a-f]{8} → work\] ✔ 994-monitor 已換到 work")
 
+    def test_a_retired_session_that_still_runs_is_refused_and_nothing_moves(self):
+        write_rows(self.cfg.registry_path, [Row("994-monitor", "claude", "alice", A, str(self.old), "retired")], "t", self.cfg.history_dir)
+        self.assertEqual(self.switch(), 2)
+        text = "\n".join(self.msgs)
+        self.assertIn("retired", text)
+        self.assertIn("sampan retire 994-monitor", text)
+        self.assertIn("sampan activate 994-monitor", text)
+        self.assertEqual(self.keys, [])
+        self.assertTrue(self.old_transcript().exists())
+        self.assertEqual(self.row().profile, "alice")
+
+    def test_a_disabled_target_profile_is_named_as_disabled(self):
+        import dataclasses
+        work = dataclasses.replace(self.cfg.all_profiles["work"], disabled=True)
+        self.cfg = dataclasses.replace(self.cfg, profiles={n: p for n, p in self.cfg.profiles.items() if n != "work"},
+                                       all_profiles=self.cfg.all_profiles | {"work": work})
+        self.assertEqual(self.switch(), 2)
+        self.assertIn("profile work 已停用（sampan profile enable work", "\n".join(self.msgs))
+        self.assertEqual(self.keys, [])
+
+    def test_a_disabled_source_profile_is_named_as_disabled(self):
+        import dataclasses
+        alice = dataclasses.replace(self.cfg.all_profiles["alice"], disabled=True)
+        self.cfg = dataclasses.replace(self.cfg, profiles={n: p for n, p in self.cfg.profiles.items() if n != "alice"},
+                                       all_profiles=self.cfg.all_profiles | {"alice": alice})
+        self.assertEqual(self.switch(), 2)
+        self.assertIn("profile alice 已停用（sampan profile enable alice", "\n".join(self.msgs))
+
     def test_dry_run_logs_nothing(self):
         self.switch(dry_run=True)
         self.assertFalse(actionlog.log_path(self.cfg).exists())

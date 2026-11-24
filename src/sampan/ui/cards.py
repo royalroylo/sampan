@@ -39,6 +39,17 @@ _STATE_STYLE = {
 }
 
 
+PARKED_RUNNING = "retired_running"  # a StateLine's state for a retired session that still runs: shown in warning colour
+_STATE_STYLE[PARKED_RUNNING] = "warn"
+
+
+def card_state(row):
+    """The state text of a card (without the agent's activity) and the key state_style colours it by."""
+    if row.state is State.RETIRED and row.live == "running":
+        return "retired・執行中", PARKED_RUNNING  # parked on purpose but still up: not a state to leave it in
+    return show_state(row), row.state
+
+
 def state_style(state):
     """Colour of the state text: running green; stopped / retired / no agent grey; waiting for trust yellow; mismatch or several agents red."""
     return _STATE_STYLE.get(state, "")
@@ -118,7 +129,7 @@ def row_keys(row, info):
     """The keys available for this row (last line of the info card)."""
     state, live = row.state, (info or {}).get("panes", 0) > 0
     if state is State.RETIRED:
-        keys = (["Enter 接上"] if live else []) + ["a activate", "X 移除"]
+        keys = (["Enter 接上", "r 停掉"] if live else []) + ["a activate", "X 移除"]
     elif state is State.STOPPED:
         keys = ["Enter 接回", "S 背景接回"] + (["P 換 profile"] if row.agent == "claude" else []) + ["e 改名", "L 別名", "r retire", "X 移除"]
     elif state is State.RUNNING:
@@ -156,10 +167,10 @@ def name_with_alias(row):
 
 def card_lines(cfg, row, info, now):
     info = info or {}
-    state = show_state(row)
+    state, style_key = card_state(row)
     if row.agent_status not in ("-", "", None):
         state += f"（{row.agent_status}）"
-    lines = [name_with_alias(row), "─" * 200, StateLine(_label("狀態", state), row.state)]
+    lines = [name_with_alias(row), "─" * 200, StateLine(_label("狀態", state), style_key)]
     if row.agent == "codex":
         lines.append(_label("agent", "codex"))
     elif row.agent not in ("-", ""):
@@ -225,7 +236,7 @@ def adopt_card(c):
 def preview_header(cfg, row, info):
     """For a row with a tmux session: the right side holds only a compact header (state, agent, profile, context, directory, available keys), the rest goes to the preview."""
     info = info or {}
-    state = show_state(row)
+    state, style_key = card_state(row)
     if row.agent_status not in ("-", "", None):
         state += f"（{row.agent_status}）"
     parts = [state]
@@ -237,7 +248,7 @@ def preview_header(cfg, row, info):
         parts.append(f"context {_fmt_tokens(row.tokens, row.context_window)}")
     rest = "・".join(parts[1:])
     lines = [f"{row.name}（預覽）", "─" * 200,
-             ((parts[0], state_style(row.state)), ("・" + rest if rest else "", ""))]
+             ((parts[0], state_style(style_key)), ("・" + rest if rest else "", ""))]
     if info.get("cwd"):
         lines.append(_short(cfg, info["cwd"]))
     keys = row_keys(row, info)

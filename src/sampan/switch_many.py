@@ -23,7 +23,7 @@ def plan(cfg, rows, names, profile, *, from_profile=None, own_pane=None, no_laun
         if row is None:
             why = "找不到"
         elif row.state is State.RETIRED:
-            why = "已 retired"
+            why = "已 retired（仍在執行）" if row.live == "running" else "已 retired"
         elif row.agent == "codex":
             why = "Codex 不支援換 profile"
         elif session_run.WORKTREE_MARK in cwds.get(name, ""):

@@ -679,15 +679,22 @@ class SendToolTest(Base):
 
     def test_list_sessions_rows(self):
         write_rows(self.cfg.registry_path, [Row("b", "claude", "alice", "sb", "/w/b")], "t", self.cfg.history_dir)
-        self.rows["b"] = dataclasses.replace(self.rows["b"], last=NOW, agent_status="busy")
+        self.rows["b"] = dataclasses.replace(self.rows["b"], last=NOW, agent_status="busy", registry="active", live="running")
         c = self.serve(Client([init(1), call(2, "list_sessions", {})]))
         rows = {r["name"]: r for r in tool_json(c.response(2))["sessions"]}
         self.assertEqual(rows["b"], {"name": "b", "id": "", "machine": mcp_server.machine.load_or_create(self.cfg.path).id,
                                      "agent": "claude", "profile": "alice", "cwd": "/w/b", "folder": "",
-                                     "alias": "", "model": "", "state": "running", "activity": "busy",
-                                     "last": "2026-10-26T12:00:00+00:00"})
+                                     "alias": "", "model": "", "state": "running", "registry": "active", "live": "running",
+                                     "activity": "busy", "last": "2026-10-26T12:00:00+00:00"})
         self.assertEqual(rows["a"]["cwd"], "")
         self.assertIsNone(rows["a"]["last"])
+
+    def test_list_sessions_keeps_state_retired_and_adds_registry_and_live(self):
+        from sampan.status import State
+        self.rows["b"] = dataclasses.replace(self.rows["b"], state=State.RETIRED, registry="retired", live="running")
+        c = self.serve(Client([init(1), call(2, "list_sessions", {})]))
+        rows = {r["name"]: r for r in tool_json(c.response(2))["sessions"]}
+        self.assertEqual((rows["b"]["state"], rows["b"]["registry"], rows["b"]["live"]), ("retired", "retired", "running"))
 
     def test_list_sessions_returns_alias(self):
         write_rows(self.cfg.registry_path, [Row("b", "claude", "alice", "sb", "/w/b", alias="讀書工具 PM")], "t",

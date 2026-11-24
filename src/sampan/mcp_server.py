@@ -54,7 +54,7 @@ def _str(desc):
 TOOLS = [
     {"name": "list_sessions",
      "description": "列出 sampan 登記的 session：名稱、id（完整；其他工具可用名稱或 id 前 8 碼以上指定）、machine（這台機器的 id）、agent、profile、目錄、所在資料夾（folder，\"\" 是最上層）、別名（alias，沒設是 \"\"）、"
-                    "狀態（running 才收得到訊息）、忙／閒（activity）、最後活動。頂層另有 machine（id 與名稱）。唯讀。"
+                    "狀態（state，舊版的合併顯示值：running 才收得到訊息，retired 的一律是 retired）、registry（登記表怎麼標：active／retired／空字串＝沒登記）、live（實際有沒有在跑：running／stopped／unknown）、忙／閒（activity）、最後活動。頂層另有 machine（id 與名稱）。唯讀。"
                     "remote=true 時另列你自己其他機器上已發布的 session（remote_machines：機器、session、忙閒；要用「機器/session」寫法 send）。",
      "inputSchema": {"type": "object", "properties": {
          "remote": {"type": "boolean", "default": False,
@@ -509,7 +509,7 @@ class Server:
         out = {"machine": {"id": mach.id, "name": mach.name},
                "sessions": [{"name": r.name, "id": r.id, "machine": mach.id, "agent": r.agent, "profile": r.profile, "cwd": reg[r.name].cwd if r.name in reg else "",
                              "folder": where.get(r.name, ""), "alias": reg[r.name].alias if r.name in reg else "", "model": reg[r.name].model if r.name in reg else "",
-                             "state": r.state.value, "activity": r.agent_status,
+                             "state": r.state.value, "registry": r.registry, "live": r.live, "activity": r.agent_status,
                              "last": r.last.astimezone(timezone.utc).isoformat(timespec="seconds") if r.last else None}
                             for r in rows]}
         if args.get("remote") is True:

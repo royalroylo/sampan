@@ -657,7 +657,7 @@ class RestoreTest(Base):
         self.registry([Row("old", "claude", "alice", B, str(self.cwd), "retired")])
         r = self.runner()
         self.assertEqual(self.restore(r, names=["old"]), 0)
-        self.assertIn("old 是 retired；先 sampan activate old", self.msgs)
+        self.assertIn("old 是 retired（已停止）；先 sampan activate old", self.msgs)
         self.assertNotIn("沒有要接回", self.text())
         self.assertEqual(self.keys(), [])
         self.assertEqual(r.called(["tmux", "-u", "new-session"]), [])
@@ -668,7 +668,7 @@ class RestoreTest(Base):
                        Row("live", "claude", "alice", A, str(self.cwd))])
         r = self.runner()
         self.restore(r, names=["old", "live"], select_all=True)
-        self.assertIn("old 是 retired；先 sampan activate old", self.msgs)
+        self.assertIn("old 是 retired（已停止）；先 sampan activate old", self.msgs)
         self.assertTrue(any(f"--resume {A}" in str(k) for k in self.keys()))
         self.assertFalse(any(f"--resume {B}" in str(k) for k in self.keys()))
 

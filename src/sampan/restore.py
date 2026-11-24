@@ -308,7 +308,7 @@ def start_one(cfg, run, name, *, sleep, out=lambda _l: None, alive=os.kill, targ
         return f"找不到 session：{name}（登記表沒有）"
     name = row.tmux
     if row.state == "retired":
-        return f"{name} 是 retired；先 sampan activate {name}"
+        return f"{name} 是 retired（已停止）；先 sampan activate {name}"
     try:
         live = _observe(cfg, run)
     except TmuxUnreadable as e:
@@ -374,7 +374,7 @@ def cmd_restore(cfg, run, out, ask, *, names=(), select_all=False, dry_run=False
         rows = [r for r in rows if r.tmux in names]
         retired = [r.tmux for r in rows if r.state == "retired"]
         for n in retired:
-            out(f"{n} 是 retired；先 sampan activate {n}")
+            out(f"{n} 是 retired（已停止）；先 sampan activate {n}")
     try:
         rule = default_rule(cfg, run, all_rows)
         cands = candidates(cfg, run, rows, now_fn(), alive=alive, rule=rule)

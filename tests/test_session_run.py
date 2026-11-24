@@ -405,7 +405,7 @@ class NewAndStateTest(Base):
             with self.subTest(shown=shown):
                 self.panes, self.procs, asked = [], [ps_line(1, 0, "launchd", "launchd")], []
                 r, sent = self.trust_runner(shown)
-                rc = cmd_new(self.cfg, r, self.msgs.append, "new-x", "work", str(self.cwd), sleep=lambda _: None,
+                rc = cmd_new(self.cfg, r, self.msgs.append, f"new-{len(shown)}", "work", str(self.cwd), sleep=lambda _: None,
                              uuid4=lambda: B, timeout=5, trust=True, on_prompt=lambda *a: asked.append(a) or SKIP)
                 self.assertEqual((rc, len(asked)), (1, 1))
                 self.assertEqual(sent[1:], [])
@@ -521,6 +521,20 @@ class NewAndStateTest(Base):
         r = self.runner().on(["tmux", "-u", "has-session"], cp(rc=0))
         self.assertEqual(cmd_new(self.cfg, r, self.msgs.append, "x", "alice", str(self.cwd)), 2)
         self.assertEqual(cmd_new(self.cfg, self.runner(), self.msgs.append, "x", "claude:nobody", str(self.cwd)), 2)
+
+    def test_new_refuses_a_name_the_registry_already_has(self):
+        # a typo must not overwrite the row of a stopped or retired session whose conversation is still there
+        for state in ("active", "retired"):
+            with self.subTest(state):
+                write_rows(self.cfg.registry_path, [Row("x", "claude", "alice", A, str(self.cwd), state)], "t", self.cfg.history_dir)
+                self.msgs.clear()
+                r = self.runner()
+                self.assertEqual(cmd_new(self.cfg, r, self.msgs.append, "x", "alice", str(self.cwd)), 2)
+                self.assertEqual(r.called(["tmux", "-u", "new-session"]), [])
+                text = "\n".join(self.msgs)
+                self.assertIn(state, text)
+                self.assertIn("sampan forget x", text)
+                self.assertEqual([(x.tmux, x.session_id) for x in load_rows(self.cfg.registry_path)], [("x", A)])
 
     def test_new_timeout_warns(self):
         rc = cmd_new(self.cfg, self.runner(), self.msgs.append, "x", "alice", str(self.cwd),

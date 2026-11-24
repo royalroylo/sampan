@@ -5,6 +5,25 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-11-24
+
+Upgrading: **`sampan retire` now stops an idle session first** (it used to only mark it, which left a session that was "retired" yet still running). A script that relied on `retire` leaving a running session alone must pass `--no-stop`. A running `sampan mcp serve` keeps the old code until its session restarts. The registry format is unchanged and 0.26 reads it (a 0.26 `retire` goes back to only marking). Sessions that are already retired but still running need nothing: `sampan status` and `sampan doctor` show them from now on, and `sampan retire <name>` again (or `sampan stop <name>`) takes them down.
+
+### Changed
+- **`sampan retire <name> [--no-stop] [--dry-run] [--force]`** stops first and marks only when the stop worked: an idle running session gets `/exit`, is waited for and its tmux session closed, then it is marked retired. A busy one (busy, working, waiting, at a worktree question, several agents, sampan's own pane) is refused with exit code 1 and nothing changed, and the message says to retry when it is idle or to use `--no-stop`. A stopped session is only marked (a tmux session with only a shell is not closed). When tmux cannot be read it is refused (exit code 2) unless `--no-stop`. `--no-stop` only marks and warns that the session still runs; `--force` sends SIGTERM when the stop times out, as `stop --force`; `--dry-run` prints what it would do. Running it on a retired session that still runs finishes the stop. The screen's `r` asks "會停掉 X 並標成 retired" for an idle running session, leaves a busy one alone and marks a stopped one straight away.
+- `sampan activate` still only flips the mark, and now says what is left: a stopped session needs `sampan restore`, a running one needs nothing, a disabled profile has to be enabled first.
+- A retired session that shows a mismatch (agent or profile), several agents or a trust prompt now shows that instead of `retired`.
+- `send` to a retired session says "已 retired（但還在執行）" or "已 retired（已停止）" and that `sampan activate` is the way out (it used to say "不是執行中" even when the session ran). `restore`, `restart`, `rc` and `switch --many` name "retired（仍在執行）" for one that still runs. A queued dispatch that fails because its target was retired says so.
+- `sampan switch` refuses a retired session that still runs (it used to restart it), and names a disabled profile as disabled instead of "not in the config".
+- `sampan new` refuses a name the registry already has (it used to overwrite the row of a stopped or retired session, which left its conversation unknown to sampan); the message gives its state and says to `sampan forget` it or pick another name. The MCP `new_session` is refused the same way.
+
+### Added
+- `sampan status` shows a 登記 column (`active` / `retired`) when at least one session is retired; one that is retired but still running reads `retired ⚠` and is listed under the table. The 狀態 column then only says whether it runs. With no retired session the output is the same as 0.26, and the exit code does not change.
+- MCP `list_sessions` has two new fields, `registry` (`active` / `retired` / `""`) and `live` (`running` / `stopped` / `unknown`). `state` keeps its values (a retired session is still `retired`), so nothing that reads it changes.
+- `sampan doctor` warns about sessions that are retired but still running, warns about active sessions registered on a profile that is no longer in the config, and tells how many active sessions are registered on a disabled profile.
+- `sampan profile disable` lists the stopped sessions registered on the profile (they cannot be resumed until it is enabled), and names the retired ones among the running sessions that refuse it.
+- docs/lifecycle.md: which combinations of registry state and running state are valid, and how each command changes them.
+
 ## [0.26.1] - 2026-11-24
 
 Upgrading: a running `sampan mcp serve` keeps the old code until its session restarts (each Claude session starts its own); the sampan screen uses the new code the next time it opens. Nothing else changes: no command, screen, MCP output or file format is different.

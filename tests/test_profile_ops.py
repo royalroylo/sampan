@@ -375,6 +375,30 @@ class DisableTest(Base):
         self.assertEqual(rc, 2)
         self.assertEqual(self.cfg.path.read_bytes(), before)
 
+    def test_disable_refusal_says_which_running_sessions_are_retired(self):
+        from sampan.registry import Row, write_rows
+        write_rows(self.cfg.registry_path, [Row("b", "claude", "work", "bbbbbbbb-0000-4000-8000-000000000002", "/c", "retired"),
+                                            Row("c", "claude", "work", "cccccccc-0000-4000-8000-000000000003", "/c")],
+                   "t", self.cfg.history_dir)
+        self.assertEqual(self.call(profile_ops.cmd_profile_disable, "work", running=["b", "c"]), 1)
+        self.assertEqual(self.msgs[0], "❌ profile work 還有 session 在跑：b（retired）、c；先停掉再停用")
+        self.assertIn("sampan retire b", self.msgs[1])
+
+    def test_disable_lists_the_stopped_active_sessions_it_leaves_unreachable(self):
+        from sampan.registry import Row, write_rows
+        write_rows(self.cfg.registry_path, [
+            Row("a", "claude", "work", "aaaaaaaa-0000-4000-8000-000000000001", "/c"),
+            Row("b", "claude", "work", "bbbbbbbb-0000-4000-8000-000000000002", "/c"),
+            Row("p", "claude", "work", "cccccccc-0000-4000-8000-000000000003", "/c", "retired"),
+            Row("o", "claude", "alice", "dddddddd-0000-4000-8000-000000000004", "/c")], "t", self.cfg.history_dir)
+        self.assertEqual(self.call(profile_ops.cmd_profile_disable, "work"), 0)
+        self.assertIn("登記在 work、目前已停止的 session：a、b（接不回；sampan profile enable work 後恢復，或 sampan retire 讓它們停放）",
+                      self.msgs)
+
+    def test_disable_with_nothing_registered_says_nothing_extra(self):
+        self.assertEqual(self.call(profile_ops.cmd_profile_disable, "work"), 0)
+        self.assertFalse(any("目前已停止的 session" in m for m in self.msgs))
+
     def test_enable_and_disable_unknown_or_unchanged(self):
         before = self.cfg.path.read_bytes()
         self.assertEqual(self.call(profile_ops.cmd_profile_disable, "nobody"), 1)

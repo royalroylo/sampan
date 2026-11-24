@@ -14,7 +14,7 @@
   |---|---|---|
   | 執行中 | tmux 裡的 agent 正在跑 | `n` 開新、接回、接手 |
   | 已停止 | agent 已結束，對話保留著，需要時接回 | `s` 停掉、關機、重開機 |
-  | retired | 這件事做完了，以後不用接回 | `r` retire（`a` 可恢復） |
+  | retired | 這件事做完了，以後不用接回；停放：已停止、不收訊息（0.27 起，retire 會先停掉閒著的 session） | `r` retire（`a` 可恢復）；規則見[session 生命週期](lifecycle.md) |
 
 ## 怎麼用（大部分時候只要打 `sampan`）
 
@@ -41,7 +41,7 @@
 | 設別名 | `L` | 設（或清掉）這個 session 的別名；不動 tmux、不動 id，下次啟動時才套用到 Claude 的名稱與 Remote Control |
 | 換帳號繼續（例如額度用完） | `P`（只有 Claude） | 列出 profile 讓你選，確認後 claude 結束、用新的 profile 在同一個目錄接回同一段對話；新帳號第一次進這個目錄時自動信任（規則同 `m`）。已停止的 session 直接用新 profile 接回。新 profile 沒裝原本有的 plugin 時會先列出來，但照樣可以換。卡在額度選單、等不到 claude 結束時，sampan 不亂按鍵，會請你自己按 Esc 再打 `/exit`，之後再按 `P` 一次。標記 2 個以上、或游標在資料夾列上按 `P`，是一次換好幾個（見「常見情境」） |
 | 換工作目錄 | `m` | 用選目錄畫面挑新目錄（從它現在的目錄開始；那個目錄已經不在時，從 `[ui] start_dir` 開始，和 `n` 一樣），確認後 agent 結束、在新目錄接回同一段對話 |
-| 這件事做完了 | `r` | 標成 retired，之後不會出現在接回清單 |
+| 這件事做完了 | `r` | 閒著的 session 會先問「會停掉 X 並標成 retired」，按 y 才停（停成功才標記）；忙的不動（印「忙，沒動」）；已停止的直接標記。之後不會出現在接回清單、不收訊息。retired 但還在跑的那一列，卡片寫「retired・執行中」（黃字），再按一次 `r` 就補停 |
 | 從登記表移除一個不用的 session | `X`（只有已停止或 retired 的列） | 在畫面底部問確定（之後不會再列出，也不會被 `R` 接回）；移除後印出手動接回的指令。對話紀錄不會刪，舊的登記表留在 `history/` |
 | 看各帳號的額度、改名、停用、新增、裝狀態列 | `o` | 開帳號畫面，見下面「帳號管理」。清單上方會有每個帳號一行（`名稱 N 個執行中・5h …・週 …（時間）`） |
 | 看派工、取消還沒送出的 | `D` | 列出派工（編號、從、給、狀態、建立時間、原因，新的在上）；游標移到排隊中的按 `x`，在畫面底部問確定後取消；已送出、等回覆的按 `x` 問確定後不再等回覆，結果是「寄件者已取消」（訊息收不回）；已結束的只會說明為什麼不能取消。沒有派工時只顯示「沒有派工」。有排隊或等回覆的派工時，清單下方會多一行 `派工：N 排隊、M 等回覆（D 看清單）`；畫面開著時 sampan 每 3 秒在背景推進這些派工（送出、讀回覆、補發完成或失敗通知）；離開畫面時若正好在送，會等它送完（最多約 35 秒，畫面會寫「等派工送完再離開…」） |
@@ -205,7 +205,7 @@ Claude Code 只在狀態列指令的輸入裡提供 5h／週額度，所以要�
 
 | 情境 | 指令 |
 |---|---|
-| 看狀況 | `sampan status`、`sampan doctor`（第一行是 sampan 版本與最新版） |
+| 看狀況 | `sampan status`、`sampan doctor`（第一行是 sampan 版本與最新版）。有 retired 的 session 時 `status` 多一欄「登記」（`active`／`retired`，retired 但還在跑的寫 `retired ⚠` 並在表尾列出）；「狀態」欄只講有沒有在跑，沒有 retired 時輸出和以前一樣 |
 | 更新 sampan | `sampan update [--yes] [--force]`：當下查最新版（不看快取），有新版就問要不要更新；`--force` 已是最新也重新安裝；`--yes` 不問。不需要設定檔，更新完直接結束 |
 | 互動畫面 | `sampan`（等於 `sampan ui`）：見上面「怎麼用」。tmux 裡選了會切過去、sampan 留在原 pane；tmux 外會在前景 attach，detach 後回到清單。`sampan ui --plain` 改用輸入編號，規則相同 |
 | 開新的工作視窗 | `sampan new <名稱> <claude:profile｜profile｜codex> <目錄>`（名稱不要用 `.`、`:`、換行或控制字元，也不能是「終端機」或以「未登記的 session」開頭；`rename`、`adopt` 同規則） |
@@ -224,7 +224,7 @@ Claude Code 只在狀態列指令的輸入裡提供 5h／週額度，所以要�
 | 好幾個 session 換 profile | `sampan switch <名稱…> <profile>` 或 `sampan switch --folder <路徑> <profile>`，可加 `--from <profile>`、`--dry-run`、`--yes`、`--no-launch`（ui：標記多個或資料夾列按 P）。見「常見情境」 |
 | session 換 profile（換帳號）繼續同一段對話 | `sampan switch <名稱> <profile> [--dry-run]`（或 ui 按 P）：執行中的照 `sampan move` 的流程在原目錄、用新 profile 接回；已停止的改登記表後直接接回（加 `--no-launch` 就只改登記表、不接回）。逐字稿在新 profile 讀不到時（各 profile 的 `projects/` 沒共用）會**搬**過去而不是複製，永遠只有一份；新 profile 已經有同一段對話的逐字稿時不動，請你先決定留哪份。Codex 沒有 profile，不適用 |
 | session 換到別的工作目錄 | `sampan move <名稱> <目錄>`（或 ui 按 m）：結束 agent、在新目錄接回同一段對話、自動信任新目錄（只在提示顯示的路徑就是新目錄時）、更新登記表。目錄不存在會建立；忙碌中、worktree、自己的 pane 不動 |
-| 某個 session 以後不用重開 | `sampan retire <名稱>`（恢復：`sampan activate <名稱>`）；對 retired 的 session 打 `sampan restore <名稱>` 會說「<名稱> 是 retired；先 sampan activate <名稱>」 |
+| 某個 session 以後不用重開 | `sampan retire <名稱> [--no-stop] [--dry-run] [--force]`（0.27 起）：閒著的**先停掉**（送 /exit、等它結束、關掉 tmux session）**成功了才標成 retired**；忙的（`busy`／`working`／`waiting`、在問 worktree、多個 agent、sampan 自己所在的 pane）拒絕，結束碼 1，什麼都不改；已停止的只標記；tmux 讀不到時拒絕（結束碼 2）。`--no-stop` 只標記、不停（舊行為；之後它「retired 但還在跑」，`sampan status`、`sampan doctor` 會警告）；`--force` 停的時候逾時再送 SIGTERM（同 `stop --force`）；`--dry-run` 只印會做什麼。再跑一次 `retire` 就補停「retired 但還在跑」的。恢復：`sampan activate <名稱>`（只改標記，並印下一步：已停止的要 `sampan restore`；profile 已停用會提醒先 enable）。對 retired 的 session 打 `sampan restore <名稱>` 會說「<名稱> 是 retired（已停止）；先 sampan activate <名稱>」；`send` 對 retired 的也拒絕（不論在不在跑），出口是 `activate`。`sampan new` 遇到登記表已有同名的 session 會拒絕（要用那個名字先 `sampan forget`）。完整的狀態組合表見[session 生命週期](lifecycle.md) |
 | 把沒在跑的 session 從登記表移除 | `sampan forget <名稱>… [--dry-run]`（或 ui 按 X；可一次給多個名稱，逐一處理，有一個失敗其他照做）：只限已停止或 retired 的（還在 tmux 裡的先 `sampan stop`）；ui 裡會先問確定。移除後印出手動接回的指令；對話紀錄永遠不刪，移除前的登記表留在 `history/` |
 | 整理 session 的資料夾 | `sampan folder list｜add <路徑>｜rename <路徑> <新名稱>｜rm <路徑>｜move <名稱或路徑>... <目的｜/>`，見「資料夾」 |
 | 傳訊息給一個 session | `sampan send <名稱> <訊息｜-> [--raw] [--wait] [--timeout 秒]`，見「傳訊息給 session」 |

@@ -63,11 +63,20 @@ class StatusRow:
     id: str = ""  # the registry row's sampan id ("" for a live session that is not registered)
     alias: str = ""  # the registry row's alias ("" = unset)
     model: str = ""  # the registry row's model ("" = unset: the profile's own default)
+    registry: str = ""  # the registry row's state: "active" | "retired" | "" (no row)
+    live: str = "stopped"  # whether an agent runs in it now: "running" | "stopped" | "unknown" (tmux could not be read)
 
     @property
     def display(self):
         """The state as the screens and `sampan status` show it."""
         return LABELS[self.state] + self.detail
+
+    @property
+    def run_display(self):
+        """The state as `sampan status` shows it next to the registry column: only what is going on, never "retired"."""
+        if self.state is State.RETIRED:
+            return {"running": LABELS[State.RUNNING], "unknown": LABELS[State.UNKNOWN]}.get(self.live, LABELS[State.STOPPED])
+        return self.display
 
 
 class Rows(list):
@@ -100,18 +109,22 @@ def status_rows(cfg, run, snapshot_fn=None, *, activity=True):
     for name in sorted(set(rows) | alive):
         row, lc = rows.get(name), live_by_session.get(name)
         detail = ""
+        trust = row is not None and lc is None and name not in multi and _at_trust_prompt(tmux, panes, name, row.agent)
+        # a mismatch, several agents and a trust prompt come before retired: they are what is really going on
         if name in multi:
             state = State.MULTI
-        elif row is not None and row.state == "retired":
-            state = State.RETIRED
         elif row is not None and lc is not None and lc.agent != row.agent:
             state, detail = State.AGENT_MISMATCH, f"（登記 {row.agent}）"
         elif row is not None and lc is not None and lc.profile != row.profile:
             state, detail = State.PROFILE_MISMATCH, f"（登記 {row.profile}）"
+        elif trust:
+            state = State.AWAIT_TRUST
+        elif row is not None and row.state == "retired":
+            state = State.RETIRED
         elif row is not None and lc is not None:
             state = State.RUNNING
         elif row is not None:
-            state = State.AWAIT_TRUST if _at_trust_prompt(tmux, panes, name, row.agent) else State.STOPPED
+            state = State.STOPPED
         elif lc is not None:
             state = State.UNREGISTERED
         else:
@@ -125,7 +138,8 @@ def status_rows(cfg, run, snapshot_fn=None, *, activity=True):
         result.append(StatusRow(name, agent, (src.profile or "-") if src else "-", sid, state, detail,
                                 lc.status if lc else "-", last, tokens, window, lc.pane_id if lc else None,
                                 name in alive, row.id if row is not None else "", row.alias if row is not None else "",
-                                row.model if row is not None else ""))
+                                row.model if row is not None else "", row.state if row is not None else "",
+                                "running" if (lc is not None or name in multi) else "stopped"))
     return result
 
 
@@ -145,7 +159,7 @@ def _unreadable_rows(cfg, rows, warning, *, activity=True):
                                 else (None, None, None))
         result.append(StatusRow(name, row.agent, row.profile or "-", row.session_id,
                                 State.RETIRED if row.state == "retired" else State.UNKNOWN, "", "-", last, tokens, window, None,
-                                False, row.id, row.alias, row.model))
+                                False, row.id, row.alias, row.model, row.state, "unknown"))
     return result
 
 
@@ -225,13 +239,21 @@ def cmd_status(cfg, run, out):
     if warning:
         out(f"⚠ {warning}")
     with_model = any(r.model for r in rows)  # the column only shows once somebody uses it: old output stays as it was
-    widths = (38, 6, 12, 8, 8, 16, 7, 11) if not with_model else (38, 6, 12, 18, 8, 8, 16, 7, 11)
+    with_registry = any(r.registry == "retired" for r in rows)  # likewise: no retired row, no 登記 column
+    widths = [38, 6, 12] + ([18] if with_model else []) + [8, 8] + ([10] if with_registry else []) + [16, 7, 11]
 
     def line(*cells):
         return " ".join(ljust(c, w) for c, w in zip(cells, widths)) + " " + cells[-1]
 
-    out(line("名稱", "agent", "profile", *(["模型"] if with_model else []), "id", "對話", "狀態", "活動", "最後活動", "context"))
+    out(line("名稱", "agent", "profile", *(["模型"] if with_model else []), "id", "對話",
+             *(["登記"] if with_registry else []), "狀態", "活動", "最後活動", "context"))
     for r in rows:
+        reg = ("retired ⚠" if r.live == "running" else "retired") if r.registry == "retired" else (r.registry or "-")
         out(line(r.name, r.agent, r.profile, *([r.model or "-"] if with_model else []), r.id[:8] or "-", r.sid[:8],
-                 r.display, r.agent_status, _fmt_time(r.last), _fmt_tokens(r.tokens, r.context_window)))
+                 *([reg] if with_registry else []),
+                 r.run_display if with_registry else r.display, r.agent_status, _fmt_time(r.last),
+                 _fmt_tokens(r.tokens, r.context_window)))
+    for r in rows:
+        if r.registry == "retired" and r.live == "running":
+            out(f"⚠ retired 但還在執行：{r.name}（sampan stop {r.name} 下線；sampan activate {r.name} 還原）")
     return 1 if warning else 0

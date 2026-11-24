@@ -25,7 +25,7 @@ KEY_GROUPS = [
         ("L", "設別名（下次啟動套用到 RC 名稱）"),
         ("P", "換 profile 接回同一段（只限 Claude）"),
         ("m", "換工作目錄，接回同一段對話"),
-        ("r／a", "標成 retired／改回 active"),
+        ("r／a", "停掉並標成 retired／改回 active"),
         ("X", "從登記表移除（已停止或 retired 的）"),
     ]),
     ("資料夾", [

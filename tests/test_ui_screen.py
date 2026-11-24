@@ -211,6 +211,23 @@ class CardTest(unittest.TestCase):
         self.assertIn("a activate", text)
         self.assertNotIn("Enter", text)
 
+    def test_retired_but_running_card_says_so_in_warning_colour_and_offers_the_stop(self):
+        from sampan.ui import preview_header
+        r = status_row("x", State.RETIRED, live="running", agent_status="idle")
+        lines = preview_header(self.cfg, r, {"panes": 1, "cwd": ""})
+        first = lines[2]
+        self.assertEqual(first[0], ("retired・執行中（idle）", "warn"))
+        self.assertIn("r 停掉", row_keys(r, {"panes": 1}))
+        self.assertNotIn("r 停掉", row_keys(row("x", state=State.RETIRED), {"panes": 0}))
+
+    def test_retired_but_running_info_card_status_line(self):
+        from sampan.ui.cards import StateLine, state_style
+        r = status_row("x", State.RETIRED, live="running", agent_status="busy")
+        lines = card_lines(self.cfg, r, {"panes": 1, "cwd": ""}, NOW)
+        line = next(x for x in lines if isinstance(x, StateLine))
+        self.assertIn("retired・執行中（busy）", str(line))
+        self.assertEqual(state_style(line.state), "warn")
+
     def test_card_keys_show_X_for_stopped_and_retired(self):
         self.assertEqual(row_keys(row("x", state=State.STOPPED), {"panes": 0}),
                          "Enter 接回　S 背景接回　P 換 profile　e 改名　L 別名　r retire　X 移除")

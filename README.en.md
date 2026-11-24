@@ -31,7 +31,7 @@ curl -fsSL https://raw.githubusercontent.com/royalroylo/sampan/main/install.sh |
 Or by hand, two lines:
 
 ```
-uv tool install git+https://github.com/royalroylo/sampan@v0.26.1
+uv tool install git+https://github.com/royalroylo/sampan@v0.27.0
 sampan init
 ```
 
@@ -85,6 +85,7 @@ The full key reference, the commands and the rules for restore are in the [usage
 
 - [Install](docs/en/install.md)
 - [Usage](docs/en/usage.md)
+- [Session lifecycle: active, retired and running](docs/en/lifecycle.md)
 - [SSH and tmux setup](docs/en/setup.md)
 - [The hub: messages between your own machines](docs/en/hub.md)
 - [Configuration and registry formats](docs/en/reference.md)

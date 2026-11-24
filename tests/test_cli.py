@@ -315,6 +315,25 @@ class CliTest(unittest.TestCase):
         self.assertEqual(fg.call_args_list[1].args[3], "b")
         self.assertFalse(fg.call_args_list[1].kwargs["dry_run"])
 
+    def test_cli_retire_parses_its_flags(self):
+        with mock.patch("sampan.session_run.cmd_retire", return_value=0) as rt, \
+                mock.patch("sampan.session_run.cmd_set_state") as ss, mock.patch("sys.stdin.isatty", return_value=False):
+            self.assertEqual(cli.main(["retire", "a"]), 0)
+            self.assertEqual(cli.main(["retire", "b", "--no-stop", "--dry-run", "--force"]), 0)
+        ss.assert_not_called()  # retire no longer goes through the bare flag change
+        (first, second) = rt.call_args_list
+        self.assertEqual(first.args[3], "a")
+        self.assertEqual((first.kwargs["no_stop"], first.kwargs["dry_run"], first.kwargs["force"]), (False, False, False))
+        self.assertEqual(second.args[3], "b")
+        self.assertEqual((second.kwargs["no_stop"], second.kwargs["dry_run"], second.kwargs["force"]), (True, True, True))
+
+    def test_cli_activate_goes_through_cmd_activate(self):
+        with mock.patch("sampan.session_run.cmd_activate", return_value=0) as ac, \
+                mock.patch("sampan.session_run.cmd_retire") as rt, mock.patch("sys.stdin.isatty", return_value=False):
+            self.assertEqual(cli.main(["activate", "a"]), 0)
+        rt.assert_not_called()
+        self.assertEqual(ac.call_args.args[3], "a")
+
     def test_cli_forget_takes_several_names_and_goes_on_after_a_failure(self):
         with mock.patch("sampan.session_run.cmd_forget", side_effect=[0, 2, 1]) as fg, \
                 mock.patch("sys.stdin.isatty", return_value=False):

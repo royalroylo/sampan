@@ -275,12 +275,14 @@ class SubmitTest(Base):
         self.assertEqual(dispatch.load(self.cfg.state_dir), [])
 
     def test_refuses_target_that_is_not_running(self):  # Review Focus 5
-        for state in (State.STOPPED, State.RETIRED, State.UNKNOWN, State.AWAIT_TRUST):
+        for state in (State.STOPPED, State.UNKNOWN, State.AWAIT_TRUST):
             with self.subTest(state):
                 self.set_row("b", state=state)
                 r = self.submit()
                 self.assertIsInstance(r, str)
                 self.assertIn("不是執行中", r)
+        self.set_row("b", state=State.RETIRED)
+        self.assertIn("已 retired", self.submit())
         self.assertEqual(dispatch.load(self.cfg.state_dir), [])
 
     def test_refuses_empty_message(self):

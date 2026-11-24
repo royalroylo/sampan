@@ -47,7 +47,7 @@ class Env(unittest.TestCase):
 
 class PlanTest(Env):
     def test_plan_skips_each_kind_with_reason(self):
-        self.reg("ok", "busy", "wait", "cx", "ret", "wt", "me", "already", "other", "stopped",
+        self.reg("ok", "busy", "wait", "cx", "ret", "retrun", "wt", "me", "already", "other", "stopped",
                  cwds={"wt": "/p/.claude/worktrees/x"})
         rows = [
             status_row("ok"),
@@ -55,6 +55,7 @@ class PlanTest(Env):
             status_row("wait", agent_status="waiting"),
             status_row("cx", agent="codex", profile="-"),
             status_row("ret", State.RETIRED, agent_status="-"),
+            status_row("retrun", State.RETIRED, live="running"),
             status_row("wt"),
             status_row("me", pane="%9"),
             status_row("already", profile="work"),
@@ -66,6 +67,7 @@ class PlanTest(Env):
         self.assertEqual(go, ["ok", "stopped"])
         self.assertEqual(dict(skip), {
             "busy": "忙碌中", "wait": "在等人回應", "cx": "Codex 不支援換 profile", "ret": "已 retired",
+            "retrun": "已 retired（仍在執行）",
             "wt": "在 worktree 裡", "me": "是 sampan 所在的 pane", "already": "已經是 work",
             "other": "目前不是 alice"})
 
