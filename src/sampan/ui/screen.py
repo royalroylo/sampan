@@ -1,4 +1,5 @@
 """curses adapter layer: CursesScreen provides pick / checklist / choose_dir / ask / out to cmd_ui, and handles keys, redrawing and preview capture."""
+import errno
 import fcntl
 import json
 import os
@@ -166,7 +167,13 @@ def terminal_gone(fd=0):
     reads as end of file). False for a live terminal, with or without a key waiting, and for anything not a terminal.
     Reads nothing, so a key typed meanwhile is never taken."""
     try:
-        if not os.isatty(fd) or not select.select([fd], [], [], 0)[0]:
+        termios.tcgetattr(fd)
+    except termios.error as e:  # Linux hangs the terminal up (vhangup): EIO from then on; ENOTTY: never a terminal
+        return bool(e.args) and e.args[0] == errno.EIO
+    except (OSError, ValueError):
+        return False
+    try:
+        if not select.select([fd], [], [], 0)[0]:
             return False
         waiting = struct.unpack("i", fcntl.ioctl(fd, termios.FIONREAD, b"\0\0\0\0"))[0]
     except OSError:
@@ -1154,6 +1161,17 @@ def run_outside(scr, args, env=None):
         scr.refresh()
 
 
+def _caused_by_gone(e):
+    """Whether TerminalGone is anywhere in e's chain (__cause__ / __context__)."""
+    seen = set()
+    while e is not None and id(e) not in seen:
+        if isinstance(e, TerminalGone):
+            return True
+        seen.add(id(e))
+        e = e.__cause__ or e.__context__
+    return False
+
+
 def curses_ui(cfg, run, out, *, current_session=None, own_pane=None, exec_fn=os.execvp, wrapper=None,
               run_outside=run_outside, updater=None, watcher=None, dispatch_watcher=None, notices_fn=None, **kw):
     """The whole ui opens curses only once. When attaching to a session outside tmux, curses steps out temporarily and tmux attach runs in the foreground; after detach we are back at the list.
@@ -1215,7 +1233,7 @@ def curses_ui(cfg, run, out, *, current_session=None, own_pane=None, exec_fn=os.
     except TerminalGone:
         rc, gone = 0, True
     except Exception as e:  # noqa: BLE001  closing curses on a terminal that is gone may fail too
-        if not isinstance(e.__context__, TerminalGone):
+        if not _caused_by_gone(e):
             raise
         rc, gone = 0, True
     finally:

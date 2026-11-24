@@ -94,6 +94,19 @@ class CursesUiGoneTest(unittest.TestCase):
         self.assertEqual((rc, printed, execs), (0, [], []))
         self.assertIsNone(dw.notice)  # nothing to print to
 
+    def test_gone_found_anywhere_in_the_chain(self):
+        try:
+            try:
+                try:
+                    raise TerminalGone()
+                except TerminalGone:
+                    raise OSError("endwin")
+            except OSError as e:
+                raise ValueError("cleanup") from e
+        except ValueError as e:
+            self.assertTrue(screen_mod._caused_by_gone(e))
+        self.assertFalse(screen_mod._caused_by_gone(ValueError("plain")))
+
     def test_closing_curses_failing_after_it_still_leaves_quietly(self):
         import curses
         cfg = make_env(Path(tempfile.mkdtemp()))
@@ -128,7 +141,8 @@ class RealTerminalGoneTest(unittest.TestCase):
         done = tmp / "rc"
         master, slave = pty.openpty()
         _set_size(slave)
-        env = dict(os.environ, TERM="xterm-256color", PYTHONPATH=str(ROOT), HOME=str(tmp))
+        env = dict(os.environ, TERM="xterm-256color", PYTHONPATH=os.pathsep.join([str(ROOT / "src"), str(ROOT)]),
+                   HOME=str(tmp))
         p = subprocess.Popen([sys.executable, "-c", CHILD, str(done)], stdin=slave, stdout=slave, stderr=slave,
                              env=env, cwd=str(ROOT), start_new_session=True)
         os.close(slave)

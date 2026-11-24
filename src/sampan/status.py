@@ -1,3 +1,4 @@
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
@@ -158,23 +159,25 @@ def _parse_ts(ts):
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
-_DISPLAY_PATHS = {}  # display-path cache: key → transcript path found (never a miss)
+_DISPLAY_PATHS = {}  # display-path cache: key → (transcript path found, clock time it was found); never a miss
 _DISPLAY_PATHS_MAX = 2048
+DISPLAY_PATH_TTL_S = 60  # looked up again after this: a newer transcript of the same id elsewhere shows within a minute
 
 
-def _cached_path(key, find):
-    """The path find() returns, remembered under key while it still exists. A miss is never remembered (a transcript
-    that shows up later is found the next time), and a remembered path that is gone (moved, deleted) is looked up
-    again. Display only: dispatch decisions call find_transcript / find_rollout themselves every time."""
-    path = _DISPLAY_PATHS.get(key)
-    if path is not None and path.exists():
-        return path
+def _cached_path(key, find, clock=time.monotonic):
+    """The path find() returns, remembered under key for DISPLAY_PATH_TTL_S while it still exists. A miss is never
+    remembered (a transcript that shows up later is found the next time), and a remembered path that is gone (moved,
+    deleted) is looked up again. Display only: dispatch decisions call find_transcript themselves every time."""
+    now = clock()
+    hit = _DISPLAY_PATHS.get(key)
+    if hit is not None and now - hit[1] < DISPLAY_PATH_TTL_S and hit[0].exists():
+        return hit[0]
     _DISPLAY_PATHS.pop(key, None)
     path = find()
     if path is not None:
         if len(_DISPLAY_PATHS) >= _DISPLAY_PATHS_MAX:
             _DISPLAY_PATHS.clear()
-        _DISPLAY_PATHS[key] = path
+        _DISPLAY_PATHS[key] = (path, now)
     return path
 
 

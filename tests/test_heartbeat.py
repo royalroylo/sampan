@@ -227,7 +227,7 @@ class ServerHeartbeatTest(unittest.TestCase):
 
     def test_a_failing_status_read_does_not_break_the_server(self):
         s = self.server()
-        s.status_fn = lambda *a, **k: (_ for _ in ()).throw(ValueError("bad"))
+        s.watch_status_fn = lambda *a, **k: (_ for _ in ()).throw(ValueError("bad"))
         s.watch_once()
 
     def test_a_failing_write_does_not_break_the_server(self):

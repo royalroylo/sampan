@@ -60,6 +60,12 @@ class Env(unittest.TestCase):
         status._DISPLAY_PATHS.clear()
         cards._QUOTES.clear()
 
+    def server(self, **kw):
+        caller = Caller("a", "alice", "claude", "%1", id=self.ids["a"])
+        return mcp_server.Server(self.cfg, self.run, io.StringIO(), io.StringIO(), caller=caller,
+                                 sleep=lambda _s: None, clock=lambda: 0.0, now_fn=lambda: NOW,
+                                 start_of=lambda pid: "Mon Nov 24 10:00:00 2026", **kw)
+
     def count_activity(self):
         spy = mock.patch.object(status, "_activity", wraps=status._activity)
         m = spy.start()
@@ -107,12 +113,6 @@ class LightRowsTest(Env):
 
 
 class ServerRowsTest(Env):
-    def server(self, **kw):
-        caller = Caller("a", "alice", "claude", "%1", id=self.ids["a"])
-        return mcp_server.Server(self.cfg, self.run, io.StringIO(), io.StringIO(), caller=caller,
-                                 sleep=lambda _s: None, clock=lambda: 0.0, now_fn=lambda: NOW,
-                                 start_of=lambda pid: "Mon Nov 24 10:00:00 2026", **kw)
-
     def test_watch_once_and_beat_read_no_activity(self):
         d = send.submit(self.cfg, self.run, Caller("a", "alice", "claude", "%1", id=self.ids["a"]), "b", "hi",
                         notify=True, now=NOW)
@@ -127,6 +127,17 @@ class ServerRowsTest(Env):
         with dispatch.transaction(self.cfg.state_dir) as items:  # the heartbeat was written (with the conversation)
             hb = items.conn.execute("SELECT * FROM inboxes").fetchall()
         self.assertEqual([r["conversation"] for r in hb], [A])
+
+    def test_send_batch_and_inbox_tools_read_no_activity(self):
+        server = self.server()
+        seen = self.count_activity()
+        out = server.tool_send({"session": "b", "message": "hi"})
+        self.assertEqual(out["state"], "queued")  # b is busy
+        with self.assertRaises(mcp_server.ToolError):  # refused (b is busy), after the rows were read
+            server.tool_send_batch({"sessions": ["b"], "message": "again"})
+        server.tool_inbox_take({})
+        self.assertEqual(seen.call_count, 0)
+        self.assertEqual(len(dispatch.load(self.cfg.state_dir)), 1)
 
     def test_list_sessions_still_shows_last_activity(self):
         server = self.server()
@@ -209,6 +220,38 @@ class DisplayCacheTest(Env):
         status_rows(self.cfg, self.run)
         status_rows(self.cfg, self.run)
         self.assertEqual(find.call_count, 2)  # b's miss is looked up each time; a comes from the cache
+
+    def test_dispatch_decisions_never_use_the_display_cache(self):
+        caller = Caller("a", "alice", "claude", "%1", id=self.ids["a"])
+        d = send.submit(self.cfg, self.run, caller, "b", "hi", notify=True, now=NOW)
+        with dispatch.transaction(self.cfg.state_dir) as items:  # as if it went out: the sent branch reads b's transcript
+            x = next(i for i in items if i.id == d.id)
+            x.state, x.sent_at, x.thread_id = "sent", NOW.isoformat(), B
+        status_rows(self.cfg, self.run)  # the display has b's path cached
+        spy = mock.patch.object(status, "display_transcript", wraps=status.display_transcript)
+        cached = spy.start()
+        self.addCleanup(spy.stop)
+        with mock.patch.object(send, "find_transcript", wraps=send.find_transcript) as find:
+            send.advance(self.cfg, self.run, d.id, sleep=lambda _s: None, now=NOW)
+            self.server().watch_once()
+        self.assertEqual(cached.call_count, 0)
+        self.assertGreater(find.call_count, 0)  # the judgement looked for the transcript itself
+
+    def test_a_remembered_path_is_looked_up_again_after_the_ttl(self):
+        t = [100.0]
+        calls = []
+
+        def find():
+            calls.append(1)
+            return self.paths[A]
+        key = ("k",)
+        status._cached_path(key, find, clock=lambda: t[0])
+        t[0] += status.DISPLAY_PATH_TTL_S - 1
+        status._cached_path(key, find, clock=lambda: t[0])
+        self.assertEqual(len(calls), 1)
+        t[0] += 2
+        status._cached_path(key, find, clock=lambda: t[0])
+        self.assertEqual(len(calls), 2)
 
     def test_card_quote_is_read_again_only_when_the_file_changes(self):
         with mock.patch.object(claude_state, "last_user_text", wraps=claude_state.last_user_text) as read:
