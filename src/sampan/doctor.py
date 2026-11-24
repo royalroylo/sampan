@@ -336,6 +336,10 @@ def _lifecycle(cfg, run, rows_fn):
         first = parked[0]
         out.append(Check("warn", f"retired 但仍在執行：{'、'.join(parked)}",
                          f"要下線：sampan retire {first}（會補停；忙的先等它閒）或 sampan stop {first}；要留著：sampan activate {first}"))
+    for r in rows:
+        if r.state is State.RETIRED and r.anomaly:
+            out.append(Check("warn", f"{r.name}：retired，但{r.anomaly}",
+                             f"sampan status 看詳情；不要它了就 sampan retire {r.name}（補停），要用就 sampan activate {r.name}"))
     off, gone = {}, {}
     for r in rows:
         if r.registry != "active" or r.live != "stopped" or r.agent != "claude":
@@ -350,7 +354,7 @@ def _lifecycle(cfg, run, rows_fn):
                          f"接不回，直到 sampan profile enable {prof}；不要它們了就 sampan retire"))
     for prof, names in sorted(gone.items()):
         out.append(Check("warn", f"profile {prof} 已不在設定檔，登記在它上面的 active session 接不回：{'、'.join(sorted(names))}",
-                         f"補回 profile（sampan profile add {prof}），或 sampan switch 換到別的 profile，或 sampan retire／forget"))
+                         f"補回 profile（sampan profile add {prof}），或不要它們了就 sampan retire／forget"))
     return out
 
 

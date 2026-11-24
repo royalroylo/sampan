@@ -381,6 +381,25 @@ class UiTest(unittest.TestCase):
         self.ui(["r", "1", "y"], rows=parked)
         self.assertEqual(self.calls, [("retire", "p", {"own_pane": "%9"})])
 
+    def test_retire_does_not_mark_when_tmux_could_not_be_read(self):
+        unknown = [status_row("u", State.UNKNOWN)]
+        self.ui(["r", "1"], rows=unknown)
+        self.assertEqual(self.calls, [])
+        self.assertIn("tmux 讀不到", self.text())
+        parked = [status_row("p", State.RETIRED, live="unknown")]
+        self.ui(["r", "1"], rows=parked)
+        self.assertEqual(self.calls, [])
+
+    def test_retire_of_a_session_at_a_trust_prompt_goes_through_retire_not_a_bare_mark(self):
+        prompt = [status_row("t", State.AWAIT_TRUST)]  # a tmux session with an agent sampan cannot read
+        self.ui(["r", "1"], rows=prompt)
+        self.assertEqual(self.calls, [("retire", "t", {"own_pane": "%9"})])
+
+    def test_retire_of_a_tmux_session_with_only_a_shell_goes_through_retire(self):
+        shell = [status_row("s", State.STOPPED, tmux_alive=True)]
+        self.ui(["r", "1"], rows=shell)
+        self.assertEqual(self.calls, [("retire", "s", {"own_pane": "%9"})])
+
     def test_activate(self):
         self.ui(["a", "3"])
         self.assertEqual(self.calls, [("state", "old", "active")])

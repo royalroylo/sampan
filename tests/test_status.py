@@ -70,7 +70,8 @@ class StatusTest(unittest.TestCase):
         old = {x.name: x for x in status_rows(self.cfg, self.r)}["old"]
         self.assertEqual((old.state, old.registry, old.live, old.agent_status), (State.RETIRED, "retired", "running", "idle"))
 
-    def test_a_mismatch_shows_before_retired(self):
+    def test_a_retired_row_stays_retired_whatever_else_is_wrong_and_only_shows_it(self):
+        # the lifecycle decision (Q3-A): MCP list_sessions reports retired as retired; the display column says more
         write_rows(self.cfg.registry_path, [Row("old", "claude", "alice", D, "/c", "retired")], "t", self.cfg.history_dir)
         panes = [pane_line("old", "%5", 104, "claude", "/c")]
         self.r.on(["tmux", "-u", "list-panes"], cp(out="\n".join(panes) + "\n"))
@@ -78,14 +79,43 @@ class StatusTest(unittest.TestCase):
         procs = [ps_line(104, 1, "-zsh", "-zsh"), ps_line(205, 104, "claude", "claude")]
         self.r.on(["ps", "-A"], cp(out="\n".join(procs) + "\n"))
         old = {x.name: x for x in status_rows(self.cfg, self.r)}["old"]
-        self.assertEqual((old.state, old.registry, old.live), (State.PROFILE_MISMATCH, "retired", "running"))
+        self.assertEqual((old.state, old.registry, old.live), (State.RETIRED, "retired", "running"))
+        self.assertEqual((old.anomaly, old.run_display), ("profile 不符（登記 alice）",) * 2)
 
-    def test_retired_at_the_trust_prompt_shows_the_prompt(self):
+    def test_a_retired_row_with_another_agent_stays_retired(self):
+        write_rows(self.cfg.registry_path, [Row("old", "codex", "", D, "/c", "retired")], "t", self.cfg.history_dir)
+        panes = [pane_line("old", "%5", 104, "claude", "/c")]
+        self.r.on(["tmux", "-u", "list-panes"], cp(out="\n".join(panes) + "\n"))
+        write_session(self.cfg, "alice", 205, sid=D, tmux="old:@5.%5", status="idle")
+        procs = [ps_line(104, 1, "-zsh", "-zsh"), ps_line(205, 104, "claude", "claude")]
+        self.r.on(["ps", "-A"], cp(out="\n".join(procs) + "\n"))
+        old = {x.name: x for x in status_rows(self.cfg, self.r)}["old"]
+        self.assertEqual(old.state, State.RETIRED)
+        self.assertEqual(old.anomaly, "agent 不符（登記 codex）")
+
+    def test_a_retired_row_at_the_trust_prompt_stays_retired(self):
         panes = [pane_line("old", "%4", 103, "claude", "/c")]
         self.r.on(["tmux", "-u", "list-panes"], cp(out="\n".join(panes) + "\n"))
         self.r.on(["tmux", "-u", "capture-pane"], cp(out="Do you trust this folder?\n ❯ No, exit\n   Yes, I trust this folder\n"))
         old = {x.name: x for x in status_rows(self.cfg, self.r)}["old"]
-        self.assertEqual((old.state, old.live), (State.AWAIT_TRUST, "stopped"))
+        self.assertEqual((old.state, old.live, old.anomaly), (State.RETIRED, "stopped", "等待信任確認"))
+
+    def test_status_output_shows_a_retired_rows_anomaly_in_the_state_column(self):
+        write_rows(self.cfg.registry_path, [Row("old", "claude", "alice", D, "/c", "retired")], "t", self.cfg.history_dir)
+        panes = [pane_line("old", "%5", 104, "claude", "/c")]
+        self.r.on(["tmux", "-u", "list-panes"], cp(out="\n".join(panes) + "\n"))
+        write_session(self.cfg, "work", 205, sid=D, tmux="old:@5.%5", status="idle")
+        procs = [ps_line(104, 1, "-zsh", "-zsh"), ps_line(205, 104, "claude", "claude")]
+        self.r.on(["ps", "-A"], cp(out="\n".join(procs) + "\n"))
+        msgs = []
+        cmd_status(self.cfg, self.r, msgs.append)
+        line = next(m for m in msgs if m.startswith("old "))
+        self.assertIn("retired ⚠", line)
+        self.assertIn("profile 不符（登記 alice）", line)
+
+    def test_a_plain_retired_row_has_no_anomaly(self):
+        old = {x.name: x for x in status_rows(self.cfg, self.r)}["old"]
+        self.assertEqual((old.state, old.anomaly), (State.RETIRED, ""))
 
     def test_unreadable_tmux_gives_live_unknown(self):
         from sampan.status import _unreadable_rows

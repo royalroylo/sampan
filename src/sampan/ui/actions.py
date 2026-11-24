@@ -255,10 +255,17 @@ def _alias(cfg, out, ask, name, alias_fn):
 
 
 def _retire(cfg, run, out, ask, name, rows, retire_fn, set_state_fn, own_pane):
-    """r: a stopped session is marked right away; a running idle one is stopped first (after confirming), a busy one is left alone."""
+    """r: a session with no tmux session is marked right away; a running idle one is stopped first (after confirming),
+    a busy one is left alone; when tmux cannot be read nothing is changed, and one that has a tmux session but no agent
+    sampan can read (a shell, a trust prompt) goes through retire, which decides (and refuses what it cannot stop)."""
     row = next((r for r in rows if r.name == name), None)
-    if row is None or row.live != "running":
+    if row is not None and row.live == "unknown":
+        out(f"❌ tmux 讀不到，不知道 {name} 有沒有在跑，什麼都沒改（要只標記請用 sampan retire {name} --no-stop）")
+        return 2
+    if row is None or (row.live != "running" and not row.tmux_alive):
         return set_state_fn(cfg, out, name, "retired")
+    if row.live != "running":
+        return retire_fn(cfg, run, out, name, own_pane=own_pane)
     if row.agent_status != "idle":
         out(f"⏸ {name} 忙（{row.agent_status}），沒動；等它閒了再 retire")
         return 0

@@ -1,4 +1,5 @@
 """The ui screen: pure-function render, the right-hand info card, and the curses adapter layer (using a fake screen object, no real curses)."""
+import dataclasses
 import json
 import tempfile
 import unittest
@@ -227,6 +228,18 @@ class CardTest(unittest.TestCase):
         line = next(x for x in lines if isinstance(x, StateLine))
         self.assertIn("retired・執行中（busy）", str(line))
         self.assertEqual(state_style(line.state), "warn")
+
+    def test_a_retired_session_with_only_a_shell_does_not_offer_the_stop(self):
+        shell = status_row("x", State.RETIRED, tmux_alive=True)  # tmux session is there, no agent in it
+        keys = row_keys(shell, {"panes": 1})
+        self.assertIn("Enter 接上", keys)
+        self.assertNotIn("r 停掉", keys)
+
+    def test_a_retired_card_with_an_anomaly_names_it(self):
+        from sampan.ui.cards import StateLine
+        r = dataclasses.replace(status_row("x", State.RETIRED, live="running"), anomaly="profile 不符（登記 alice）")
+        line = next(x for x in card_lines(self.cfg, r, {"panes": 1, "cwd": ""}, NOW) if isinstance(x, StateLine))
+        self.assertIn("retired・profile 不符（登記 alice）", str(line))
 
     def test_card_keys_show_X_for_stopped_and_retired(self):
         self.assertEqual(row_keys(row("x", state=State.STOPPED), {"panes": 0}),

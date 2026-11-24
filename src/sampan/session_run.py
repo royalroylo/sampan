@@ -318,12 +318,24 @@ def cmd_set_state(cfg, out, name, state):
     return 0
 
 
+def _agent_in(cfg, run, name, proc_root=PROC_ROOT):
+    """Whether the tmux session `name` holds an agent now: a live one sampan can read, one that has no session file yet
+    (a claude at a trust prompt), or several. A session with only a shell is False; tmux unreadable raises TmuxUnreadable."""
+    panes = Tmux(run).require_panes()
+    procs = list_procs(run)
+    found, _w = live_by_pane(cfg, run, panes, procs, proc_root)
+    mine = [p for p in panes if p.session == name]
+    return (any(p.pane_id in found or descendant_claude(procs, p.pane_pid) is not None for p in mine)
+            or name in multi_agent_sessions(procs, panes, found))
+
+
 def cmd_retire(cfg, run, out, name, *, no_stop=False, dry_run=False, force=False, timeout=90, own_pane=None,
-               sleep=time.sleep, proc_root=PROC_ROOT):
+               sleep=time.sleep, proc_root=PROC_ROOT, kill=os.kill):
     """Take a session out of the work list: stop it first, and mark it retired only when the stop worked (the other way
     round, a stop that fails would leave a retired session that still runs). Only an idle session is stopped; a busy
     one, one at a worktree question, several agents, or sampan's own pane is refused with nothing changed. A session
-    that is not running is only marked (its tmux session, if only a shell is left, is not closed). no_stop: only mark.
+    with no agent in it is only marked (a tmux session with only a shell is not closed). no_stop: only mark.
+    force: a stop that times out gets SIGTERM (as `stop --force`) and, once the agent is gone, the session is marked.
     Running it again on a retired session that still runs finishes the stop. Exit codes: 0 done, 1 refused or the stop
     did not finish, 2 nothing changed because the name is unknown or tmux cannot be read."""
     if not dry_run:
@@ -336,36 +348,46 @@ def cmd_retire(cfg, run, out, name, *, no_stop=False, dry_run=False, force=False
         out(f"❌ 登記表沒有 {name}")
         return 2
     try:
-        panes = Tmux(run).require_panes()
+        running = _agent_in(cfg, run, name, proc_root)
     except TmuxUnreadable as e:
         if not no_stop:
             out(f"❌ {e}；不知道 {name} 有沒有在跑，什麼都沒改（要只標記就加 --no-stop）")
             return 2
-        panes = None
-    here = panes is not None and any(p.session == name for p in panes)
-    if no_stop or not here:
-        if row.state == "retired" and not here:
+        running = None  # unknown
+    if no_stop or not running:
+        if row.state == "retired" and not running:
             out(f"{name} 已經是 retired")
             return 0
         if dry_run:
-            out(f"（dry-run）會把 {name} 標成 retired{'（--no-stop：不停它）' if here else ''}，什麼都沒改")
+            out(f"（dry-run）會把 {name} 標成 retired{'（--no-stop：不停它）' if running else ''}，什麼都沒改")
             return 0
         rc = cmd_set_state(cfg, out, name, "retired")
-        if rc == 0 and here:
+        if rc == 0 and running:
             out(f"⚠ {name} 仍在執行：retired 但還在跑；sampan stop {name} 下線，或 sampan activate {name} 還原")
+        elif rc == 0 and running is None:
+            out(f"⚠ tmux 讀不到，不知道 {name} 有沒有在跑；若還在跑，它就是 retired 但還在跑：sampan stop {name} 下線，"
+                f"或 sampan activate {name} 還原")
         return rc
-    stopped, left, lines = [], [], []
+    stopped, left, lines, why = [], [], [], {}
     rc = cmd_stop(cfg, run, lines.append, names=(name,), force=force, dry_run=dry_run, timeout=timeout,
-                  own_pane=own_pane, sleep=sleep, proc_root=proc_root, stopped=stopped, left=left)
+                  own_pane=own_pane, sleep=sleep, proc_root=proc_root, kill=kill, stopped=stopped, left=left, why=why)
+    for line in lines:
+        out(line)
     if rc == 2:
-        for line in lines:
-            out(line)
         return 2
-    if name not in stopped and name not in left and not dry_run and rc == 0:
-        pass  # nothing ran in the tmux session (only a shell): nothing to stop, and its output is not worth showing
-    else:
-        for line in lines:
-            out(line)
+    if force and not dry_run and name in left and "沒結束" in why.get(name, ""):
+        # the stop timed out and SIGTERM went out: give the agent a few seconds to leave, then close its tmux session
+        for _ in range(5):
+            sleep(2)
+            if not _agent_in(cfg, run, name, proc_root):
+                break
+        if not _agent_in(cfg, run, name, proc_root):
+            from .save import cmd_save
+            closed, _kept = _close_sessions(Tmux(run), [name])
+            cmd_save(cfg, run, lambda _line: None, quiet=True, proc_root=proc_root)
+            out(f"  · {name} 收到 SIGTERM 後已結束" + ("，tmux session 已關閉" if closed else ""))
+            left.remove(name)
+            stopped.append(name)
     if name in left or (name not in stopped and not dry_run and rc != 0):
         out(f"❌ {name} 沒有停下來，沒標成 retired：等它閒了再 retire；或 sampan retire {name} --no-stop 只標記"
             f"（之後它還在跑，sampan doctor 會提醒，要自己 sampan stop {name}）")

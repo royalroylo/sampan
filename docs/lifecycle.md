@@ -17,7 +17,7 @@
 | retired | ⚠ 異常「retired 仍在執行」：`retire --no-stop`、舊登記表或人手動開起來才會有；`sampan status` 與 `sampan doctor` 警告；`retire`、`stop`、`activate` 都是出口 | 停放（終點；`forget` 或 `activate` 才離開） | 不明 |
 | 沒有列 | 未登記（`sampan adopt` 的對象） | 不存在 | 不明 |
 
-另有既有的異常不變：agent 或 profile 不符、同一個 tmux session 多個 agent、停在信任確認。0.27 起這幾種**優先於 retired 顯示**，所以 retired 的 session 若 profile 不符，狀態寫「profile 不符」，不再被蓋成 retired。
+另有既有的異常不變：agent 或 profile 不符、同一個 tmux session 多個 agent、停在信任確認。retired 的 session 若同時有這些異常，MCP `list_sessions` 的 `state` 仍是 `retired`（0.26 的行為不變）；`sampan status` 的「狀態」欄、畫面卡片與 `sampan doctor` 會另外寫出異常（例如「profile 不符（登記 alice）」）。
 
 ## 各指令怎麼改變狀態
 

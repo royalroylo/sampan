@@ -45,6 +45,8 @@ _STATE_STYLE[PARKED_RUNNING] = "warn"
 
 def card_state(row):
     """The state text of a card (without the agent's activity) and the key state_style colours it by."""
+    if row.state is State.RETIRED and row.anomaly:
+        return f"retired・{row.anomaly}", PARKED_RUNNING
     if row.state is State.RETIRED and row.live == "running":
         return "retired・執行中", PARKED_RUNNING  # parked on purpose but still up: not a state to leave it in
     return show_state(row), row.state
@@ -129,7 +131,7 @@ def row_keys(row, info):
     """The keys available for this row (last line of the info card)."""
     state, live = row.state, (info or {}).get("panes", 0) > 0
     if state is State.RETIRED:
-        keys = (["Enter 接上", "r 停掉"] if live else []) + ["a activate", "X 移除"]
+        keys = (["Enter 接上"] if live else []) + (["r 停掉"] if row.live == "running" else []) + ["a activate", "X 移除"]
     elif state is State.STOPPED:
         keys = ["Enter 接回", "S 背景接回"] + (["P 換 profile"] if row.agent == "claude" else []) + ["e 改名", "L 別名", "r retire", "X 移除"]
     elif state is State.RUNNING:

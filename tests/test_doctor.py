@@ -875,6 +875,16 @@ class LifecycleChecksTest(unittest.TestCase):
         self.assertEqual([(c.level, c.title) for c in out],
                          [("warn", "profile ghost 已不在設定檔，登記在它上面的 active session 接不回：a")])
 
+    def test_a_retired_session_with_a_mismatch_is_reported(self):
+        import dataclasses
+        r = dataclasses.replace(status_row("old", State.RETIRED, live="running"), anomaly="profile 不符（登記 alice）")
+        titles = [c.title for c in self.checks(r)]
+        self.assertIn("old：retired，但profile 不符（登記 alice）", titles)
+
+    def test_the_gone_profile_advice_does_not_suggest_a_switch_that_cannot_work(self):
+        [c] = self.checks(status_row("a", State.STOPPED, profile="ghost"))
+        self.assertNotIn("sampan switch", c.detail)
+
     def test_a_failing_status_read_never_stops_doctor(self):
         from sampan.doctor import _lifecycle
 

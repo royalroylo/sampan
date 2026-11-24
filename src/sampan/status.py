@@ -65,6 +65,7 @@ class StatusRow:
     model: str = ""  # the registry row's model ("" = unset: the profile's own default)
     registry: str = ""  # the registry row's state: "active" | "retired" | "" (no row)
     live: str = "stopped"  # whether an agent runs in it now: "running" | "stopped" | "unknown" (tmux could not be read)
+    anomaly: str = ""  # a retired row only: what is wrong besides being retired (mismatch, trust prompt), ready to show
 
     @property
     def display(self):
@@ -73,8 +74,11 @@ class StatusRow:
 
     @property
     def run_display(self):
-        """The state as `sampan status` shows it next to the registry column: only what is going on, never "retired"."""
+        """The state as `sampan status` shows it next to the registry column: only what is going on, never "retired"
+        (a mismatch or a trust prompt on a retired row shows here; `state` itself stays retired)."""
         if self.state is State.RETIRED:
+            if self.anomaly:
+                return self.anomaly
             return {"running": LABELS[State.RUNNING], "unknown": LABELS[State.UNKNOWN]}.get(self.live, LABELS[State.STOPPED])
         return self.display
 
@@ -110,17 +114,25 @@ def status_rows(cfg, run, snapshot_fn=None, *, activity=True):
         row, lc = rows.get(name), live_by_session.get(name)
         detail = ""
         trust = row is not None and lc is None and name not in multi and _at_trust_prompt(tmux, panes, name, row.agent)
-        # a mismatch, several agents and a trust prompt come before retired: they are what is really going on
+        anomaly = ""
         if name in multi:
             state = State.MULTI
+        elif row is not None and row.state == "retired":
+            # a retired row is always RETIRED (what MCP list_sessions and the dispatch code read); what else is wrong
+            # with it is only shown: status and the screen use `anomaly`, doctor reads it
+            state = State.RETIRED
+            if lc is not None and lc.agent != row.agent:
+                anomaly = LABELS[State.AGENT_MISMATCH] + f"（登記 {row.agent}）"
+            elif lc is not None and lc.profile != row.profile:
+                anomaly = LABELS[State.PROFILE_MISMATCH] + f"（登記 {row.profile}）"
+            elif trust:
+                anomaly = LABELS[State.AWAIT_TRUST]
         elif row is not None and lc is not None and lc.agent != row.agent:
             state, detail = State.AGENT_MISMATCH, f"（登記 {row.agent}）"
         elif row is not None and lc is not None and lc.profile != row.profile:
             state, detail = State.PROFILE_MISMATCH, f"（登記 {row.profile}）"
         elif trust:
             state = State.AWAIT_TRUST
-        elif row is not None and row.state == "retired":
-            state = State.RETIRED
         elif row is not None and lc is not None:
             state = State.RUNNING
         elif row is not None:
@@ -139,7 +151,7 @@ def status_rows(cfg, run, snapshot_fn=None, *, activity=True):
                                 lc.status if lc else "-", last, tokens, window, lc.pane_id if lc else None,
                                 name in alive, row.id if row is not None else "", row.alias if row is not None else "",
                                 row.model if row is not None else "", row.state if row is not None else "",
-                                "running" if (lc is not None or name in multi) else "stopped"))
+                                "running" if (lc is not None or name in multi) else "stopped", anomaly))
     return result
 
 

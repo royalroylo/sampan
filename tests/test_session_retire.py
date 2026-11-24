@@ -28,6 +28,8 @@ class Base(unittest.TestCase):
         self.alive = {200, 201, 202}
         self.exit_on_keys = True
         self.unreadable = False
+        self.sigterm_works = True
+        self.sigtermed = []
         self.msgs = []
         self.panes = [pane_line("a", "%1", 100, "claude", "/c"), pane_line("b", "%2", 101, "claude", "/c"),
                       pane_line("me", "%3", 102, "claude", "/c"), pane_line("sh", "%4", 103, "zsh", "/c")]
@@ -61,7 +63,13 @@ class Base(unittest.TestCase):
 
     def retire(self, r, name, **kw):
         kw.setdefault("own_pane", "%3")
-        return cmd_retire(self.cfg, r, self.msgs.append, name, sleep=lambda _: None, proc_root=NO_PROC, **kw)
+        return cmd_retire(self.cfg, r, self.msgs.append, name, sleep=lambda _: None, proc_root=NO_PROC,
+                          kill=self.kill, **kw)
+
+    def kill(self, pid, sig):
+        self.sigtermed.append((pid, sig))
+        if self.sigterm_works:
+            self.alive.discard(pid)
 
     def state(self, name):
         return next(x.state for x in load_rows(self.cfg.registry_path) if x.tmux == name)
@@ -117,6 +125,68 @@ class RetireTest(Base):
         self.assertEqual(self.retire(r, "a", timeout=4), 1)
         self.assertEqual(self.state("a"), "active")
         self.assertEqual(self.killed(r), [])
+
+    def test_force_sends_sigterm_when_the_stop_times_out_and_marks_once_the_agent_is_gone(self):
+        self.exit_on_keys = False
+        r = self.runner()
+        self.assertEqual(self.retire(r, "a", timeout=4, force=True), 0)
+        self.assertEqual(self.sigtermed, [(200, 15)])
+        self.assertEqual(self.state("a"), "retired")
+        self.assertEqual(self.killed(r), [["tmux", "-u", "kill-session", "-t", "=a"]])
+        self.assertIn("SIGTERM", self.text())
+
+    def test_force_that_does_not_end_the_agent_does_not_mark(self):
+        self.exit_on_keys = False
+        self.sigterm_works = False
+        r = self.runner()
+        self.assertEqual(self.retire(r, "a", timeout=4, force=True), 1)
+        self.assertEqual(self.sigtermed, [(200, 15)])
+        self.assertEqual(self.state("a"), "active")
+        self.assertEqual(self.killed(r), [])
+
+    def test_force_does_not_override_a_busy_session(self):
+        r = self.runner()
+        self.assertEqual(self.retire(r, "b", force=True), 1)
+        self.assertEqual((self.sigtermed, self.state("b")), ([], "active"))
+
+    def test_without_force_a_timeout_sends_no_sigterm(self):
+        self.exit_on_keys = False
+        r = self.runner()
+        self.assertEqual(self.retire(r, "a", timeout=4), 1)
+        self.assertEqual(self.sigtermed, [])
+
+    def test_dry_run_with_only_a_shell_says_it_would_only_mark(self):
+        r = self.runner()
+        self.assertEqual(self.retire(r, "sh", dry_run=True), 0)
+        self.assertEqual(self.state("sh"), "active")
+        self.assertIn("標成 retired", self.text())
+        self.assertNotIn("停掉", self.text())
+
+    def test_dry_run_with_an_idle_agent_says_it_would_stop(self):
+        r = self.runner()
+        self.assertEqual(self.retire(r, "a", dry_run=True), 0)
+        self.assertIn("會停掉 a", self.text())
+
+    def test_already_retired_with_only_a_shell_returns_at_once_without_a_save_or_a_log_line(self):
+        r = self.runner()
+        self.retire(r, "sh")
+        self.msgs.clear()
+        seen = self.cfg.registry_path.read_bytes()
+        calls = len(r.calls)
+        log = (self.cfg.state_dir / "actions.log").read_text() if (self.cfg.state_dir / "actions.log").exists() else ""
+        self.assertEqual(self.retire(r, "sh"), 0)
+        self.assertIn("已經是 retired", self.text())
+        self.assertEqual(self.cfg.registry_path.read_bytes(), seen)  # no save rewrote it
+        self.assertNotIn("stop", [c["args"][2] for c in r.calls[calls:] if len(c["args"]) > 2 and c["args"][2] == "send-keys"])
+        new_log = (self.cfg.state_dir / "actions.log").read_text()
+        self.assertNotIn("[stop", new_log[len(log):])
+
+    def test_no_stop_with_unreadable_tmux_warns_that_it_may_still_run(self):
+        self.unreadable = True
+        r = self.runner()
+        self.assertEqual(self.retire(r, "a", no_stop=True), 0)
+        self.assertIn("tmux 讀不到，不知道 a 有沒有在跑", self.text())
+        self.assertIn("sampan stop a", self.text())
 
     def test_no_stop_marks_a_running_session_and_warns(self):
         r = self.runner()
