@@ -5,6 +5,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.26.1] - 2026-11-24
+
+Upgrading: a running `sampan mcp serve` keeps the old code until its session restarts (each Claude session starts its own); the sampan screen uses the new code the next time it opens. Nothing else changes: no command, screen, MCP output or file format is different.
+
+### Fixed
+- Less CPU while idle. Sending, the dispatch watchers (every `sampan mcp serve` and the screen), the heartbeats and the hub hooks no longer read every session's transcript each time they look at the sessions: they only need the state, not the last activity or context size, and that read was most of the cost (about 230 ms of CPU per look on a machine with ~100 registered sessions). It also ran while holding the dispatch lock, so with several sessions watching, heartbeats could time out waiting for it (`心跳寫不進去：DispatchError('正在送出，稍後再試')`) and messages were pasted in full instead of rung. The list, `sampan status` and the MCP `list_sessions` still show last activity; they now remember where each transcript is while it exists (a transcript that is not found is looked for again every time) and the info card reads a transcript's last message again only when the file changed.
+- The sampan screen leaves (exit code 0, printing nothing) when its terminal is gone. A terminal that closed without the process getting SIGHUP (started under `nohup`, or from something that ignores SIGHUP) used to leave the screen running at 100% CPU, because every read failed at once.
+
 ## [0.26.0] - 2026-11-21
 
 Upgrading: nothing to restart; nothing changes unless you set up the hub (docs/hub.md). The hub host needs the extra: `uv tool install 'sampan[hub]'`. Downgrading: a remote dispatch (its `extra.remote`) is just a dispatch to an older sampan; `remote.db` can be deleted.
