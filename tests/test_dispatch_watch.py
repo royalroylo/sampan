@@ -4,8 +4,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from sampan import dispatch
+from sampan import dispatch, send
 from sampan.dispatch import Dispatch
+from sampan.status import State
 from sampan.ui.actions import cancel_flow, cmd_ui
 from sampan.ui.dispatch_watch import (
     INTERVAL_S,
@@ -20,7 +21,7 @@ from sampan.ui.render import render
 from sampan.ui.screen import CursesScreen
 from sampan.ui.state import Picker
 from tests.fakes import FakeRunner
-from tests.helpers import make_env
+from tests.helpers import make_env, status_row
 from tests.test_ui_screen import NOW, FakeScr, row
 
 CREATED = "2026-10-26T12:00:00+00:00"
@@ -89,7 +90,8 @@ class WatcherTest(unittest.TestCase):
         seen = []
         r = FakeRunner()
         w = DispatchWatcher(self.cfg, r, pending_fn=lambda c: ["a1"], load_fn=lambda d: [],
-                            advance_fn=lambda cfg, run, did, **k: seen.append(run(["echo", "x"]) and run(["y"], stdin="in")))
+                            advance_fn=lambda cfg, run, did, **k: seen.append(run(["echo", "x"]) and run(["y"], stdin="in")),
+                            rows_fn=lambda cfg, run: None)
         w.poll_once()
         self.assertEqual([c["stdin"] for c in r.calls], [subprocess.DEVNULL, "in"])  # an explicit stdin is kept
 
@@ -340,3 +342,62 @@ class ScreenTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RoundRowsTest(unittest.TestCase):
+    """P0.5: the rows are read once per round, before the locks, and only when something is to be advanced."""
+
+    def setUp(self):
+        self.cfg = make_env(Path(tempfile.mkdtemp()))
+        self.reads, self.got = [], []
+
+    def watcher(self, ids, items=()):
+        def rows_fn(cfg, run):
+            self.reads.append(1)
+            return None
+
+        def adv(cfg, run, did, *, sleep, rows=None, **_kw):
+            self.got.append((did, rows))
+        return DispatchWatcher(self.cfg, FakeRunner(strict=True), advance_fn=adv, pending_fn=lambda cfg: list(ids),
+                               load_fn=lambda d: list(items), rows_fn=rows_fn)
+
+    def test_three_pending_dispatches_read_the_rows_once(self):
+        self.watcher(["a1", "a2", "a3"]).poll_once()
+        self.assertEqual(len(self.reads), 1)
+        self.assertEqual([d for d, _ in self.got], ["a1", "a2", "a3"])
+
+    def test_nothing_pending_reads_no_rows(self):
+        self.watcher([]).poll_once()
+        self.assertEqual(self.reads, [])
+
+    def test_unreadable_rows_still_advance(self):
+        def boom(cfg, run):
+            raise OSError("no ps")
+        w = self.watcher(["a1"])
+        w.rows_fn = boom
+        w.poll_once()
+        self.assertEqual(self.got, [("a1", None)])
+
+    def test_owed_notice_for_a_stopped_sender_is_tried_every_30_seconds(self):
+        d = mk("o1", "done", notify=True, notified=False, from_kind="session", from_id="s1")
+        stopped = status_row("alice", id="s1", state=State.STOPPED)
+        w = self.watcher(["o1"], items=[d])
+        w.rows_fn = lambda cfg, run: send.RoundRows([stopped])
+        clock = [1000.0]
+        with mock.patch.object(send, "_mono", lambda: clock[0]):
+            w.poll_once()
+            w.poll_once()
+            clock[0] += 29
+            w.poll_once()
+            self.assertEqual(len(self.got), 1)  # the next two rounds left it alone
+            clock[0] += 2
+            w.poll_once()
+        self.assertEqual(len(self.got), 2)
+
+    def test_owed_notice_for_a_running_sender_is_tried_every_round(self):
+        d = mk("o1", "done", notify=True, notified=False, from_kind="session", from_id="s1")
+        w = self.watcher(["o1"], items=[d])
+        w.rows_fn = lambda cfg, run: send.RoundRows([status_row("alice", id="s1", agent_status="busy")])
+        w.poll_once()
+        w.poll_once()
+        self.assertEqual(len(self.got), 2)

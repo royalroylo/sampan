@@ -2294,3 +2294,92 @@ class MntRefusalTest(Base):
             self.assertEqual(send.submit_new(self.cfg, CALLER_A, "n", "claude", "alice", "hi", notify=False, now=NOW), problem)
         self.assertFalse((self.cfg.state_dir / "dispatches.db").exists())
         self.assertNotIsInstance(self.submit(), str)  # a normal path is fine
+
+
+class RoundRowsTest(Base):
+    """P0.5: rows read before the lock judge only while young; whatever presses a key reads its own inside the lock."""
+
+    def done_dispatch(self):
+        d = self.submit(notify=True)
+        self.advance(tmux_runner(), d.id)
+        self.transcript(SID_B, [user(d.text), assistant("answer")])
+        return d
+
+    def shared(self):
+        return send.round_rows(self.cfg, FakeRunner(strict=True), status_fn=self.status_fn)
+
+    def adv(self, run, did, rows, at=NOW):
+        return send.advance(self.cfg, run, did, sleep=self.sleeps.append, status_fn=self.status_fn, now=at, rows=rows)
+
+    def test_a_young_round_judges_a_sent_dispatch_without_reading_again(self):
+        d = self.submit()
+        self.advance(tmux_runner(), d.id)
+        self.transcript(SID_B, [user(d.text), assistant("the reply")])
+        rows, before = self.shared(), self.status_calls
+        d = self.adv(FakeRunner(strict=True), d.id, rows, later(5))
+        self.assertEqual((d.state, d.reply), ("done", "the reply"))
+        self.assertEqual(self.status_calls, before)
+
+    def test_old_rows_are_read_again_inside_the_lock(self):
+        d = self.submit()
+        self.advance(tmux_runner(), d.id)
+        self.transcript(SID_B, [user(d.text), assistant("the reply")])
+        rows = self.shared()
+        with mock.patch.object(send, "_mono", lambda: rows.at + send.ROWS_FRESH_S + 0.01):
+            before = self.status_calls
+            d = self.adv(FakeRunner(strict=True), d.id, rows, later(5))
+        self.assertEqual(d.state, "done")
+        self.assertEqual(self.status_calls, before + 1)
+
+    def test_a_queued_dispatch_reads_its_own_rows_before_any_key(self):
+        d = self.submit()
+        rows = self.shared()
+        self.set_row("b", agent_status="busy")  # it turned busy after the round read the rows
+        run = tmux_runner()
+        d = self.adv(run, d.id, rows)
+        self.assertEqual(d.state, "queued")
+        self.assertEqual(tmux_writes(run), [])
+
+    def test_the_notice_is_never_pasted_on_old_rows(self):
+        d = self.done_dispatch()
+        rows = self.shared()  # the caller is idle here
+        self.set_row("a", agent_status="busy")  # and busy by the time the lock is taken
+        run = tmux_runner()
+        d = self.adv(run, d.id, rows, later(5))
+        self.assertEqual((d.state, d.notified), ("done", False))
+        self.assertEqual(tmux_writes(run), [])
+
+    def test_settle_mail_judges_on_young_rows(self):
+        d = self.submit()
+        self.advance(tmux_runner(), d.id)
+        rows, before = self.shared(), self.status_calls
+        send.settle_mail(self.cfg, FakeRunner(strict=True), ID_B, [d.id], sleep=self.sleeps.append,
+                         status_fn=self.status_fn, now=later(1), rows=rows)
+        self.assertEqual(self.status_calls, before)
+
+
+class OweThrottleTest(Base):
+    def test_stopped_sender_is_slowed_a_running_one_is_not(self):
+        d = self.submit(notify=True)
+        self.advance(tmux_runner(), d.id)
+        self.transcript(SID_B, [user(d.text), assistant("ok")])
+        self.set_row("a", state=State.STOPPED, pane=None)
+        d = self.advance(FakeRunner(strict=True), d.id, later(5))
+        self.assertEqual((d.state, d.notified), ("done", False))
+        items = dispatch.load(self.cfg.state_dir, ids=())
+        clock = [100.0]
+        t = send.OweThrottle(every=30)
+        with mock.patch.object(send, "_mono", lambda: clock[0]):
+            t.note(d.id, items, {r.name: r for r in self.rows.values()})
+            self.assertTrue(t.skip(d.id))
+            clock[0] += 31
+            self.assertFalse(t.skip(d.id))
+            self.set_row("a", state=State.RUNNING)
+            t.note(d.id, items, {r.name: r for r in self.rows.values()})
+            self.assertFalse(t.skip(d.id))
+
+    def test_prune_forgets_dispatches_that_are_gone(self):
+        t = send.OweThrottle()
+        t._due["x"] = 1e12
+        t.prune(set())
+        self.assertFalse(t.skip("x"))

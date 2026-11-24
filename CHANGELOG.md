@@ -5,6 +5,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.27.1] - 2026-11-25
+
+Upgrading: a running `sampan mcp serve` keeps the old code until its session restarts (each Claude session starts its own); the sampan screen uses the new code the next time it opens. No command, screen, MCP output or file format changes, and the dispatch lifecycle of 0.27.0 is as it was.
+
+### Fixed
+- Less CPU and less time holding the dispatch lock while dispatches are waiting. A watcher round (every `sampan mcp serve`, and the screen) used to read the state of every session again for each dispatch it advanced, inside the lock. It now reads it once per round, before any lock, and only when something has to be advanced or a heartbeat is due. A look that only judges (is a sent dispatch answered, is received mail finished) uses that reading while it is at most 0.1 s old when the lock is taken, and reads again inside the lock otherwise, so the "two idle looks in a row" rule keeps its meaning. Anything that presses a key or pastes (delivering a dispatch, a completion notice) always reads the state inside the lock, as before.
+- A completion notice owed to a sender that is not running (stopped, not retired) was tried every 3 seconds by every watcher for as long as the dispatch existed. It is now tried every 30 seconds; a sender that is running is tried every round, as before.
+
 ## [0.27.0] - 2026-11-24
 
 Upgrading: **`sampan retire` now stops an idle session first** (it used to only mark it, which left a session that was "retired" yet still running). A script that relied on `retire` leaving a running session alone must pass `--no-stop`. A running `sampan mcp serve` keeps the old code until its session restarts. The registry format is unchanged and 0.26 reads it (a 0.26 `retire` goes back to only marking). Sessions that are already retired but still running need nothing: `sampan status` and `sampan doctor` show them from now on, and `sampan retire <name>` again (or `sampan stop <name>`) takes them down.

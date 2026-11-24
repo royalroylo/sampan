@@ -269,6 +269,35 @@ def _profile_arg(args):
     return profile
 
 
+class _Round:
+    """One watcher round's rows, read at most once and only when asked for (an idle round reads none, a round
+    with a due heartbeat or something to advance reads one). get() is the send.RoundRows, None when the rows
+    cannot be read (the look then reads its own inside its lock)."""
+
+    def __init__(self, server):
+        self.server, self._rr, self._tried = server, None, False
+
+    def get(self):
+        if not self._tried:
+            self._tried = True
+            s = self.server
+            try:
+                self._rr = send.round_rows(s.cfg, s.run, snapshot_fn=s.snapshot_fn, status_fn=s.watch_status_fn)
+            except (RegistryError, OSError):
+                self._rr = None
+        return self._rr
+
+    def rows(self):
+        rr = self.get()
+        if rr is None:
+            raise RegistryError("status rows unreadable")
+        return rr.rows
+
+    def by_name(self):
+        rr = self.get()
+        return rr.by_name if rr is not None else None
+
+
 class Server:
     def __init__(self, cfg, run, stdin, stdout, *, caller, sleep=time.sleep, clock=time.monotonic, status_fn=None,
                  snapshot_fn=None, now_fn=_utcnow, resolve=None, parent_agent=False, start_of=None):
@@ -279,6 +308,7 @@ class Server:
         # two row functions: status_fn (list_sessions shows last activity: the full status_rows) and watch_status_fn
         # (sending, watching, settling, heartbeats: None = send's own default, status_rows_light). An injected
         # status_fn (tests) serves both.
+        self.owe_throttle = send.OweThrottle()
         self.status_fn, self.snapshot_fn = status_fn or status_rows, snapshot_fn
         self.watch_status_fn = status_fn
         self.client_name = None  # clientInfo.name from initialize
@@ -801,9 +831,9 @@ class Server:
 
     # --- watcher ---------------------------------------------------------------------------------------------
 
-    def beat(self):
+    def beat(self, round_=None):
         """Tell senders which session and conversation this server serves. Never raises: a heartbeat that cannot
-        be written is logged and skipped."""
+        be written is logged and skipped. round_: the watcher round's rows (read once), used instead of reading again."""
         caller = self.caller
         if self.start_of is None or not caller.id or not caller.agent:
             return
@@ -813,7 +843,8 @@ class Server:
         try:
             if self.started is None:
                 self.started = self.start_of(os.getpid())
-            rows = (self.watch_status_fn or status_rows_light)(self.cfg, self.run, snapshot_fn=self.snapshot_fn)
+            rows = round_.rows() if round_ is not None else (self.watch_status_fn or status_rows_light)(
+                self.cfg, self.run, snapshot_fn=self.snapshot_fn)
             row = next((r for r in rows if r.id == caller.id), None)
             if self.started is None or row is None or not row.sid:
                 return
@@ -835,28 +866,35 @@ class Server:
 
     def watch_once(self):
         """Advance this caller's pending dispatches (and the ones this server created) once, then settle the mail
-        addressed to the caller (send.settle_mail: its sender may never look again; no key into its own pane)."""
-        self.beat()
+        addressed to the caller (send.settle_mail: its sender may never look again; no key into its own pane).
+        The status rows are read once for the whole round (before any lock), and only when something needs them."""
+        rnd = _Round(self)
+        self.beat(rnd)
         try:
             items = dispatch.load(self.cfg.state_dir, ids=())  # the live ones only: every 3 s in every server
             owed = set(send.pending(self.cfg, items))
         except (dispatch.DispatchError, OSError) as e:
             _log(str(e))
             return
+        self.owe_throttle.prune({d.id for d in items})
         name = self.caller.name
         for d in items:
             if d.id in owed and (d.id in self.mine or send.from_session(d, name, self.caller.id)):
-                self.beat()  # a reattach inside an advance takes a minute: keep the heartbeat fresh between dispatches
+                if self.owe_throttle.skip(d.id):
+                    continue  # only a notice for a sender that is not running is owed: tried every send.OWED_RETRY_S
+                self.beat(rnd)  # a reattach inside an advance takes a minute: keep the heartbeat fresh between dispatches
                 try:
                     send.advance(self.cfg, self.run, d.id, sleep=self.sleep, snapshot_fn=self.snapshot_fn,
-                                 status_fn=self.watch_status_fn, now=self.now_fn())
+                                 status_fn=self.watch_status_fn, now=self.now_fn(), rows=rnd.get())
                 except (dispatch.DispatchError, RegistryError, OSError) as e:
                     _log(f"派工 {d.id}：{e}")
+                self.owe_throttle.note(d.id, items, rnd.by_name())
         inbound = [d.id for d in items if send.needs_settling(d, self.caller.id)]
         if inbound:
             try:
                 send.settle_mail(self.cfg, self.run, self.caller.id, inbound, sleep=self.sleep,
-                                 snapshot_fn=self.snapshot_fn, status_fn=self.watch_status_fn, now=self.now_fn())
+                                 snapshot_fn=self.snapshot_fn, status_fn=self.watch_status_fn, now=self.now_fn(),
+                                 rows=rnd.get())
             except (dispatch.DispatchError, RegistryError, OSError) as e:
                 _log(f"收件 {'、'.join(inbound)}：{e}")
 

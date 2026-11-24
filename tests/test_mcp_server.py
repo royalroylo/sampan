@@ -1229,6 +1229,35 @@ class WatchTest(Base):
         self.assertEqual(set(seen), {mine.id})  # the watcher's read and the advance's transaction: never the 40 done
         self.assertEqual({d.id: d.state for d in self.dispatches()}[mine.id], "sent")
 
+    def test_watch_once_reads_the_rows_once_for_the_round(self):
+        # two sent dispatches of this caller: judged on one read made before the locks
+        ids = [send.submit(self.cfg, FakeRunner(strict=True), CALLER_A, "b", m, notify=False, now=NOW,
+                           status_fn=self.status_fn).id for m in ("one", "two")]
+        server = mcp_server.Server(self.cfg, tmux_runner(), io.StringIO(), io.StringIO(), caller=CALLER_A,
+                                   sleep=lambda _s: None, clock=lambda: 0.0, status_fn=self.status_fn,
+                                   now_fn=lambda: NOW)
+        server.watch_once()  # delivers (the key path reads its own rows inside the lock)
+        calls = []
+
+        def counting(cfg, run, snapshot_fn=None):
+            calls.append(1)
+            return self.status_fn(cfg, run, snapshot_fn=snapshot_fn)
+        server.status_fn = server.watch_status_fn = counting
+        server._last_beat = 0.0  # no heartbeat due
+        server.watch_once()
+        self.assertEqual({d.id: d.state for d in self.dispatches()}.keys(), set(ids))
+        self.assertEqual(len(calls), 1)  # two sent dispatches, one read for the round
+
+    def test_an_idle_round_reads_no_rows(self):
+        server = mcp_server.Server(self.cfg, tmux_runner(), io.StringIO(), io.StringIO(), caller=CALLER_A,
+                                   sleep=lambda _s: None, clock=lambda: 0.0, status_fn=self.status_fn,
+                                   now_fn=lambda: NOW)
+        server._last_beat = 0.0
+        calls = []
+        server.watch_status_fn = lambda cfg, run, snapshot_fn=None: calls.append(1) or []
+        server.watch_once()
+        self.assertEqual(calls, [])
+
     def test_watcher_thread_runs_while_serving(self):
         d = send.submit(self.cfg, FakeRunner(strict=True), CALLER_A, "b", "hi", notify=False, now=NOW,
                         status_fn=self.status_fn)

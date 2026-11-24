@@ -181,7 +181,7 @@ stdio MCP server（每行一則 JSON-RPC 2.0；協定版本 `2025-06-18`，clien
 | `reply` | `dispatch_id`（`inbox_take` 列出的）、`text`（最多 100,000 字）、`receipt`（選填，收據編號） | 純文字確認。這是給寄件者的最終回覆：做完再回、每則一次、不要報進度；取消或重送之後才到的只記成歷史 | 不問 |
 | `folder_move` | `sessions`（名稱清單）、`folder`（路徑，`/` 是最上層；沒有就建立） | `moved`、`folder`。跟 `sampan folder move` 一樣只改畫面分組；有一個名稱找不到、資料夾名稱不合法或 `folders.json` 壞了就整筆不改 | 問 |
 
-核准由 agent 自己的權限詢問做：`confirm = true` 時，`tools/list` 裡會動作的工具（`send`、`send_batch`、`new_session`、`cancel_dispatch`、`folder_move`、`resend`）帶 `_meta["anthropic/requiresUserInteraction"] = true`，Claude Code 每次呼叫都跳自己的權限提示（終端機每次都問，auto／bypass 模式也問，沒有「不再詢問」；Remote Control 照官方文件應該會顯示完整的權限提示、不給一鍵核准，但還沒在手機上實測過）；提示裡是工具名稱與完整參數，不同意就回「不要」，要改訊息就請 agent 改了再送（sampan 不再有自己的表單，也沒有「改訊息」欄位）。名稱、目標、目錄有換行或控制字元會在送出前就拒絕。`new_session` 跟 `sampan new` 用同一套檢查（名稱、profile 停用、Codex 停用、tmux session 已存在、目錄不存在）。同意派工就算同意它的完成或失敗通知，不另外問。`dispatch_result` 看到已回覆或失敗的結果後就不再發通知。server 活著時每 3 秒推進這個呼叫者發出的派工；它跑的子程式一律 stdin 接 `/dev/null`，不會讀到 JSON-RPC 的輸入。
+核准由 agent 自己的權限詢問做：`confirm = true` 時，`tools/list` 裡會動作的工具（`send`、`send_batch`、`new_session`、`cancel_dispatch`、`folder_move`、`resend`）帶 `_meta["anthropic/requiresUserInteraction"] = true`，Claude Code 每次呼叫都跳自己的權限提示（終端機每次都問，auto／bypass 模式也問，沒有「不再詢問」；Remote Control 照官方文件應該會顯示完整的權限提示、不給一鍵核准，但還沒在手機上實測過）；提示裡是工具名稱與完整參數，不同意就回「不要」，要改訊息就請 agent 改了再送（sampan 不再有自己的表單，也沒有「改訊息」欄位）。名稱、目標、目錄有換行或控制字元會在送出前就拒絕。`new_session` 跟 `sampan new` 用同一套檢查（名稱、profile 停用、Codex 停用、tmux session 已存在、目錄不存在）。同意派工就算同意它的完成或失敗通知，不另外問。`dispatch_result` 看到已回覆或失敗的結果後就不再發通知。server 活著時每 3 秒推進這個呼叫者發出的派工（每一輪只讀一次 session 狀態；只剩完成通知還欠著、而寄件方不是執行中的派工，改成每 30 秒才試一次）；它跑的子程式一律 stdin 接 `/dev/null`，不會讀到 JSON-RPC 的輸入。
 
 來源行寫明來自誰、派工編號，並提醒對方「直接回覆文字即可，sampan 會帶回」（`〔sampan 轉送｜來自 <誰>｜派工 <編號>｜直接回覆文字即可，sampan 會帶回〕`）；完成與失敗通知的文字不變。
 

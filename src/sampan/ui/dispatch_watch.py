@@ -90,10 +90,11 @@ class DispatchWatcher:
     of the live dispatches (before and after a round), what the summary line counts. `cfg` may be replaced while running."""
 
     def __init__(self, cfg, run, *, advance_fn=send.advance, pending_fn=send.pending, load_fn=load_live,
-                 sleep=time.sleep, interval=INTERVAL_S):
+                 sleep=time.sleep, interval=INTERVAL_S, rows_fn=send.round_rows):
         self.cfg, self.run = cfg, _no_tty_stdin(run)
         self.advance_fn, self.pending_fn, self.load_fn, self.sleep, self.interval = (
             advance_fn, pending_fn, load_fn, sleep, interval)
+        self.rows_fn, self.owe_throttle = rows_fn, send.OweThrottle()
         self.items = []
         self._stop = threading.Event()
         self._thread = None
@@ -111,13 +112,22 @@ class DispatchWatcher:
             ids = self.pending_fn(cfg)
         except Exception:  # noqa: BLE001
             ids = []
+        self.owe_throttle.prune({d.id for d in self.items})
+        ids = [i for i in ids if not self.owe_throttle.skip(i)]  # an owed notice for a stopped sender: every 30 s
+        rows = None
+        if ids:  # the rows are read once for the whole round, before any lock, and only if something is to be advanced
+            try:
+                rows = self.rows_fn(cfg, self.run)
+            except Exception:  # noqa: BLE001  the looks then read their own
+                rows = None
         for did in ids:
             if self._stop.is_set():
                 break
             try:
-                self.advance_fn(cfg, self.run, did, sleep=self.sleep)
+                self.advance_fn(cfg, self.run, did, sleep=self.sleep, rows=rows)
             except Exception:  # noqa: BLE001  one bad dispatch must not hold the others back
                 pass
+            self.owe_throttle.note(did, self.items, rows.by_name if rows is not None else None)
         self._read()
 
     def _loop(self):

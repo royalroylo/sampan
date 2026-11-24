@@ -212,6 +212,80 @@ def _rows(cfg, run, snapshot_fn, status_fn):
     return {r.name: r for r in (status_fn or status_rows_light)(cfg, run, snapshot_fn=snapshot_fn)}
 
 
+ROWS_FRESH_S = 0.1  # rows read outside the lock may judge inside it only if they are no older than this when it is taken
+OWED_RETRY_S = 30  # a notice owed to a sender that is not running is tried this often (a running one: every round)
+_mono = time.monotonic
+
+
+class RoundRows:
+    """The status rows of one watcher round, read once before any lock (a watcher round used to read them again for
+    every dispatch, inside the lock). `rows` is the list as the status function returned it, `by_name` the dict the
+    send code uses. They only serve *judging* (a look at a sent dispatch, a received one): see Fresh below."""
+
+    def __init__(self, rows):
+        self.rows, self.by_name, self.at = list(rows), {r.name: r for r in rows}, _mono()
+
+    def age(self):
+        return _mono() - self.at
+
+
+def round_rows(cfg, run, snapshot_fn=None, status_fn=None):
+    """Read the rows of one round (status_rows_light unless status_fn is given)."""
+    return RoundRows((status_fn or status_rows_light)(cfg, run, snapshot_fn=snapshot_fn))
+
+
+class _LockRows:
+    """The rows one locked look uses. judge(): the round's rows while they are still young enough (ROWS_FRESH_S at the
+    time the lock was taken: the two-idle-looks rule is kept in the database, and a look that waited long for the lock
+    must not count as newer than one that took it before), else read here. fresh(): always read inside this lock
+    (once per lock), for whatever presses a key or pastes: a stale `idle` must never put a notice into a prompt that
+    has been busy since."""
+
+    def __init__(self, cfg, run, snapshot_fn, status_fn, shared):
+        self._args = (cfg, run, snapshot_fn, status_fn)
+        self._shared = shared if shared is not None and shared.age() <= ROWS_FRESH_S else None
+        self._own = None
+
+    def judge(self):
+        if self._shared is not None:
+            return self._shared.by_name
+        return self.fresh()
+
+    def fresh(self):
+        if self._own is None:
+            self._own = _rows(*self._args)
+        return self._own
+
+
+class OweThrottle:
+    """Slows the retry of a notice that is owed to a sender that is not running (stopped but not retired: its notice
+    can only be given once it is back, and every watcher in the machine would otherwise try it every round for ever).
+    In-process only; nothing is stored. A sender that is running is tried every round, as before."""
+
+    def __init__(self, every=OWED_RETRY_S):
+        self.every, self._due = every, {}
+
+    def skip(self, did):
+        return self._due.get(did, 0) > _mono()
+
+    def note(self, did, items, rows):
+        """After a look at dispatch did (items: the live ones read at the start of the round, rows: that round's
+        rows): while only its notice is owed and its sender is not running, wait `every` seconds before the next."""
+        d = next((x for x in items if x.id == did), None)
+        owed = None if d is None else d if d.batch is None else next(iter(_group(items, d.batch)), None)
+        if d is not None and d.state in dispatch.FINISHED and owed is not None and owed.from_kind == "session" \
+                and _owes_notice(owed, items):
+            row = _row_of(rows, owed.from_id, owed.from_name) if rows is not None else None
+            if row is not None and row.state != State.RUNNING:
+                self._due[did] = _mono() + self.every
+                return
+        self._due.pop(did, None)
+
+    def prune(self, live_ids):
+        for did in [k for k in self._due if k not in live_ids]:
+            del self._due[did]
+
+
 def _row_of(rows, id, name):
     """The row of rows (by name) for a dispatch end: found by id; by name only for an old dispatch with no id. An id
     nobody has any more is gone, never a name that may now belong to another session."""
@@ -543,7 +617,7 @@ def _owes_notice(d, items=()):
 
 
 def advance(cfg, run, did, *, sleep, snapshot_fn=None, status_fn=None, now=None, report=False, report_batch=False,
-            restore=True):
+            restore=True, rows=None):
     """Move one dispatch forward as far as it can go now; returns a copy of it. Finished ones are left alone.
     report: the caller gets the returned copy right away (an MCP tool result): if it is finished, its notice is
     dropped in the same transaction, so the caller is never told twice. For a batch item: report_batch drops the
@@ -552,6 +626,9 @@ def advance(cfg, run, did, *, sleep, snapshot_fn=None, status_fn=None, now=None,
     restore: a dispatch sent with restore may start reattaching its stopped target here (the claim is made inside the
     lock, the launch and the Remote Control reset run after it, see _restore_work); False for a caller that must
     return at once (an MCP tool's result), which then leaves that to a watcher.
+    rows: a RoundRows read before the lock by a watcher's round. It only serves judging a sent dispatch, and only
+    while it is no older than ROWS_FRESH_S when the lock is taken; delivering (keys, a paste) and the notice always
+    read their own rows inside the lock.
     Raises DispatchError for an unknown id or an unreadable dispatches.json, RegistryError for a bad registry."""
     now = now or _utcnow()
     work = [] if restore else None
@@ -559,12 +636,7 @@ def advance(cfg, run, did, *, sleep, snapshot_fn=None, status_fn=None, now=None,
         d = next((x for x in items if x.id == did), None)
         if d is None:
             raise dispatch.DispatchError(f"沒有派工 {did}")
-        seen = {}
-
-        def rows():
-            if "rows" not in seen:
-                seen["rows"] = _rows(cfg, run, snapshot_fn, status_fn)
-            return seen["rows"]
+        looks = _LockRows(cfg, run, snapshot_fn, status_fn, rows)
 
         def save():
             dispatch.checkpoint(cfg.state_dir, items)
@@ -573,10 +645,10 @@ def advance(cfg, run, did, *, sleep, snapshot_fn=None, status_fn=None, now=None,
             if remote.is_outgoing(d):
                 remote.advance_out(cfg, d, now)  # another machine's session: the hub's receipts move it, not this
             elif d.state == "queued":
-                _deliver(cfg, run, d, _row_of(rows(), d.to_id, d.to_name), sleep, now, save, items, work)
+                _deliver(cfg, run, d, _row_of(looks.fresh(), d.to_id, d.to_name), sleep, now, save, items, work)
                 _expire(cfg, d, now)
             elif d.state == "sent":
-                _check(cfg, d, _row_of(rows(), d.to_id, d.to_name), now, run, items)
+                _check(cfg, d, _row_of(looks.judge(), d.to_id, d.to_name), now, run, items)
             if d.batch is None:
                 if report and d.state in dispatch.FINISHED:
                     d.notify = False  # the tool result tells the caller
@@ -588,7 +660,7 @@ def advance(cfg, run, did, *, sleep, snapshot_fn=None, status_fn=None, now=None,
                         x.notify = False  # the tool result tells the caller about every item
                 owed = group[0]
             if _owes_notice(owed, items):
-                notify_caller(cfg, run, owed, sleep, rows=rows(), save=save, items=items)
+                notify_caller(cfg, run, owed, sleep, rows=looks.fresh(), save=save, items=items)
         result = replace(d)
     if work:  # claimed inside the lock above, done outside it; then one more look (the delivery, or the failure's notice)
         began = time.monotonic()
@@ -910,17 +982,18 @@ def needs_settling(d, target_id):
                                                                                and d.status == "rung"))
 
 
-def settle_mail(cfg, run, target_id, ids, *, sleep, snapshot_fn=None, status_fn=None, now=None):
+def settle_mail(cfg, run, target_id, ids, *, sleep, snapshot_fn=None, status_fn=None, now=None, rows=None):
     """The receiving side of advance, for the watcher of target_id's own session (ids: its mail that needs_settling):
     a sender that advanced once and exited (a terminal `sampan send`) never looks again. Its ringing ring is judged
     (no_answer once the turn after it ended without a take, or after RING_LIMIT_S) and its active delivery is judged
     (an inbox one ends after two idle looks once its turn is over); the original senders get their notices as from
     advance. No key is ever pressed into target_id's own pane: a ring left in the box gets no Enter, and messages that
-    go back in line are left for an advancer that is not the target (a sender's watcher, the ui, the next send)."""
+    go back in line are left for an advancer that is not the target (a sender's watcher, the ui, the next send).
+    rows: a RoundRows read before the lock (see advance): the judging uses it while it is young, the notices read their own."""
     now = now or _utcnow()
     with dispatch.transaction(cfg.state_dir, keep_days=cfg.keep_days, ids=ids) as items:
-        rows = _rows(cfg, run, snapshot_fn, status_fn)
-        row = _row_of(rows, target_id, "")
+        looks = _LockRows(cfg, run, snapshot_fn, status_fn, rows)
+        row = _row_of(looks.judge(), target_id, "")
         if row is None or row.state != State.RUNNING:
             return
 
@@ -933,7 +1006,7 @@ def settle_mail(cfg, run, target_id, ids, *, sleep, snapshot_fn=None, status_fn=
             for x in [x for x in items if x.to_id == target_id and x.state in dispatch.FINISHED]:
                 owed = x if x.batch is None else _group(items, x.batch)[0]
                 if owed.from_id != target_id and _owes_notice(owed, items):
-                    notify_caller(cfg, run, owed, sleep, rows=rows, save=save, items=items)
+                    notify_caller(cfg, run, owed, sleep, rows=looks.fresh(), save=save, items=items)
 
 
 def _created_key(x):
