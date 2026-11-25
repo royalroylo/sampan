@@ -828,7 +828,7 @@ def _shell_pane(tmux, name, pane_id):
 
 
 def cmd_move(cfg, run, out, name, dest, *, dry_run=False, sleep=time.sleep, timeout=60,
-             own_pane=None, proc_root=Path("/proc"), on_prompt=None, profile=None):
+             own_pane=None, proc_root=Path("/proc"), on_prompt=None, profile=None, over_limit=False, ask_limit=None):
     """Move a session to another directory and continue the same conversation: end the agent → reattach the original conversation in the new directory → automatically trust the new directory → save.
 
     Only a trust prompt "whose displayed path is exactly the new directory" is answered automatically, always through prompts.Relay: Claude moves to "Yes, I trust
@@ -958,6 +958,14 @@ def cmd_move(cfg, run, out, name, dest, *, dry_run=False, sleep=time.sleep, time
         if why:
             out(f"❌ {name}：{why}，不動")
             return 1
+    # an agent that already ended (its tmux session is still there) is a new one; one that is running is replaced:
+    # it adds nothing, but its place is held while it ends (and a memory red light does not stop it)
+    gate = limits.Gate(cfg, run, out, name, (new_prof if agent == "claude" else cfg.codex.profile),
+                       adds=1 if exit_pid is None else 0, replacing=exit_pid is not None, over_limit=over_limit,
+                       ask=ask_limit, dry_run=dry_run, probe=exit_pid is None,
+                       ttl=(timeout + 120) if exit_pid is not None else None)
+    if not gate.passed:
+        return 1
     launched = dataclasses.replace(row, session_id=session_id)  # the conversation running now (it may have changed)
     cmd = steps.launch_cmd(cfg, launched, profile=new_prof, cwd=str(target))
     if dry_run:
@@ -980,17 +988,20 @@ def cmd_move(cfg, run, out, name, dest, *, dry_run=False, sleep=time.sleep, time
                 out(f"❌ {name}：{timeout} 秒內 {agent} 沒結束，沒有{where_to}啟動")
                 if switching:
                     out(f"  可能停在額度或其他選單：請進去按 Esc 再打 /exit，claude 結束後再按一次 P（或 sampan switch {name} {new_prof}）")
+                gate.give_back()
                 return 1
             sleep(1)
             waited += 1
     if _shell_pane(tmux, name, pane.pane_id) is None:
         out(f"❌ {name}：{agent} 結束後找不到 shell pane，沒有{where_to}啟動")
+        gate.give_back()
         return 1
     if carry is not None:
         try:
             move_transcript(carry, cfg.profiles[new_prof].projects_dir)
         except OSError as e:
             out(f"❌ {name}：逐字稿搬不過去（{e}），沒有{where_to}啟動；對話還在 {row.profile}，sampan restore {name} 可接回")
+            gate.give_back()
             return 1
         out(f"  已把逐字稿搬到 {new_prof}")
     if switching and not _set_profile(cfg, name, session_id, new_prof):
@@ -1168,7 +1179,8 @@ def rehome_stopped(cfg, run, out, name, row, profile, *, dry_run=False, launch=T
 
 
 def cmd_switch(cfg, run, out, name, profile, *, dry_run=False, own_pane=None, on_prompt=None, warn_gap=True,
-               sleep=time.sleep, timeout=60, proc_root=Path("/proc"), restore_fn=None, no_launch=False):
+               sleep=time.sleep, timeout=60, proc_root=Path("/proc"), restore_fn=None, no_launch=False,
+               over_limit=False, ask_limit=None):
     """Continue a Claude session's conversation under another profile (another account, e.g. when one has used up its
     quota). A running session goes through cmd_move's flow in its own directory: /exit → relaunch with the new
     CLAUDE_CONFIG_DIR → trust only that directory → save. A stopped one gets its registry row changed and is restored
@@ -1221,7 +1233,8 @@ def cmd_switch(cfg, run, out, name, profile, *, dry_run=False, own_pane=None, on
             out(f"❌ {name} 在執行中；--no-launch 只搬已停止的 session（要換就用不帶 --no-launch 的 sampan switch {name} {profile}）")
             return 2
         return cmd_move(cfg, run, out, name, row.cwd, profile=profile, dry_run=dry_run, sleep=sleep, timeout=timeout,
-                        own_pane=own_pane, proc_root=proc_root, on_prompt=on_prompt)
+                        own_pane=own_pane, proc_root=proc_root, on_prompt=on_prompt, over_limit=over_limit,
+                        ask_limit=ask_limit)
     # stopped: no agent to end; change the registry row, then reattach under the new profile
     rc = rehome_stopped(cfg, run, out, name, row, profile, dry_run=dry_run, launch=not no_launch)
     if rc is not None:
@@ -1234,4 +1247,10 @@ def cmd_switch(cfg, run, out, name, profile, *, dry_run=False, own_pane=None, on
     out(f"✔ {name}：登記表改成 {profile}，接回中…")
     if restore_fn is None:
         from .restore import cmd_restore as restore_fn
-    return restore_fn(cfg, run, out, lambda _p: "", names=(name,), confirm=False, on_prompt=on_prompt)
+    extra = {"over_limit": True} if over_limit else {}
+    if ask_limit is not None:
+        extra["ask_limit"] = ask_limit
+    rc = restore_fn(cfg, run, out, lambda _p: "", names=(name,), confirm=False, on_prompt=on_prompt, **extra)
+    if rc:
+        out(f"  （如果是被上限擋下：登記表已經改成 {profile}，有額度後 sampan restore {name} 會用 {profile}）")
+    return rc

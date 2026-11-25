@@ -112,21 +112,25 @@ def confirm_line(plan, limit=8, *, width=None):
     return _fit(build, limit, width, max(len(go), len(skip)))
 
 
-def cmd_restart(cfg, run, out, ask, plan, *, own_pane=None, on_prompt=None, stop_fn=None, restore_fn=None):
+def cmd_restart(cfg, run, out, ask, plan, *, own_pane=None, on_prompt=None, stop_fn=None, restore_fn=None,
+                over_limit=False):
     """Stop plan.restart, then reattach what stopped plus plan.resume with one restore (no going in). Returns the worst rc."""
     out = actionlog.tee(cfg, "重開", out)
     on_prompt = actionlog.logged_prompt(cfg, "重開", on_prompt)
-    from . import restore, session_run  # lazy: session_run imports a lot
+    from . import limits, restore, session_run  # lazy: session_run imports a lot
     stop_fn = stop_fn or session_run.cmd_stop
     restore_fn = restore_fn or restore.cmd_restore
     s, left, why = [], [], {}
     worst = 0
     if plan.restart:
+        limits.hold_places(cfg, plan.restart)  # a `new` while these stop must not take their places
         worst = stop_fn(cfg, run, out, names=tuple(plan.restart), stopped=s, left=left, why=why,
                         own_pane=own_pane, timeout=90)
+        limits.let_go(cfg, left)
     again = tuple(s) + tuple(n for n in plan.resume if n not in s)
     if again:
-        worst = max(worst, restore_fn(cfg, run, out, ask, names=again, confirm=False, on_prompt=on_prompt))
+        worst = max(worst, restore_fn(cfg, run, out, ask, names=again, confirm=False, on_prompt=on_prompt,
+                                      replacing=frozenset(s), **({"over_limit": True} if over_limit else {})))
     skipped = list(plan.skip) + [(n, why.get(n, "")) for n in left]
     if skipped:
         out(skip_text(skipped))

@@ -373,7 +373,8 @@ def restart_profiles(cfg, run, out, ask, profiles, *, own_pane=None, on_prompt=N
         worst = max(worst, stop_fn(cfg, run, out, profile=p, own_pane=own_pane, stopped=s, left=left, why=why,
                                    timeout=90))
         if s:
-            worst = max(worst, restore_fn(cfg, run, out, ask, names=tuple(s), confirm=False, on_prompt=on_prompt))
+            worst = max(worst, restore_fn(cfg, run, out, ask, names=tuple(s), confirm=False, on_prompt=on_prompt,
+                                          replacing=frozenset(s)))
         left_all += left
     if left_all:  # the reason sits next to each name: the stop lines explaining it may have scrolled away
         out("⚠ 這些還在跑舊版，處理後再重開：" + "、".join(n + (f"（{why[n]}）" if why.get(n) else "")

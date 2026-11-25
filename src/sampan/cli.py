@@ -54,6 +54,7 @@ def build_parser():
     sp.add_argument("-v", "--verbose", action="store_true", help="停之前的存檔列出每個已停止的 session（預設只給數量）")
     rt = sub.add_parser("restart", help="重開這些 session：閒置的先停再背景接回原對話，已停止的直接接回，忙的略過")
     rt.add_argument("names", nargs="+", help="session 名稱")
+    rt.add_argument("--over-limit", action="store_true", help=OVER_LIMIT_HELP)
     rc = sub.add_parser("rc", help="校正執行中 Claude session 的 Remote Control 名稱（不重開；忙的、已停止的、Codex 的略過）")
     rc.add_argument("names", nargs="*", help="session 名稱")
     rc.add_argument("--all", action="store_true", help="這台機器上登記的全部 session")
@@ -93,6 +94,7 @@ def build_parser():
     mv.add_argument("dest", help="新的工作目錄；不存在會建立")
     mv.add_argument("--timeout", type=int, default=60, help="等 agent 結束／接回的秒數（預設 60）")
     mv.add_argument("--dry-run", action="store_true")
+    mv.add_argument("--over-limit", action="store_true", help=OVER_LIMIT_HELP)
     sw = sub.add_parser("switch", help="換 profile（換帳號）繼續同一段對話，例如額度用完時；已停止的直接用新 profile 接回")
     sw.add_argument("words", nargs="+", metavar="NAME... PROFILE", help="session 名稱（可多個）或 id，最後一個是 profile；用 --folder 時只給 profile")
     sw.add_argument("--folder", help="換這個資料夾裡（含子資料夾）的所有 session")
@@ -100,6 +102,7 @@ def build_parser():
     sw.add_argument("--yes", action="store_true", help="多個一起換時不再問「開始？」")
     sw.add_argument("--timeout", type=int, default=60, help="等 claude 結束／接回的秒數（預設 60）")
     sw.add_argument("--dry-run", action="store_true")
+    sw.add_argument("--over-limit", action="store_true", help=OVER_LIMIT_HELP)
     sw.add_argument("--no-launch", action="store_true",
                     help="只搬已停止的 session：搬逐字稿、改登記表，不啟動（執行中的跳過；一次搬很多個又不想同時接回時用）")
     fg = sub.add_parser("forget", help="從登記表移除沒在跑的 session（可一次多個；對話紀錄不刪，會印出手動接回的指令）")
@@ -869,7 +872,11 @@ def _dispatch(cfg, args):
             out("沒有可重開的 session。" + restart.skip_text(plan.skip))
             return 1
         on_prompt, _want = _prompt_fn()
-        return restart.cmd_restart(cfg, run, out, input, plan, own_pane=own, on_prompt=on_prompt)
+        over = _over_limit(cfg, run, args, out)
+        if over is None:
+            return 2
+        return restart.cmd_restart(cfg, run, out, input, plan, own_pane=own, on_prompt=on_prompt,
+                                   **({"over_limit": True} if over else {}))
     if cmd == "rc":
         return _cmd_rc(cfg, run, args)
     if cmd in ("connect", "hub"):
@@ -951,13 +958,21 @@ def _dispatch(cfg, args):
             return max(session_run.cmd_forget(cfg, run, out, n, dry_run=args.dry_run) for n in dict.fromkeys(refs))
         if cmd == "switch":
             on_prompt, want = _prompt_fn()
+            over = _over_limit(cfg, run, args, out)
+            if over is None:
+                return 2
             rc = session_run.cmd_switch(cfg, run, out, args.name, args.profile, dry_run=args.dry_run,
                                         timeout=args.timeout, own_pane=os.environ.get("TMUX_PANE"),
-                                        on_prompt=on_prompt, no_launch=args.no_launch)
+                                        on_prompt=on_prompt, no_launch=args.no_launch,
+                                        **({"over_limit": True} if over else {}))
             return _go_in(run, want, rc)
         if cmd == "move":
+            over = _over_limit(cfg, run, args, out)
+            if over is None:
+                return 2
             return session_run.cmd_move(cfg, run, out, args.name, args.dest, dry_run=args.dry_run,
-                                        timeout=args.timeout, own_pane=os.environ.get("TMUX_PANE"))
+                                        timeout=args.timeout, own_pane=os.environ.get("TMUX_PANE"),
+                                        **({"over_limit": True} if over else {}))
         if cmd == "retire":
             return session_run.cmd_retire(cfg, run, out, args.name, no_stop=args.no_stop, dry_run=args.dry_run,
                                           force=args.force, own_pane=os.environ.get("TMUX_PANE"))

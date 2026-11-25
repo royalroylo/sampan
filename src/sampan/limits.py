@@ -465,3 +465,54 @@ class Gate:
 
     def give_back(self):
         give_back(self.cfg, self.name, self.outcome)
+
+
+_HINT = {}  # (state dir) -> (monotonic time, answer): room_hint is looked at by every watcher, so it is cached for 5 s
+
+
+def room_hint(cfg, run, row, items, *, clock=time.monotonic):
+    """Why a stopped target may not be reattached right now ("" = there is room), for the first judgement of
+    `send --restore`. Called inside the dispatches lock, so it takes neither limits.lock nor reads the reservations;
+    it uses `ps`, the memory reading and the phases of the messages already loaded. The authoritative check is the
+    one right before the launch (check / Gate)."""
+    key = (str(cfg.state_dir), row.name)
+    hit = _HINT.get(key)
+    if hit is not None and clock() - hit[0] < 5:
+        return hit[1]
+    why = ""
+    try:
+        lim = cfg.limits
+        procs = procs_mod.list_procs(run)
+        panes = Tmux(run).panes()
+        rows = load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)
+        phases = [d.to_name for d in items if d.state == "queued" and d.extra.get(send_restore.PHASE) in
+                  (send_restore.LAUNCHING, send_restore.STARTING)]
+        snap = resources.snapshot(run, cfg.state_dir, lim, probe=False)
+        cl = resources.classify(snap, lim)
+        cnt = count(cfg, procs, panes, rows, [], phases, exclude=(row.name,))
+        reg = next((r for r in rows if r.tmux == row.name), None)
+        prof = reg.profile if reg is not None else ""
+        v = decide(cnt, lim, effective_max(lim, snap.ram), lim.owner_of(prof), 1, cl.red, reasons=cl.reasons)
+        if v.kind == "refuse":
+            why = v.reason
+    except Exception:  # noqa: BLE001  not knowing is "there is room"
+        why = ""
+    _HINT[key] = (clock(), why)
+    return why
+
+
+STOP_WAIT_S = 90  # how long a restart waits for one session to stop (restart.py, plugin_apply.py)
+
+
+def hold_places(cfg, names, *, ttl=STOP_WAIT_S + send_restore.START_LIMIT_S, now=None):
+    """Before a restart stops sessions: keep each one's place, so a `new` in between cannot take it. The restore that
+    follows replaces the entry with its own."""
+    now = time.time() if now is None else now
+    for name in names:
+        reserve(cfg.state_dir, name, now, ttl)
+
+
+def let_go(cfg, names):
+    """A session that could not be stopped keeps running: its held place is not needed."""
+    for name in names:
+        release(cfg.state_dir, name, pid=os.getpid(), start=None)

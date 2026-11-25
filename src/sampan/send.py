@@ -12,7 +12,20 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 
-from . import actionlog, deliver, deliveries, dispatch, doorbell, heartbeat, procs, remote, send_restore, steps, store
+from . import (
+    actionlog,
+    deliver,
+    deliveries,
+    dispatch,
+    doorbell,
+    heartbeat,
+    limits,
+    procs,
+    remote,
+    send_restore,
+    steps,
+    store,
+)
 from . import hubproto as hp
 from . import restore as restore_mod
 from .claude_state import Reply, TurnInfo, after_marker, command_reply, find_transcript
@@ -700,7 +713,7 @@ def _deliver(cfg, run, d, row, sleep, now, save, items, work=None):
         rung = [x for x in items if x.state == "queued" and x.status == "rung"
                 and (x.to_id == d.to_id if d.to_id else x.to_name == d.to_name)]
         doorbell.give_up_if_old(items.conn, d.to_id or d.to_name, rung, now, lambda line: _log(cfg, "send", line))
-    if d.extra.get(send_restore.RESTORE) and row is not None and _restoring(cfg, d, row, now, save, items, work):
+    if d.extra.get(send_restore.RESTORE) and row is not None and _restoring(cfg, d, row, now, save, items, work, run):
         return
     if row is None or row.state in GONE:
         d.reason = REASON_NOT_RUNNING
@@ -820,7 +833,7 @@ def _orphan(x, now):
     return at is not None and (now - at).total_seconds() > send_restore.HOLD_MAX_S
 
 
-def _restoring(cfg, d, row, now, save, items, work):
+def _restoring(cfg, d, row, now, save, items, work, run=None):
     """The reattach step of a dispatch sent with restore, judged inside the lock (send_restore.decide). True: d goes no
     further now (it waits, failed, or a job was claimed for after the lock); False: deliver as usual (nothing to
     reattach, or it is done)."""
@@ -850,7 +863,11 @@ def _restoring(cfg, d, row, now, save, items, work):
     held = {x.to_id or x.to_name for x in items if x.state == "queued"
             and x.extra.get(send_restore.PHASE) in send_restore.ACTIVE and not _for_target(x, row)
             and not _orphan(x, now)}
-    step = send_restore.decide(row, phase, age, others_active=len(held), rc=steps.rc_wanted(cfg, row))
+    over = None if run is None else (lambda: limits.room_hint(cfg, run, row, items))
+    step = send_restore.decide(row, phase, age, others_active=len(held), rc=steps.rc_wanted(cfg, row), over_limit=over)
+    if step.kind == "wait" and step.reason.startswith(send_restore.REASON_LIMIT[:5]):
+        for x in group:  # the queue limit counts from the first time it had to wait for room
+            x.extra.setdefault(send_restore.LIMIT_WAIT_AT, _iso(now))
     if step.kind == "ready":
         _set_phase(group, send_restore.READY_PHASE, now)
         save()
@@ -905,9 +922,16 @@ def _restore_work(cfg, run, job, *, sleep, snapshot_fn, status_fn, now):
     except (dispatch.DispatchError, OSError) as e:
         _log(cfg, "send", f"派工 {'、'.join(ids)}：接回前讀不到派工，沒做：{e}")
         return
+    gate = None
     try:
         if kind == "launch":
+            gate = _launch_gate(cfg, run, name, target_id, profile)
+            if gate is not None and not gate.passed:  # no room after all: back in line, not a failed start
+                _back_to_waiting(cfg, ids, gate, now)
+                return
             why = restore_mod.start_one(cfg, run, name, sleep=sleep, target_id=target_id, profile=profile)
+            if why and gate is not None:
+                gate.give_back()
         else:
             row = _row_of(_rows(cfg, run, snapshot_fn, status_fn), target_id, name)
             reg = next((r for r in load_rows(cfg.registry_path, codex_profile=cfg.codex.profile) if r.tmux == name), None)
@@ -930,6 +954,37 @@ def _restore_work(cfg, run, job, *, sleep, snapshot_fn, status_fn, now):
                 _set_phase(group, send_restore.READY_PHASE, now)
     except (dispatch.DispatchError, OSError) as e:
         _log(cfg, "send", f"派工 {'、'.join(ids)}：接回的結果寫不進去：{e}")
+
+
+def _launch_gate(cfg, run, name, target_id, profile):
+    """The last check before the launch line goes out, in the reservation lock (never inside the dispatches lock):
+    limits.Gate for the target. None when the registry cannot say who it is (the launch then fails by its own reasons)."""
+    try:
+        reg = next((r for r in load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)
+                    if (r.id == target_id if target_id else r.tmux == name)), None)
+    except RegistryError:
+        return None
+    if reg is None:
+        return None
+    return limits.Gate(cfg, run, lambda _l: None, reg.tmux, profile or reg.profile or cfg.codex.profile)
+
+
+def _back_to_waiting(cfg, ids, gate, now):
+    """The final check said no: phase back to "", one launch less, the reason says waiting for room; the first time
+    it waits is remembered (the queue limit counts from there). Not a failure."""
+    why = gate.outcome.verdict.reason if gate.outcome is not None else ""
+    try:
+        with dispatch.transaction(cfg.state_dir, keep_days=cfg.keep_days, ids=ids) as items:
+            group = [x for x in items if x.id in ids and x.state == "queued"]
+            for x in group:
+                n = max(0, x.extra.get(send_restore.LAUNCHES, 1) - 1)
+                x.extra = {**x.extra, send_restore.PHASE: "", send_restore.PHASE_AT: _iso(now),
+                           send_restore.LAUNCHES: n}
+                x.extra.setdefault(send_restore.LIMIT_WAIT_AT, _iso(now))
+                x.reason = send_restore.REASON_LIMIT.format(why=why)
+        _log(cfg, "send", f"派工 {'、'.join(ids)}：{send_restore.REASON_LIMIT.format(why=why)}")
+    except (dispatch.DispatchError, OSError) as e:
+        _log(cfg, "send", f"派工 {'、'.join(ids)}：沒有額度，狀態寫不回去：{e}")
 
 
 def _transcript_size(cfg, row):
@@ -1041,6 +1096,9 @@ def _expire(cfg, d, now):
     does not wait forever; the caller is told like any failure. Waiting for the target (busy, waiting for its user,
     not running, no thread yet) has no limit, as before."""
     created = parse_iso(d.extra.get(REQUEUED_AT)) or parse_iso(d.created)  # a resent one: since it was requeued
+    waited = parse_iso(d.extra.get(send_restore.LIMIT_WAIT_AT))  # waiting for room is not time spent failing to send
+    if waited is not None and (created is None or waited > created):
+        created = waited
     if d.state != "queued" or created is None or (now - created).total_seconds() <= QUEUE_LIMIT_S:
         return
     if d.status == "rung":  # rung: the target has it; settle_ring decides when it goes back in line

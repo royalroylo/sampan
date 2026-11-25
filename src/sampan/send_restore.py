@@ -42,6 +42,8 @@ PROFILE_CONFLICT = "{name} 已有一則排隊中的接回派工要用「{other}�
 REASON_NOT_CLAIMED = "對方已停止，等接回"  # restore asked, but this look may not start anything (a tool result's own look)
 REASON_RESTORING = "對方已停止，接回中"
 REASON_STARTING = "對方接回中，等它啟動"
+REASON_LIMIT = "排隊等額度（{why}）"  # no WAIT_PREFIXES entry on purpose: the 30-minute queue limit applies, from LIMIT_WAIT_AT
+LIMIT_WAIT_AT = "limit_wait_at"  # extra key: when the dispatch first had to wait for room (limits.py); the queue limit counts from it
 REASON_QUEUE = "排隊等接回（同時最多 {n} 個）"
 REASON_RC = "對方已接回，校正 Remote Control 名稱"
 FAIL_TRUST = "接回後停在信任提示，sampan 不替你按；到 tmux attach -t {name} 確認後，用 resend 重送"
@@ -69,16 +71,20 @@ class Step:
     reason: str = ""
 
 
-def decide(row, phase, age, *, others_active, rc):
+def decide(row, phase, age, *, others_active, rc, over_limit=None):
     """The next step for the dispatches of one stopped target (StatusRow). phase: the shared one ("" = none yet);
     age: seconds since it began; others_active: how many other targets hold a place; rc: whether the Remote Control
-    reset follows the launch."""
+    reset follows the launch. over_limit: None, or a function called only when this target is next in line to launch
+    (phase ""): it returns why there is no room right now ("" = there is room); it is never computed beforehand."""
     name = row.name
     if phase == READY_PHASE:
         return Step("ready")
     if phase == "":
         if others_active >= RESTORE_AT_ONCE:
             return Step("wait", REASON_QUEUE.format(n=RESTORE_AT_ONCE))
+        why = over_limit() if over_limit is not None else ""
+        if why:
+            return Step("wait", REASON_LIMIT.format(why=why))
         return Step("launch")
     if phase == LAUNCHING:
         if age > LAUNCH_STALE_S:
