@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 from sampan import cli, limits, restart, restore, send, send_restore
 from sampan.dispatch import Dispatch
@@ -309,21 +310,34 @@ class ShowTest(unittest.TestCase):
 
 
 class OverLimitCliTest(unittest.TestCase):
-    def test_agent_may_not_override(self):
+    def test_agent_or_no_terminal_may_not_override(self):
+        import io
+        import sys
+
+        class Tty(io.StringIO):
+            on = True
+
+            def isatty(self):
+                return self.on
         w = World(self, running=1)
-        out = []
         args = type("A", (), {"over_limit": True})()
         orig = cli._run_by_agent
         try:
-            cli._run_by_agent = lambda cfg, run: True
-            self.assertIsNone(cli._over_limit(w.cfg, w.runner(), args, out.append))
-            self.assertIn("agent", out[0])
-            self.assertIn("畫面上按 y", out[0])
-            cli._run_by_agent = lambda cfg, run: False
-            self.assertTrue(cli._over_limit(w.cfg, w.runner(), args, out.append))
+            for agent, tty, ok in ((True, True, False), (False, False, False), (True, False, False), (False, True, True)):
+                out = []
+                cli._run_by_agent = lambda cfg, run, agent=agent: agent
+                fake = Tty()
+                fake.on = tty
+                with mock.patch.object(sys, "stdin", fake), mock.patch.object(sys, "stdout", fake):
+                    got = cli._over_limit(w.cfg, w.runner(), args, out.append)
+                self.assertEqual(got, True if ok else None, (agent, tty))
+                if not ok:
+                    self.assertIn("--over-limit", out[0])
+                    self.assertIn("畫面上按 y", out[0])
+                    self.assertIn("背景", out[0])
         finally:
             cli._run_by_agent = orig
-        self.assertFalse(cli._over_limit(w.cfg, w.runner(), type("A", (), {})(), out.append))
+        self.assertFalse(cli._over_limit(w.cfg, w.runner(), type("A", (), {})(), []))
 
     def test_independent_of_mcp_confirm(self):
         # the agent test looks at who runs the command, not at [mcp] confirm
@@ -375,16 +389,21 @@ class OverLimitEveryCommandTest(unittest.TestCase):
         (["switch", "x", "work", "--over-limit"], "sampan.session_run.cmd_switch"),
     )
 
-    def run_cli(self, argv, target, caller, confirm):
+    def run_cli(self, argv, target, caller, confirm, tty=True):
         import dataclasses
         import io
+        import sys
         from contextlib import redirect_stdout
         from unittest import mock
 
         from sampan.restart import RestartPlan
         cfg = dataclasses.replace(make_env(Path(tempfile.mkdtemp())), mcp_confirm=confirm)
-        buf = io.StringIO()
-        with redirect_stdout(buf), mock.patch("sampan.cli.load_config", return_value=cfg), \
+        class Tty(io.StringIO):
+            def isatty(self):
+                return tty
+        buf = Tty()
+        with redirect_stdout(buf), mock.patch.object(sys, "stdin", Tty()), \
+                mock.patch("sampan.cli.load_config", return_value=cfg), \
                 mock.patch("sampan.runner.run", FakeRunner(strict=True)), \
                 mock.patch("sampan.send.command_caller", return_value=caller), \
                 mock.patch("sampan.cli._resolve_one", return_value="x"), \
@@ -408,3 +427,6 @@ class OverLimitEveryCommandTest(unittest.TestCase):
                     self.assertEqual((rc, fn.call_count), (2, 0), text)
                     self.assertIn("--over-limit", text)
                     self.assertIn("畫面上按 y", text)
+                    # a person's command that lost its terminal (nohup, in the background) is refused as well
+                    rc, text, fn = self.run_cli(argv, target, TERMINAL, confirm, tty=False)
+                    self.assertEqual((rc, fn.call_count), (2, 0), text)

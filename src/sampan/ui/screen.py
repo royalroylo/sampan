@@ -623,12 +623,14 @@ class CursesScreen:
         w = self.resource_watcher
         if w is None or self.cfg is None or not self.cfg.resource_bar:
             return None
-        reading = w.latest
-        if reading is not None and reading.running is not None:  # limits.count at the reading's moment: what `new` counts
-            running, limit = reading.running, reading.limit
-        else:  # not counted (yet): the list's own running rows
-            running, limit = resource_bar.running_of(rows), resource_bar.limit_of(self.cfg, reading)
-        return lambda width: resource_bar.gauge(reading, running, limit, width, now=w.clock())
+        reading, now = w.latest, w.clock()
+        approx = False
+        if (reading is not None and reading.running is not None and reading.count_at is not None
+                and 0 <= now - reading.count_at <= resource_bar.COUNT_FRESH_S):
+            running, limit = reading.running, reading.limit  # limits.count a moment ago: what `new` counts
+        else:  # no recent count (backing off, not taken yet): the list's own running rows, marked ?
+            running, limit, approx = resource_bar.running_of(rows), resource_bar.limit_of(self.cfg, reading), True
+        return lambda width: resource_bar.gauge(reading, running, limit, width, now=w.clock(), approx=approx)
 
     def _account_lines(self, rows):
         """The account lines under the list. Usage (a Codex rollout scan, Claude record files) is cached for USAGE_S

@@ -480,10 +480,10 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
            adopt_fn=adopt_mod.cmd_adopt, adopt_picker_fn=None, save_fn=save_mod.cmd_save, loop=False,
            attach_fn=None, choose_dir_fn=None, updater=None, update_fn=update_mod.do_update, argv=(), prompt_fn=None, plugins_fn=None,
            profiles_fn=None, set_cfg_fn=None, dispatches_fn=None, choose_folder_fn=None, restart_fn=None,
-           detach_fn=None, typeahead_fn=None, notices_fn=None, resource_line_fn=None, limit_override=True):
+           detach_fn=None, typeahead_fn=None, notices_fn=None, resource_line_fn=None, limit_override=False):
     """resource_line_fn(rows) -> str: the plain-text list prints this line before each listing (the curses screen draws it
     itself); None = none.
-    limit_override: whether a person may answer y to a refusal of the session limit here. False (an agent drives this
+    limit_override: whether a person may answer y to a refusal of the session limit here. False (the default; an agent drives this
     screen, or there is no terminal): no question is asked and a refusal stands.
     typeahead_fn() drops the keys typed while an action ran (curses: CursesScreen.drop_typeahead).
     dispatches_fn(ask=…) is the dispatch list for D (curses: CursesScreen.dispatches); when None, the dispatches are printed.

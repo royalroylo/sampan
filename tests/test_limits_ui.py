@@ -48,7 +48,8 @@ class EnterRefused(Base):
     def test_the_enter_path_gets_the_y_n_answer(self):
         rows = self.stopped()
         cmd_ui(self.cfg, self.r, self.msgs.append, lambda _p: "1", rows_fn=lambda c, r: rows,
-               exec_fn=lambda *a: None, restore_fn=lambda *a, **kw: self.seen.update(kw) or 0, loop=False)
+               exec_fn=lambda *a: None, restore_fn=lambda *a, **kw: self.seen.update(kw) or 0, loop=False,
+               limit_override=True)
         self.assertTrue(callable(self.seen["ask_limit"]))
 
 
@@ -66,7 +67,7 @@ class AnswerFunction(Base):
                 return typed
             return next(answers)
         cmd_ui(self.cfg, self.r, self.msgs.append, ask, rows_fn=lambda c, r: [ROW],
-               picker_fn=lambda rows, cur: ("new", []), exec_fn=lambda *a: None, new_fn=new_fn)
+               picker_fn=lambda rows, cur: ("new", []), exec_fn=lambda *a: None, new_fn=new_fn, limit_override=True)
         return asked
 
     def test_y_means_yes_anything_else_no(self):
@@ -80,11 +81,11 @@ class AnswerFunction(Base):
         got = {}
         cmd_ui(self.cfg, self.r, self.msgs.append, lambda _p: "y", rows_fn=lambda c, r: [ROW],
                picker_fn=lambda rows, cur: ("restart!", [RestartPlan(["a"], [], [])]),
-               exec_fn=lambda *a: None, restart_fn=lambda *a, **kw: got.update(restart=kw) or 0)
+               exec_fn=lambda *a: None, restart_fn=lambda *a, **kw: got.update(restart=kw) or 0, limit_override=True)
         self.assertTrue(callable(got["restart"]["ask_limit"]))
         cmd_ui(self.cfg, self.r, self.msgs.append, lambda _p: "y", rows_fn=lambda c, r: [ROW],
                picker_fn=lambda rows, cur: ("restore", []), exec_fn=lambda *a: None,
-               restore_fn=lambda *a, **kw: got.update(restore=kw) or 0)
+               restore_fn=lambda *a, **kw: got.update(restore=kw) or 0, limit_override=True)
         self.assertTrue(callable(got["restore"]["ask_limit"]))
 
 
@@ -107,7 +108,8 @@ class ScreenGauge(unittest.TestCase):
     def screen(self, **cfg_changes):
         cfg = dataclasses.replace(make_env(Path(tempfile.mkdtemp())), **cfg_changes)
         w = rb.ResourceWatcher(cfg, FakeRunner(strict=True), clock=lambda: 2.0)
-        w.latest = reading()
+        r = reading()
+        w.latest = dataclasses.replace(r, running=19, limit=16, count_at=1.0)
         s = CursesScreen.__new__(CursesScreen)
         s.cfg, s.resource_watcher = cfg, w
         return s
@@ -115,7 +117,14 @@ class ScreenGauge(unittest.TestCase):
     def test_gauge_function_for_the_main_list(self):
         s = self.screen()
         g = s._gauge([ROW, ROW])
-        self.assertIn("執行中 2/16", rb.gauge_text(g(120)))
+        self.assertIn("執行中 19/16!", rb.gauge_text(g(120)))  # limits.count's number, not the two rows
+
+    def test_an_old_or_missing_count_falls_back_to_the_rows_and_says_so(self):
+        s = self.screen()
+        s.resource_watcher.latest = dataclasses.replace(s.resource_watcher.latest, count_at=2.0 - rb.COUNT_FRESH_S - 1)
+        self.assertIn("執行中 2?/16", rb.gauge_text(s._gauge([ROW, ROW])(120)))
+        s.resource_watcher.latest = dataclasses.replace(s.resource_watcher.latest, running=None, count_at=None)
+        self.assertIn("執行中 2?/16", rb.gauge_text(s._gauge([ROW, ROW])(120)))
 
     def test_off_in_config_or_without_a_watcher(self):
         self.assertIsNone(self.screen(resource_bar=False)._gauge([ROW]))

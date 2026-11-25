@@ -558,11 +558,20 @@ class Report:
     explicit: bool
     count: Count | None = None
 
+    @property
+    def total(self):
+        """What is compared with the limit (and what the screen and `new` show): running plus starting."""
+        return self.running + self.starting
+
+    def number(self):
+        """The number as text: the total, and how many of it are only starting."""
+        return f"{self.total}" + (f"（含啟動中 {self.starting}）" if self.starting else "")
+
     def as_json(self):
         sn = self.snap
         c = self.classified
         return {
-            "running": self.running, "starting": self.starting, "limit": self.limit, "over": self.over,
+            "running": self.running, "starting": self.starting, "total": self.total, "limit": self.limit, "over": self.over,
             "count_mode": self.count_mode, "by_owner": {k or "other": v for k, v in self.by_owner.items()},
             "outside_tmux": self.outside, "memory": self.memory,
             "items": {"compressor": c.compressor, "swap": c.swap, "level": c.level},
@@ -577,11 +586,11 @@ class Report:
         """The one line `status` ends with."""
         sn = self.snap
         if self.limit is None:
-            head = f"執行中 {self.running}"
+            head = f"執行中 {self.number()}"
         else:
             tail = f"（超過 {self.over}，只警告）" if self.over and self.count_mode == "warn" else \
                 f"（超過 {self.over}）" if self.over else ""
-            head = f"執行中 {self.running}／上限 {self.limit}{tail}"
+            head = f"執行中 {self.number()}／上限 {self.limit}{tail}"
         parts = [head]
         if len([o for o in self.by_owner if o]) > 0:
             parts.append("／".join(f"{o or '其他'} {n}" for o, n in sorted(self.by_owner.items())))
@@ -637,7 +646,7 @@ def doctor_lines(cfg, run):
                     "可能是比較新的 sampan 寫的；升級 sampan，或從設定檔拿掉"))
     if r.over:
         cands = candidates(cfg, run, None)  # the doctor has no owner: everybody's
-        out.append(("warn", f"執行中 {r.running}，超過上限 {r.limit} 共 {r.over} 個（{'只警告' if r.count_mode == 'warn' else '新增會被擋'}）",
+        out.append(("warn", f"執行中 {r.number()}，超過上限 {r.limit} 共 {r.over} 個（{'只警告' if r.count_mode == 'warn' else '新增會被擋'}）",
                     "可以先停：" + "、".join(c.line("sampan retire") for c in cands) if cands else
                     "目前沒有閒著、沒有未結案派工的 session 可以建議停"))
     if r.memory == "red":
@@ -664,7 +673,7 @@ def cmd_limits(cfg, run, out, *, calibrate=False):
                f"{lim.min_auto}, 64) = {r.limit}（公式常數只為了給這台一個起點；16 是經驗值，見 sampan limits calibrate）"
                if lim.max_sessions == "auto" and sn.ram else f"{lim.max_sessions}")
         out(f"數量上限：{r.limit}（{how}）；超過時：{'擋' if lim.count_mode == 'block' else '只警告'}")
-    out(f"執行中 {r.running}（啟動中 {r.starting}，tmux 外 {r.outside}）"
+    out(f"執行中 {r.number()}（tmux 外 {r.outside}）"
         + ("；" + "、".join(f"{o or '其他'} {n}" for o, n in sorted(r.by_owner.items())) if r.by_owner else ""))
     if lim.owners:
         out("擁有者：" + "；".join(f"{n}＝{'、'.join(p)}" for n, p in lim.owners) + f"；紅燈時每人保底 {lim.reserve_per_owner}")

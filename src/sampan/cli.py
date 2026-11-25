@@ -365,7 +365,7 @@ def _warn_limits(cfg, run, out):
         if rep.memory == "red" and cfg.limits.pressure_guard:
             out("⚠ 記憶體紅燈（" + "、".join(rep.classified.reasons) + "）；這個指令不經 sampan 管控，仍照常開")
         elif rep.limit is not None and rep.over:
-            out(f"⚠ 已超過上限（{rep.running}／{rep.limit}），仍照常開")
+            out(f"⚠ 已超過上限（{rep.total}／{rep.limit}），仍照常開")
     except Exception:  # noqa: BLE001  a warning must never stop the command
         pass
 
@@ -377,12 +377,15 @@ def _can_override(cfg, run):
 
 
 def _over_limit(cfg, run, args, out):
-    """The value of --over-limit, or None (and why) when an agent asked for it: only a person at a terminal may override.
-    Looks at who runs the command, not at [mcp] confirm. A guard against accidents, not a security boundary."""
+    """The value of --over-limit, or None (and why) when it may not be used: only a person at a terminal (stdin and stdout
+    are ttys, as for the screen's y) and not an agent's shell call, so a command an agent detached (nohup, in the
+    background) is refused too. Looks at who runs the command, not at [mcp] confirm. A guard against accidents, not a
+    security boundary: a command an agent starts in a tmux pane of its own (`tmux run-shell`, a new window) has a
+    terminal and no agent above it, and goes through (spec 8)."""
     if not getattr(args, "over_limit", False):
         return False
-    if _run_by_agent(cfg, run):
-        out("❌ --over-limit 只有你自己在終端機（或畫面上按 y）才能用，agent 呼叫不行；"
+    if not _can_override(cfg, run):
+        out("❌ --over-limit 只有你自己在終端機（或畫面上按 y）才能用，agent 呼叫、脫離終端機的背景指令不行；"
             "如果是你在 Claude 的 ! 裡跑的，請改在畫面上按 y，或另開一個終端機視窗跑")
         return None
     return True

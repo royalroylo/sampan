@@ -489,3 +489,89 @@ class Docs(unittest.TestCase):
         text = " ".join(w for _k, w in GAUGE_GROUP[1])
         for needle in ("同時偏高", "10 分鐘", "正在寫出", "<15%"):
             self.assertIn(needle, text)
+
+
+class CountEveryFifteenSeconds(unittest.TestCase):
+    def watcher(self):
+        from sampan.ui import resource_bar as rb
+        from tests.test_resource_bar import counting_runner
+        cfg = make_env_for_cli()
+        r = counting_runner(1)
+        t = {"now": 100.0}
+        w = rb.ResourceWatcher(cfg, r, clock=lambda: t["now"], snapshot_fn=lambda run, sd, lim, **k: resources.snapshot(
+            run, sd, lim, platform="darwin", load=lambda: (0, 1, 0), ncpu=10, **k))  # wall clock, as in use
+        return w, r, t
+
+    def spawned(self, r):
+        names = sorted(c["args"][0] for c in r.calls)
+        r.calls.clear()
+        return names
+
+    def test_memory_every_five_seconds_the_count_only_every_fifteen(self):
+        w, r, t = self.watcher()
+        w.step()
+        self.assertEqual(self.spawned(r), ["ps", "sysctl", "tmux", "vm_stat"])  # the first reading has both
+        first = w.latest.running
+        for _ in range(2):  # +5 s, +10 s: the two memory spawns only
+            t["now"] += 5
+            w.step()
+            self.assertEqual(self.spawned(r), ["sysctl", "vm_stat"])
+            self.assertEqual(w.latest.running, first)  # the last count stays
+        t["now"] += 5  # +15 s
+        w.step()
+        self.assertEqual(self.spawned(r), ["ps", "sysctl", "tmux", "vm_stat"])
+
+    def test_idle_terminal_never_counts_faster_than_it_reads_memory(self):
+        w, r, t = self.watcher()
+        w.step()
+        r.calls.clear()
+        t["now"] += 400  # five minutes without a key: both on the slow beat
+        self.assertEqual(w.interval(), 15)
+        w.step()
+        self.assertIn("ps", self.spawned(r))
+        t["now"] += 10
+        w.step()
+        self.assertEqual(self.spawned(r), ["sysctl", "vm_stat"])
+
+    def test_a_state_file_that_cannot_be_written_backs_the_screen_off_too(self):
+        w, r, t = self.watcher()
+        with mock.patch.object(resources, "_write_state", lambda *a, **k: None):
+            for _ in range(3):
+                t["now"] += 5
+                w.step()
+        self.assertEqual(w.backoff.failures, 3)
+        t["now"] += 5
+        w.step()  # writes again
+        self.assertEqual(w.backoff.failures, 0)
+
+
+class OneNumberEverywhere(unittest.TestCase):
+    def test_sixteen_running_and_one_starting_reads_17_of_16_in_every_place(self):
+        import io
+        from contextlib import redirect_stdout
+
+        from sampan import cli
+        from sampan.status import cmd_status
+        from sampan.ui import resource_bar as rb
+        w = World(self, running=16)
+        limits.reserve(w.cfg.state_dir, "n-new", __import__("time").time(), 100)  # one place held by a start in progress
+        r = w.runner()
+        rep = limits.report(w.cfg, r)
+        self.assertEqual((rep.running, rep.starting, rep.total, rep.over), (16, 1, 17, 1))
+        self.assertEqual(rep.as_json()["total"], 17)
+        lines = []
+        cmd_status(w.cfg, r, lines.append)
+        self.assertTrue(any("執行中 17（含啟動中 1）／上限 16（超過 1，只警告）" in x for x in lines), lines)
+        out = []
+        limits.cmd_limits(w.cfg, r, out.append)
+        self.assertTrue(any("執行中 17（含啟動中 1）" in x for x in out), out)
+        self.assertIn("執行中 17（含啟動中 1），超過上限 16 共 1 個", limits.doctor_lines(w.cfg, r)[0][1])
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            msgs = []
+            cli._warn_limits(w.cfg, r, msgs.append)
+        self.assertIn("已超過上限（17／16）", msgs[0])
+        screen = rb.plain_line_now(w.cfg, r, [])
+        self.assertIn("執行中 17/16!", screen)
+        o = limits.check(w.cfg, r, name="x", profile="alice", write=False)
+        self.assertEqual(o.verdict.reason, "已超過上限（18／16）")  # `new` adds its own one to the same 17

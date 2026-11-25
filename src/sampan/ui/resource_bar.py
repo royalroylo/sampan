@@ -14,6 +14,8 @@ from ..textwidth import text_width
 
 FRESH_S = 15  # a reading older than this is shown as "?"
 FAST_S, SLOW_S, IDLE_AFTER_S = 5, 15, 300
+COUNT_S = 15  # the count of agents (one `ps`, one tmux) is taken this often, never faster than the memory reading
+COUNT_FRESH_S = 3 * COUNT_S  # a count older than this is not shown as the number (the list's own, marked ?)
 SPAWN_TIMEOUT_S = 2
 WIDE_COLS, MID_COLS, MIN_COLS = 100, 70, 50
 
@@ -25,6 +27,7 @@ class Reading:
     classified: object
     running: int | None = None  # limits.count's total (running, starting, outside tmux), None = not counted
     limit: int | None = None  # the count limit, None = no limit
+    count_at: float | None = None  # the watcher's clock when that count was taken (every COUNT_S, slower than the memory)
 
 
 _STYLE = {"yellow": "warn", "high": "warn", "red": "err"}
@@ -39,7 +42,7 @@ def _field(label, text, level, *, red=False):
     return [(("!" if level in _STYLE else "") + label + text, _STYLE.get(level, ""))]
 
 
-def gauge(reading, running, limit, width, *, now):
+def gauge(reading, running, limit, width, *, now, approx=False):
     """[(text, style), …] for the right end of the separator line, [] when there is no room (width = terminal columns).
     reading: Reading or None (unknown: every memory field is "?"); running: agents counted; limit: int or None.
     >= 100 columns: everything; 70-99: abbreviated; 50-69: light and count; below: nothing."""
@@ -49,7 +52,8 @@ def gauge(reading, running, limit, width, *, now):
     c = reading.classified if fresh else None
     sn = reading.snap if fresh else None
     over = limit is not None and running > limit
-    count = f"{running}/{limit}!" if over else (f"{running}/{limit}" if limit is not None else f"{running}")
+    mark = "?" if approx else ""  # the list's own number, not limits.count's (that one is too old or not there yet)
+    count = (f"{running}{mark}/{limit}!" if over else f"{running}{mark}/{limit}") if limit is not None else f"{running}{mark}"
     count_style = "warn" if over else ""
     light = {"green": "ok", "yellow": "warn", "red": "err"}.get(c.memory if c else "", "muted")
     if width < MID_COLS:
@@ -115,24 +119,33 @@ class ResourceWatcher:
         self.last_key = self.clock()
 
     def step(self):
-        """One reading → latest (the memory sample and the count of agents, from the same moment: one thread, one `ps`);
-        a failure leaves latest as it was (it ages out to "?"), and the next one waits longer (resources.Backoff)."""
+        """One reading → latest. The memory sample (sysctl + vm_stat: two spawns) is taken every time; the count of agents
+        (limits.report: one `ps`, one tmux) only every COUNT_S, and between two counts the last one stays. A failure
+        leaves latest as it was (it ages out to "?") and the next waits longer (resources.Backoff): a reading that
+        could not be had, or whose state file could not be written, both count."""
         if self.paused:
             return False
         try:
             lim = self.cfg.limits
             snap = self.snapshot_fn(self.run, self.cfg.state_dir, lim, probe=False)
-            running = limit = None
-            try:
-                rep = self.report_fn(self.cfg, self.run, snap=snap)
-                running, limit = rep.count.total, rep.limit
-            except Exception:  # noqa: BLE001  without the count the number on the line is the list's own
-                pass
-            self.latest = Reading(self.clock(), snap, resources.classify(snap, lim), running, limit)
+            now = self.clock()
+            prev = self.latest
+            running, limit, count_at = (prev.running, prev.limit, prev.count_at) if prev is not None else (None, None, None)
+            if count_at is None or now - count_at >= max(COUNT_S, self.interval()):
+                try:
+                    rep = self.report_fn(self.cfg, self.run, snap=snap)
+                    running, limit, count_at = rep.count.total, rep.limit, now
+                except Exception:  # noqa: BLE001  without the count the number on the line is the list's own
+                    pass
+            self.latest = Reading(now, snap, resources.classify(snap, lim), running, limit, count_at)
         except Exception:  # noqa: BLE001  a reading that fails shows as "?"
             self.backoff.failed()
             return False
-        self.backoff.ok() if resources.usable(snap) else self.backoff.failed()
+        written = resources.state_age(self.cfg.state_dir)
+        if resources.usable(snap) and written is not None and written <= resources.STALE_S + 2 * SLOW_S:
+            self.backoff.ok()
+        else:
+            self.backoff.failed()
         return True
 
     def _loop(self):
@@ -170,7 +183,7 @@ def plain_line_now(cfg, run, rows, *, clock=time.monotonic):
         run = resources.with_timeout(run, SPAWN_TIMEOUT_S)
         snap = resources.snapshot(run, cfg.state_dir, cfg.limits, probe=False)
         rep = limits.report(cfg, run, snap=snap)
-        reading = Reading(clock(), snap, resources.classify(snap, cfg.limits), rep.count.total, rep.limit)
+        reading = Reading(clock(), snap, resources.classify(snap, cfg.limits), rep.count.total, rep.limit, clock())
         return plain_line(reading, rep.count.total, rep.limit, now=clock())
     except Exception:  # noqa: BLE001  a reading that fails is no line
         return ""
