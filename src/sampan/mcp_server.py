@@ -28,6 +28,7 @@ from .status import status_rows, status_rows_light
 from .update import current_version
 
 PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26")  # the first is answered when the client asks for another one
+BEAT_ROWS_S = 5  # a heartbeat does not use the round's rows once they are older than this (a /clear in between would be written back)
 BEAT_S = 30  # the heartbeat is written at most this often (it must stay well under heartbeat.HEARTBEAT_S)
 WATCH_S = 3
 WAIT_MAX_S = 60  # a tool call may not block longer than this (MCP clients time tool calls out themselves)
@@ -275,12 +276,13 @@ class _Round:
     cannot be read (the look then reads its own inside its lock)."""
 
     def __init__(self, server):
-        self.server, self._rr, self._tried = server, None, False
+        self.server, self._rr, self._tried, self._at = server, None, False, 0.0
 
     def get(self):
         if not self._tried:
             self._tried = True
             s = self.server
+            self._at = s.clock()
             try:
                 self._rr = send.round_rows(s.cfg, s.run, snapshot_fn=s.snapshot_fn, status_fn=s.watch_status_fn)
             except (RegistryError, OSError):
@@ -288,6 +290,9 @@ class _Round:
         return self._rr
 
     def rows(self):
+        """The list for a heartbeat: read again when the round's own is more than BEAT_ROWS_S old."""
+        if self._tried and self.server.clock() - self._at > BEAT_ROWS_S:
+            self._tried = False
         rr = self.get()
         if rr is None:
             raise RegistryError("status rows unreadable")
@@ -308,9 +313,9 @@ class Server:
         # two row functions: status_fn (list_sessions shows last activity: the full status_rows) and watch_status_fn
         # (sending, watching, settling, heartbeats: None = send's own default, status_rows_light). An injected
         # status_fn (tests) serves both.
-        self.owe_throttle = send.OweThrottle()
         self.status_fn, self.snapshot_fn = status_fn or status_rows, snapshot_fn
         self.watch_status_fn = status_fn
+        self.owe_throttle = send.OweThrottle()
         self.client_name = None  # clientInfo.name from initialize
         self.start_of = start_of  # pid -> start time (procs.start_time); None writes no heartbeat
         self.nonce = secrets.token_hex(8)  # this instance's key in the inboxes table
@@ -880,7 +885,7 @@ class Server:
         name = self.caller.name
         for d in items:
             if d.id in owed and (d.id in self.mine or send.from_session(d, name, self.caller.id)):
-                if self.owe_throttle.skip(d.id):
+                if self.owe_throttle.skip(d.id, items):
                     continue  # only a notice for a sender that is not running is owed: tried every send.OWED_RETRY_S
                 self.beat(rnd)  # a reattach inside an advance takes a minute: keep the heartbeat fresh between dispatches
                 try:

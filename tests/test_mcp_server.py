@@ -1248,6 +1248,23 @@ class WatchTest(Base):
         self.assertEqual({d.id: d.state for d in self.dispatches()}.keys(), set(ids))
         self.assertEqual(len(calls), 1)  # two sent dispatches, one read for the round
 
+    def test_a_heartbeat_late_in_a_long_round_reads_the_rows_again(self):
+        now, calls = [0.0], []
+
+        def counting(cfg, run, snapshot_fn=None):
+            calls.append(1)
+            return self.status_fn(cfg, run, snapshot_fn=snapshot_fn)
+        server = mcp_server.Server(self.cfg, tmux_runner(), io.StringIO(), io.StringIO(), caller=CALLER_A,
+                                   sleep=lambda _s: None, clock=lambda: now[0], status_fn=counting, now_fn=lambda: NOW)
+        rnd = mcp_server._Round(server)
+        rnd.get()
+        now[0] = mcp_server.BEAT_ROWS_S - 1
+        rnd.rows()
+        self.assertEqual(len(calls), 1)  # young enough: shared with the round
+        now[0] = mcp_server.BEAT_ROWS_S + 1
+        rnd.rows()
+        self.assertEqual(len(calls), 2)  # a /clear in between must not be written back as the old conversation
+
     def test_an_idle_round_reads_no_rows(self):
         server = mcp_server.Server(self.cfg, tmux_runner(), io.StringIO(), io.StringIO(), caller=CALLER_A,
                                    sleep=lambda _s: None, clock=lambda: 0.0, status_fn=self.status_fn,

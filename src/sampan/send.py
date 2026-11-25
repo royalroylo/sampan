@@ -258,26 +258,31 @@ class _LockRows:
 
 
 class OweThrottle:
-    """Slows the retry of a notice that is owed to a sender that is not running (stopped but not retired: its notice
-    can only be given once it is back, and every watcher in the machine would otherwise try it every round for ever).
-    In-process only; nothing is stored. A sender that is running is tried every round, as before."""
+    """Slows the retry of a notice that is owed to a sender that is stopped (not retired: its notice can only be given
+    once it is back, and every watcher in the machine would otherwise try it every round for ever). In-process only;
+    nothing is stored. Any other sender (running, at a trust prompt, tmux unreadable) is tried every round, as before."""
 
     def __init__(self, every=OWED_RETRY_S):
         self.every, self._due = every, {}
 
-    def skip(self, did):
-        return self._due.get(did, 0) > _mono()
+    def skip(self, did, items):
+        """Whether dispatch did is still waiting out its 30 s. Only while it is the same finished record that was
+        noted: a resend (queued again) or any other change of it is looked at at once."""
+        due = self._due.get(did)
+        d = next((x for x in items if x.id == did), None)
+        return bool(due and d is not None and d.state in dispatch.FINISHED and (d.state, d.done_at) == due[1]
+                    and due[0] > _mono())
 
     def note(self, did, items, rows):
         """After a look at dispatch did (items: the live ones read at the start of the round, rows: that round's
-        rows): while only its notice is owed and its sender is not running, wait `every` seconds before the next."""
+        rows): while only its notice is owed and its sender is stopped, wait `every` seconds before the next."""
         d = next((x for x in items if x.id == did), None)
         owed = None if d is None else d if d.batch is None else next(iter(_group(items, d.batch)), None)
         if d is not None and d.state in dispatch.FINISHED and owed is not None and owed.from_kind == "session" \
                 and _owes_notice(owed, items):
             row = _row_of(rows, owed.from_id, owed.from_name) if rows is not None else None
-            if row is not None and row.state != State.RUNNING:
-                self._due[did] = _mono() + self.every
+            if row is not None and row.state == State.STOPPED and row.live == "stopped":  # not a trust prompt, not unreadable
+                self._due[did] = (_mono() + self.every, (d.state, d.done_at))
                 return
         self._due.pop(did, None)
 

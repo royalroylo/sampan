@@ -2359,27 +2359,51 @@ class RoundRowsTest(Base):
 
 
 class OweThrottleTest(Base):
-    def test_stopped_sender_is_slowed_a_running_one_is_not(self):
+    def owed_items(self):
         d = self.submit(notify=True)
         self.advance(tmux_runner(), d.id)
         self.transcript(SID_B, [user(d.text), assistant("ok")])
-        self.set_row("a", state=State.STOPPED, pane=None)
+        self.set_row("a", state=State.STOPPED, pane=None, live="stopped")
         d = self.advance(FakeRunner(strict=True), d.id, later(5))
         self.assertEqual((d.state, d.notified), ("done", False))
-        items = dispatch.load(self.cfg.state_dir, ids=())
+        return d, dispatch.load(self.cfg.state_dir, ids=())
+
+    def by_name(self):
+        return {r.name: r for r in self.rows.values()}
+
+    def test_stopped_sender_is_slowed_a_running_one_is_not(self):
+        d, items = self.owed_items()
         clock = [100.0]
         t = send.OweThrottle(every=30)
         with mock.patch.object(send, "_mono", lambda: clock[0]):
-            t.note(d.id, items, {r.name: r for r in self.rows.values()})
-            self.assertTrue(t.skip(d.id))
+            t.note(d.id, items, self.by_name())
+            self.assertTrue(t.skip(d.id, items))
             clock[0] += 31
-            self.assertFalse(t.skip(d.id))
-            self.set_row("a", state=State.RUNNING)
-            t.note(d.id, items, {r.name: r for r in self.rows.values()})
-            self.assertFalse(t.skip(d.id))
+            self.assertFalse(t.skip(d.id, items))
+            self.set_row("a", state=State.RUNNING, live="running")
+            t.note(d.id, items, self.by_name())
+            self.assertFalse(t.skip(d.id, items))
+
+    def test_only_a_stopped_sender_is_slowed(self):
+        d, items = self.owed_items()
+        t = send.OweThrottle(every=30)
+        for state in (State.AWAIT_TRUST, State.UNKNOWN):
+            self.set_row("a", state=state, live="stopped" if state == State.AWAIT_TRUST else "unknown")
+            t.note(d.id, items, self.by_name())
+            self.assertFalse(t.skip(d.id, items), state)
+
+    def test_a_resent_dispatch_is_looked_at_at_once(self):
+        d, items = self.owed_items()
+        t = send.OweThrottle(every=30)
+        t.note(d.id, items, self.by_name())
+        self.assertTrue(t.skip(d.id, items))
+        again = dataclasses.replace(d, state="queued", done_at=None, reason="")  # what resend makes of it
+        self.assertFalse(t.skip(d.id, [again]))
+        failed_later = dataclasses.replace(d, done_at="2026-10-26T13:00:00+00:00")  # finished again, differently
+        self.assertFalse(t.skip(d.id, [failed_later]))
 
     def test_prune_forgets_dispatches_that_are_gone(self):
         t = send.OweThrottle()
-        t._due["x"] = 1e12
+        t._due["x"] = (1e12, ("done", None))
         t.prune(set())
-        self.assertFalse(t.skip("x"))
+        self.assertEqual(t._due, {})

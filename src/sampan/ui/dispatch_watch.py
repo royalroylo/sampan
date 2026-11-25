@@ -113,7 +113,7 @@ class DispatchWatcher:
         except Exception:  # noqa: BLE001
             ids = []
         self.owe_throttle.prune({d.id for d in self.items})
-        ids = [i for i in ids if not self.owe_throttle.skip(i)]  # an owed notice for a stopped sender: every 30 s
+        ids = [i for i in ids if not self.owe_throttle.skip(i, self.items)]  # an owed notice for a stopped sender: every 30 s
         rows = None
         if ids:  # the rows are read once for the whole round, before any lock, and only if something is to be advanced
             try:

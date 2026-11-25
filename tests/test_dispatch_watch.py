@@ -401,3 +401,15 @@ class RoundRowsTest(unittest.TestCase):
         w.poll_once()
         w.poll_once()
         self.assertEqual(len(self.got), 2)
+
+    def test_a_resent_owed_dispatch_is_not_held_back(self):
+        d = mk("o1", "done", notify=True, notified=False, from_kind="session", from_id="s1", done_at=CREATED)
+        items = [d]
+        w = self.watcher(["o1"], items=items)
+        w.rows_fn = lambda cfg, run: send.RoundRows([status_row("alice", id="s1", state=State.STOPPED)])
+        w.poll_once()
+        w.poll_once()
+        self.assertEqual(len(self.got), 1)  # waiting out its 30 s
+        items[0] = mk("o1", "queued", notify=True, from_kind="session", from_id="s1")  # resend: queued again
+        w.poll_once()
+        self.assertEqual(len(self.got), 2)
