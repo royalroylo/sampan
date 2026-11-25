@@ -124,6 +124,61 @@ class MoveFixture(unittest.TestCase):
         return [f"cd {self.dest} && env -u CLAUDE_CONFIG_DIR claude --resume {A} --name 994-monitor", "Enter"]
 
 
+class MoveLimitTest(MoveFixture):
+    """The session limit at `move`: an agent that already ended is a new one; a running one is replaced (adds nothing)."""
+
+    def block(self, n):
+        import dataclasses
+
+        from sampan.config import Limits
+        self.cfg = dataclasses.replace(self.cfg, limits=Limits(max_sessions=n, count_mode="block"))
+
+    def test_running_agent_is_replaced_even_at_the_limit(self):
+        self.block(1)
+        self.trust_shows = str(self.dest)
+        self.assertEqual(self.move(), 0)
+        self.assertEqual(self.row().cwd, str(self.dest))
+
+    def test_ended_agent_in_a_live_tmux_session_is_new_and_refused_with_nothing_changed(self):
+        self.block(0 + 1)
+        self.claude = None  # tmux session still there, the agent has ended: this move starts one
+        # one other agent already runs somewhere else in the machine
+        orig = self.ps
+
+        def ps(a):
+            return cp(out=orig(a).stdout + ps_line(900, 1, "claude", "claude") + "\n")
+        self.ps = ps
+        self.assertEqual(self.move(), 1)
+        self.assertTrue(any("不開 994-monitor" in m for m in self.msgs), self.msgs)
+        self.assertEqual(self.row().cwd, str(self.old))
+        self.assertFalse(self.dest.exists())
+        self.assertEqual(self.keys, [])
+
+    def test_dry_run_shows_the_refusal_and_writes_no_place(self):
+        from sampan import limits
+        self.block(1)
+        self.claude = None
+        orig = self.ps
+        self.ps = lambda a: cp(out=orig(a).stdout + ps_line(900, 1, "claude", "claude") + "\n")
+        self.assertEqual(self.move(dry_run=True), 1)
+        self.assertEqual(limits.read_reservations(self.cfg.state_dir), [])
+
+    def test_running_agent_holds_its_place_while_it_ends(self):
+        from sampan import limits
+        self.block(5)
+        self.trust_shows = str(self.dest)
+        held = []
+        orig = self.send
+
+        def send(args):
+            if "/exit" in args:
+                held.append([r["name"] for r in limits.read_reservations(self.cfg.state_dir)])
+            return orig(args)
+        self.send = send
+        self.assertEqual(self.move(), 0)
+        self.assertEqual(held, [["994-monitor"]])
+
+
 class MoveTest(MoveFixture):
     def test_idle_moves_creates_dir_accepts_trust_and_saves(self):
         self.trust_shows = str(self.dest)

@@ -303,7 +303,7 @@ def candidates(cfg, run, owner, *, rows=None, env=None, limit=MAX_CANDIDATES):
     for r in srows:
         if r.state != status.State.RUNNING and not (r.registry == "retired" and r.live == "running"):
             continue
-        if cfg.limits.owner_of(prof.get(r.name, r.profile)) != owner:
+        if owner is not None and cfg.limits.owner_of(prof.get(r.name, r.profile)) != owner:
             continue
         if any(fnmatch.fnmatch(r.name, pat) for pat in cfg.limits.protect):
             continue
@@ -516,3 +516,138 @@ def let_go(cfg, names):
     """A session that could not be stopped keeps running: its held place is not needed."""
     for name in names:
         release(cfg.state_dir, name, pid=os.getpid(), start=None)
+
+
+# --- what the other interfaces show ----------------------------------------------------------------------------------
+
+@dataclass
+class Report:
+    running: int
+    starting: int
+    limit: int | None  # None = no count limit
+    over: int  # how many above the limit (0 when not over)
+    count_mode: str
+    by_owner: dict
+    outside: int
+    memory: str  # green | yellow | red | unknown
+    classified: object
+    snap: object
+    show: bool  # False only when there is neither a count limit nor a pressure guard: `status` prints nothing then
+    explicit: bool
+    count: Count | None = None
+
+    def as_json(self):
+        sn = self.snap
+        c = self.classified
+        return {
+            "running": self.running, "starting": self.starting, "limit": self.limit, "over": self.over,
+            "count_mode": self.count_mode, "by_owner": {k or "other": v for k, v in self.by_owner.items()},
+            "outside_tmux": self.outside, "memory": self.memory,
+            "items": {"compressor": c.compressor, "swap": c.swap, "level": c.level},
+            "load": c.load,
+            "resources": {"ram_bytes": sn.ram, "swap_used_bytes": sn.swap_used, "swap_total_bytes": sn.swap_total,
+                          "compressor_pct": None if sn.compressor_pct is None else round(sn.compressor_pct * 100, 1),
+                          "swapout_rate": None if sn.rate is None else round(sn.rate, 1), "level": sn.level,
+                          "load5": sn.load5, "cores": sn.cores, "at": sn.at},
+        }
+
+    def footer(self):
+        """The one line `status` ends with."""
+        sn = self.snap
+        if self.limit is None:
+            head = f"執行中 {self.running}"
+        else:
+            tail = f"（超過 {self.over}，只警告）" if self.over and self.count_mode == "warn" else \
+                f"（超過 {self.over}）" if self.over else ""
+            head = f"執行中 {self.running}／上限 {self.limit}{tail}"
+        parts = [head]
+        if len([o for o in self.by_owner if o]) > 0:
+            parts.append("／".join(f"{o or '其他'} {n}" for o, n in sorted(self.by_owner.items())))
+        parts.append(f"tmux 外 {self.outside}")
+        mem = {"green": "綠", "yellow": "黃", "red": "紅", "unknown": "?"}[self.memory]
+        detail = []
+        if sn.compressor_pct is not None:
+            detail.append(f"壓縮 {sn.compressor_pct * 100:.0f}%")
+        if sn.swap_used is not None:
+            detail.append(f"swap {sn.swap_used / GB:.1f}G")
+        parts.append(f"記憶體：{mem}" + (f"（{'、'.join(detail)}）" if detail else ""))
+        if sn.load5 is not None:
+            parts.append(f"負載 {sn.load5:.1f}")
+        return ("⚠ " if self.memory == "red" else "") + "｜".join(parts)
+
+
+def report(cfg, run, *, procs=None, panes=None, rows=None, snap=None, now=None, platform=None, clock=time.time):
+    """The numbers every interface shows, from the same functions the checks use (one place counts, one samples, one
+    defines the thresholds). Read-only; no probe sample (a display never waits)."""
+    lim = cfg.limits
+    now = clock() if now is None else now
+    procs = procs if procs is not None else procs_mod.list_procs(run)
+    if panes is None:
+        panes = Tmux(run).panes()
+    if rows is None:
+        try:
+            rows = load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)
+        except RegistryError:
+            rows = []
+    snap = snap if snap is not None else resources.snapshot(run, cfg.state_dir, lim, now=now, platform=platform,
+                                                            probe=False)
+    cl = resources.classify(snap, lim, now)
+    running = count(cfg, procs, panes, rows, [], [])
+    cnt = count(cfg, procs, panes, rows, valid_reservations(read_reservations(cfg.state_dir), now,
+                                                            running.running_names), phase_names(cfg))
+    maxn = effective_max(lim, snap.ram)
+    over = max(0, cnt.total - maxn) if maxn is not None else 0
+    show = not (lim.max_sessions == 0 and not lim.pressure_guard)
+    starting = cnt.total - running.total
+    return Report(running.total, starting, maxn, over, lim.count_mode, cnt.by_owner, cnt.outside, cl.memory, cl, snap,
+                  show, lim.explicit, cnt)
+
+
+def doctor_lines(cfg, run):
+    """(level, title, detail) for the doctor: over the limit, memory yellow or red; nothing when all is well."""
+    try:
+        r = report(cfg, run)
+    except Exception:  # noqa: BLE001  a reading that fails is not a finding
+        return []
+    out = []
+    if r.over:
+        cands = candidates(cfg, run, None)  # the doctor has no owner: everybody's
+        out.append(("warn", f"執行中 {r.running}，超過上限 {r.limit} 共 {r.over} 個（{'只警告' if r.count_mode == 'warn' else '新增會被擋'}）",
+                    "可以先停：" + "、".join(c.line("sampan retire") for c in cands) if cands else
+                    "目前沒有閒著、沒有未結案派工的 session 可以建議停"))
+    if r.memory == "red":
+        out.append(("warn", "記憶體紅燈：" + "、".join(r.classified.reasons), "新增 session 會被擋（pressure_guard = false 可關）"))
+    elif r.memory == "yellow":
+        out.append(("info", "記憶體偏緊（黃）", r.footer()))
+    return out
+
+
+def cmd_limits(cfg, run, out, *, calibrate=False):
+    """sampan limits [calibrate]: the readings, the owners, and how the limit comes out. Read-only."""
+    lim = cfg.limits
+    r = report(cfg, run)
+    sn, c = r.snap, r.classified
+    out("目前生效的是" + ("設定檔的 [limits]" if lim.explicit else "預設值（設定檔沒有 [limits]）"))
+    if r.limit is None:
+        out("數量上限：不限（max_sessions = 0）")
+    else:
+        how = (f"auto：clamp(floor((RAM {sn.ram / GB:.0f} GiB − {lim.reserve_gb:g}) ÷ {lim.per_session_gb:g}), "
+               f"{lim.min_auto}, 64) = {r.limit}（公式常數只為了給這台一個起點；16 是經驗值，見 sampan limits calibrate）"
+               if lim.max_sessions == "auto" and sn.ram else f"{lim.max_sessions}")
+        out(f"數量上限：{r.limit}（{how}）；超過時：{'擋' if lim.count_mode == 'block' else '只警告'}")
+    out(f"執行中 {r.running}（啟動中 {r.starting}，tmux 外 {r.outside}）"
+        + ("；" + "、".join(f"{o or '其他'} {n}" for o, n in sorted(r.by_owner.items())) if r.by_owner else ""))
+    if lim.owners:
+        out("擁有者：" + "；".join(f"{n}＝{'、'.join(p)}" for n, p in lim.owners) + f"；紅燈時每人保底 {lim.reserve_per_owner}")
+    else:
+        out(f"沒有 [limits.owners]：記憶體紅燈時全機最多 {lim.red_floor} 個")
+    out(f"記憶體紅燈{'會擋新增' if lim.pressure_guard else '只顯示（pressure_guard = false）'}")
+    out(r.footer())
+    if c.reasons:
+        out("紅燈原因：" + "、".join(c.reasons))
+    if calibrate:
+        out(f"[校正用] 壓縮 {sn.compressed}、swap {sn.swap_used}／{sn.swap_total}、Swapouts {sn.swapouts}（累計）、"
+            f"換出速率 {sn.rate}、level {sn.level}、負載 {sn.load5}、核心 {sn.cores}")
+        out(f"[校正用] 門檻：壓縮 > {resources.COMPRESSOR_HIGH:.0%}、swap ≥ {resources.SWAP_HIGH:.0%}、換出 > {lim.swapout_per_min} 次／分；"
+            "跑一陣子後看 actions.log 裡 [limits] 開頭的行（換出速率超過門檻一半時才會記）")
+    return 0

@@ -322,6 +322,12 @@ def _profile_mismatch(cfg, run, rows_fn):
     return out
 
 
+def _limits(cfg, run):
+    """Over the session limit, memory yellow / red (limits.py); nothing when all is well or nothing can be read."""
+    from . import limits
+    return [Check(level, title, detail) for level, title, detail in limits.doctor_lines(cfg, run)]
+
+
 def _lifecycle(cfg, run, rows_fn):
     """Sessions in a state nobody should leave them in: retired but still running (`retire --no-stop`, an older sampan, or
     started by hand), and active ones that are stopped on a profile that cannot start them (disabled, or gone from the
@@ -692,6 +698,7 @@ def run_checks(cfg, run, *, now, uid, sampan_path=None, proc_root=PROC_ROOT, whi
             + _hooks(cfg) + _statusline(cfg, now) + _codex(cfg) + _codex_daemon(cfg, run, daemon_fn) + _mcp(cfg) + _detach_key(cfg, run) + _tmux_conf(cfg, run) + _multi_agent(cfg, run, proc_root) + _action_log(cfg) + _data_format(cfg)
             + _profile_mismatch(cfg, run, rows_fn)
             + _lifecycle(cfg, run, rows_fn)
+            + _limits(cfg, run)
             + _dispatch_store(cfg, run, now, rows_fn, alive, start_of)
             + (_launchd(cfg, run, sampan_path) + _save_log(cfg, now) if platform == "darwin" else
                [Check("info", "這台不是 macOS，沒有自動存檔排程（需要時自己跑 sampan save，或用 cron／systemd timer）")]))

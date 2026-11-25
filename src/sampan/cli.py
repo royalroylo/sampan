@@ -52,6 +52,8 @@ def build_parser():
     sp.add_argument("--keep-tmux", action="store_true", help="agent 結束後保留 tmux session（預設：只剩那個 pane 就關掉）")
     sp.add_argument("--dry-run", action="store_true")
     sp.add_argument("-v", "--verbose", action="store_true", help="停之前的存檔列出每個已停止的 session（預設只給數量）")
+    lm = sub.add_parser("limits", help="session 數量上限與記憶體燈號（唯讀）；calibrate 多印校正用的讀數")
+    lm.add_argument("action", nargs="?", choices=["calibrate"])
     rt = sub.add_parser("restart", help="重開這些 session：閒置的先停再背景接回原對話，已停止的直接接回，忙的略過")
     rt.add_argument("names", nargs="+", help="session 名稱")
     rt.add_argument("--over-limit", action="store_true", help=OVER_LIMIT_HELP)
@@ -352,6 +354,20 @@ def _shows_upgrade_notice(args):
 
 
 OVER_LIMIT_HELP = "超過數量上限或記憶體紅燈時仍要開（只有你自己在終端機跑才有效；agent 呼叫會被拒絕）"
+
+
+def _warn_limits(cfg, run, out):
+    """`sampan claude` replaces this process with claude: sampan cannot stop it afterwards, so over the limit or under a
+    memory red light it only says so. Never blocks, never raises."""
+    try:
+        from . import limits
+        rep = limits.report(cfg, run)
+        if rep.memory == "red" and cfg.limits.pressure_guard:
+            out("⚠ 記憶體紅燈（" + "、".join(rep.classified.reasons) + "）；這個指令不經 sampan 管控，仍照常開")
+        elif rep.limit is not None and rep.over:
+            out(f"⚠ 已超過上限（{rep.running}／{rep.limit}），仍照常開")
+    except Exception:  # noqa: BLE001  a warning must never stop the command
+        pass
 
 
 def _over_limit(cfg, run, args, out):
@@ -728,6 +744,7 @@ def _dispatch(cfg, args):
             # a word that is not a profile must not be handed to claude as a prompt (a mistyped profile name would start a new conversation in the default profile)
             out(f"❌ 沒有這個 profile：{profile}（可用：{', '.join(cfg.profiles)}）")
             return 2
+        _warn_limits(cfg, run, out)
         return cmd_claude(cfg, run, out, input, profile, rest)
     if cmd == "codex":
         from .launch import cmd_codex
@@ -855,6 +872,9 @@ def _dispatch(cfg, args):
     if cmd == "status":
         from .status import cmd_status
         return cmd_status(cfg, run, out)
+    if cmd == "limits":
+        from . import limits
+        return limits.cmd_limits(cfg, run, out, calibrate=args.action == "calibrate")
     if cmd == "restart":
         from . import restart, status
         own = os.environ.get("TMUX_PANE")

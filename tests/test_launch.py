@@ -227,7 +227,7 @@ class CliPassthroughTest(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp())
         cfg = make_env(tmp)
         seen = []
-        with mock.patch.object(cli, "load_config", return_value=cfg), \
+        with mock.patch.object(cli, "load_config", return_value=cfg), mock.patch.object(cli, "_warn_limits"), \
                 mock.patch("sampan.launch.cmd_claude", lambda *a, **k: seen.append(a[4:]) or 0):
             cli.main(["claude", "--resume", "x"])
             cli.main(["claude", "work", "--resume", "x", "-p"])

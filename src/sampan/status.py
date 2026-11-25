@@ -268,4 +268,17 @@ def cmd_status(cfg, run, out):
     for r in rows:
         if r.registry == "retired" and r.live == "running":
             out(f"⚠ retired 但還在執行：{r.name}（sampan stop {r.name} 下線；sampan activate {r.name} 還原）")
+    _footer(cfg, run, out)
     return 1 if warning else 0
+
+
+def _footer(cfg, run, out):
+    """The count, the limit and the memory light in one line (limits.report); not at all with no limit and no guard,
+    and not when nothing can be read."""
+    from . import limits
+    try:
+        rep = limits.report(cfg, run)
+    except Exception:  # noqa: BLE001  a footer must never break status
+        return
+    if rep.show:
+        out(rep.footer())

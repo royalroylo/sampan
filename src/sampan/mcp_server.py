@@ -18,7 +18,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import dispatch, folders, heartbeat, ids, inbox, machine, remote, send, send_restore, session_run
+from . import dispatch, folders, heartbeat, ids, inbox, limits, machine, remote, send, send_restore, session_run
 from . import hubproto as hp
 from .procs import list_procs
 from .prompts import SKIP
@@ -56,6 +56,7 @@ TOOLS = [
     {"name": "list_sessions",
      "description": "列出 sampan 登記的 session：名稱、id（完整；其他工具可用名稱或 id 前 8 碼以上指定）、machine（這台機器的 id）、agent、profile、目錄、所在資料夾（folder，\"\" 是最上層）、別名（alias，沒設是 \"\"）、"
                     "狀態（state，舊版的合併顯示值：running 才收得到訊息，retired 的一律是 retired）、registry（登記表怎麼標：active／retired／空字串＝沒登記）、live（實際有沒有在跑：running／stopped／unknown）、忙／閒（activity）、最後活動。頂層另有 machine（id 與名稱）。唯讀。"
+                    "頂層 limits：執行中數量與上限、各擁有者數量、記憶體燈號（green／yellow／red／unknown；red 時開新 session 會被擋）與讀數——開新 session（new_session、send 的 restore）前先看這個。"
                     "remote=true 時另列你自己其他機器上已發布的 session（remote_machines：機器、session、忙閒；要用「機器/session」寫法 send）。",
      "inputSchema": {"type": "object", "properties": {
          "remote": {"type": "boolean", "default": False,
@@ -102,7 +103,8 @@ TOOLS = [
                                     "必須搭配 restore=true；只限已停止的 Claude session，執行中、retired、Codex 都拒絕。核准畫面看得到這個參數"}},
          "required": ["sessions", "message"]}},
     {"name": "new_session",
-     "description": "開一個新的 sampan session，並把 message 當作它的第一個 prompt。回傳派工編號，之後用 dispatch_result 看回覆。",
+     "description": "開一個新的 sampan session，並把 message 當作它的第一個 prompt。回傳派工編號，之後用 dispatch_result 看回覆。"
+                    "開之前先看 list_sessions 的 limits：記憶體紅燈（memory = red）或超過數量上限（block 模式）時會被拒絕，這裡不能越過，請使用者在終端機（--over-limit）或畫面上處理。",
      "inputSchema": {"type": "object", "properties": {
          "name": _str("新 session 的名稱（不能含 . 或 :）"),
          "target": _str("claude:<profile>、<profile>（當成 claude）或 codex"),
@@ -547,6 +549,10 @@ class Server:
                              "state": r.state.value, "registry": r.registry, "live": r.live, "activity": r.agent_status,
                              "last": r.last.astimezone(timezone.utc).isoformat(timespec="seconds") if r.last else None}
                             for r in rows]}
+        try:
+            out["limits"] = limits.report(self.cfg, self.run).as_json()
+        except Exception as e:  # noqa: BLE001  the count and the memory are extra: the list stands without them
+            warnings.append(f"讀不到上限與記憶體：{e}")
         if args.get("remote") is True:
             try:
                 store = remote.open_store(self.cfg)
