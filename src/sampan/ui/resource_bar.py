@@ -23,6 +23,8 @@ class Reading:
     at: float  # the watcher's clock when it was taken
     snap: object
     classified: object
+    running: int | None = None  # limits.count's total (running, starting, outside tmux), None = not counted
+    limit: int | None = None  # the count limit, None = no limit
 
 
 _STYLE = {"yellow": "warn", "high": "warn", "red": "err"}
@@ -87,9 +89,12 @@ class ResourceWatcher:
     """Reads the machine in the background. step() takes one reading (the loop calls it; tests call it directly).
     Stops by itself when the terminal's process is gone (parent pid 1) or stop() is called."""
 
-    def __init__(self, cfg, run, *, clock=time.monotonic, getppid=os.getppid, snapshot_fn=resources.snapshot):
+    def __init__(self, cfg, run, *, clock=time.monotonic, getppid=os.getppid, snapshot_fn=resources.snapshot,
+                 report_fn=limits.report):
         self.cfg, self.clock, self.getppid, self.snapshot_fn = cfg, clock, getppid, snapshot_fn
-        self.run = lambda args, **kw: run(args, **{**kw, "timeout": SPAWN_TIMEOUT_S})  # a stuck spawn never stalls it
+        self.report_fn = report_fn
+        self.run = resources.with_timeout(run, SPAWN_TIMEOUT_S)  # a stuck spawn never stalls it
+        self.backoff = resources.Backoff(base=FAST_S, clock=clock)
         self.latest = None
         self.last_key = clock()
         self.paused = False
@@ -110,23 +115,32 @@ class ResourceWatcher:
         self.last_key = self.clock()
 
     def step(self):
-        """One reading → latest; a failure leaves latest as it was (it ages out to "?")."""
+        """One reading → latest (the memory sample and the count of agents, from the same moment: one thread, one `ps`);
+        a failure leaves latest as it was (it ages out to "?"), and the next one waits longer (resources.Backoff)."""
         if self.paused:
             return False
         try:
             lim = self.cfg.limits
             snap = self.snapshot_fn(self.run, self.cfg.state_dir, lim, probe=False)
-            self.latest = Reading(self.clock(), snap, resources.classify(snap, lim))
-            return True
+            running = limit = None
+            try:
+                rep = self.report_fn(self.cfg, self.run, snap=snap)
+                running, limit = rep.count.total, rep.limit
+            except Exception:  # noqa: BLE001  without the count the number on the line is the list's own
+                pass
+            self.latest = Reading(self.clock(), snap, resources.classify(snap, lim), running, limit)
         except Exception:  # noqa: BLE001  a reading that fails shows as "?"
+            self.backoff.failed()
             return False
+        self.backoff.ok() if resources.usable(snap) else self.backoff.failed()
+        return True
 
     def _loop(self):
         while not self._stop.is_set():
             if self.getppid() == 1:  # the terminal is gone
                 return
             self.step()
-            if self._stop.wait(self.interval()):
+            if self._stop.wait(max(self.interval(), self.backoff.delay())):
                 return
 
     def start(self):
@@ -153,8 +167,10 @@ def plain_line_now(cfg, run, rows, *, clock=time.monotonic):
     if not getattr(cfg, "resource_bar", True):
         return ""
     try:
+        run = resources.with_timeout(run, SPAWN_TIMEOUT_S)
         snap = resources.snapshot(run, cfg.state_dir, cfg.limits, probe=False)
-        reading = Reading(clock(), snap, resources.classify(snap, cfg.limits))
-        return plain_line(reading, running_of(rows), limit_of(cfg, reading), now=clock())
+        rep = limits.report(cfg, run, snap=snap)
+        reading = Reading(clock(), snap, resources.classify(snap, cfg.limits), rep.count.total, rep.limit)
+        return plain_line(reading, rep.count.total, rep.limit, now=clock())
     except Exception:  # noqa: BLE001  a reading that fails is no line
         return ""

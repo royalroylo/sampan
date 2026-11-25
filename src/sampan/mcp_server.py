@@ -924,13 +924,25 @@ class Server:
 
     def sample_resources(self):
         """Keep resources.json fresh (the previous reading a CLI check compares with): one stat per round, and a sample
-        only when the file is older than resources.STALE_S: the first of the machine's servers to see it stale takes it."""
+        only when the file is older than resources.STALE_S: the first of the machine's servers to see it stale takes it.
+        A sample that fails (nothing readable, or the file cannot be written) is not tried again at once: it waits twice
+        as long each time, up to 5 minutes (23 servers must not each run sysctl and vm_stat every 3 seconds)."""
         if not (self.cfg.limits.pressure_guard or self.cfg.limits.max_sessions == "auto"):
+            return
+        backoff = getattr(self, "res_backoff", None)
+        if backoff is None:
+            backoff = self.res_backoff = resources.Backoff()
+        if not backoff.ready():
             return
         age = resources.state_age(self.cfg.state_dir)
         if age is not None and age < resources.STALE_S:
             return
-        resources.snapshot(self.run, self.cfg.state_dir, self.cfg.limits, probe=False)
+        snap = resources.snapshot(resources.with_timeout(self.run), self.cfg.state_dir, self.cfg.limits, probe=False)
+        written = resources.state_age(self.cfg.state_dir)
+        if resources.usable(snap) and written is not None and written < resources.STALE_S:
+            backoff.ok()
+        else:
+            backoff.failed()
 
     def _watch(self, interval):
         while not self._stop.wait(interval):

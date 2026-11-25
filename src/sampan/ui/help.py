@@ -49,7 +49,7 @@ KEY_GROUPS = [
 # what the line at the right end of the list's separator says (not keys: the page appends it, FOOTER ignores it)
 GAUGE_GROUP = ("右下角的資源列", [
         ("◆", "總燈：只看記憶體。紅＝新開、接回會被擋（按 y 才硬開）；黃＝偏緊；綠＝正常"),
-        ("壓縮／swap", "黃：壓縮 >30%／swap ≥25%；偏高：壓縮 >40%／swap ≥45%（要同時在寫出 swap 才算紅）"),
+        ("壓縮／swap", "黃：壓縮 >30%／swap ≥25%；偏高：壓縮 >40%／swap ≥45%。紅＝偏高而且正在寫出 swap、兩者同時偏高、或寫出後 10 分鐘內仍偏高；可用記憶體 <15% 也是紅"),
         ("負載", "每核 5 分鐘負載，>1 黃、>2 紅；只上色，不影響總燈和擋不擋"),
         ("執行中 a/b", "執行中數量／上限；超過寫 a/b!（只警告，不變紅）。`?` 表示讀不到或讀數太舊"),
     ])

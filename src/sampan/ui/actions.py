@@ -480,9 +480,11 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
            adopt_fn=adopt_mod.cmd_adopt, adopt_picker_fn=None, save_fn=save_mod.cmd_save, loop=False,
            attach_fn=None, choose_dir_fn=None, updater=None, update_fn=update_mod.do_update, argv=(), prompt_fn=None, plugins_fn=None,
            profiles_fn=None, set_cfg_fn=None, dispatches_fn=None, choose_folder_fn=None, restart_fn=None,
-           detach_fn=None, typeahead_fn=None, notices_fn=None, resource_line_fn=None):
+           detach_fn=None, typeahead_fn=None, notices_fn=None, resource_line_fn=None, limit_override=True):
     """resource_line_fn(rows) -> str: the plain-text list prints this line before each listing (the curses screen draws it
     itself); None = none.
+    limit_override: whether a person may answer y to a refusal of the session limit here. False (an agent drives this
+    screen, or there is no terminal): no question is asked and a refusal stands.
     typeahead_fn() drops the keys typed while an action ran (curses: CursesScreen.drop_typeahead).
     dispatches_fn(ask=…) is the dispatch list for D (curses: CursesScreen.dispatches); when None, the dispatches are printed.
     picker_fn(rows, current) returns (action, list of names); when None, use the plain-text menu where a number is typed.
@@ -733,7 +735,7 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
             rc, go = 1, None
         else:
             _refresh()  # picker_fn waits for keys: the config may have been edited elsewhere meanwhile
-            kw, want = {"ask_limit": _ask_limit}, []  # a person is at this screen: a refusal may be answered y
+            kw, want = ({"ask_limit": _ask_limit} if limit_override else {}), []  # a person at this screen may answer y
             if prompt_fn is not None:
                 on_prompt, want = recording(prompt_fn)
                 kw["on_prompt"] = on_prompt

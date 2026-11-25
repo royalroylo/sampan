@@ -54,23 +54,25 @@ class CliTest(unittest.TestCase):
 
     def test_ui_on_a_terminal_uses_one_curses_screen(self):
         with mock.patch("sampan.ui.curses_ui", return_value=0) as cu, mock.patch("sampan.ui.cmd_ui") as ui, \
-                mock.patch("sampan.update.Checker.start") as start, \
+                mock.patch("sampan.update.Checker.start") as start, mock.patch("sampan.cli._can_override", return_value=True), \
                 mock.patch("sys.stdin.isatty", return_value=True), mock.patch("sys.stdout.isatty", return_value=True):
             self.assertEqual(cli.main(["ui"]), 0)
         self.assertEqual(cu.call_count, 1)
         self.assertEqual(ui.call_count, 0)
         self.assertEqual(start.call_count, 1)  # background new-version check (replaced here, no network)
         self.assertIsNotNone(cu.call_args.kwargs["updater"])
+        self.assertIs(cu.call_args.kwargs["limit_override"], True)
 
     def test_ui_on_a_terminal_gets_a_daemon_watcher_plain_does_not(self):
         from sampan.ui.daemon_watch import DaemonWatcher
         with mock.patch("sampan.ui.curses_ui", return_value=0) as cu, mock.patch("sampan.update.Checker.start"), \
+                mock.patch("sampan.cli._can_override", return_value=True), \
                 mock.patch("sampan.ui.daemon_watch.DaemonWatcher.start") as wstart, \
                 mock.patch("sys.stdin.isatty", return_value=True), mock.patch("sys.stdout.isatty", return_value=True):
             cli.main(["ui"])
         self.assertIsInstance(cu.call_args.kwargs["watcher"], DaemonWatcher)
         self.assertEqual(wstart.call_count, 0)  # curses_ui starts it (replaced here): no thread in this test
-        with mock.patch("sampan.ui.cmd_ui", return_value=0) as ui, \
+        with mock.patch("sampan.ui.cmd_ui", return_value=0) as ui, mock.patch("sampan.cli._can_override", return_value=True), \
                 mock.patch("sampan.ui.daemon_watch.DaemonWatcher.__init__") as init:
             cli.main(["ui", "--plain"])
         self.assertNotIn("watcher", ui.call_args.kwargs)

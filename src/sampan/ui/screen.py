@@ -623,8 +623,11 @@ class CursesScreen:
         w = self.resource_watcher
         if w is None or self.cfg is None or not self.cfg.resource_bar:
             return None
-        reading, running = w.latest, resource_bar.running_of(rows)
-        limit = resource_bar.limit_of(self.cfg, reading)
+        reading = w.latest
+        if reading is not None and reading.running is not None:  # limits.count at the reading's moment: what `new` counts
+            running, limit = reading.running, reading.limit
+        else:  # not counted (yet): the list's own running rows
+            running, limit = resource_bar.running_of(rows), resource_bar.limit_of(self.cfg, reading)
         return lambda width: resource_bar.gauge(reading, running, limit, width, now=w.clock())
 
     def _account_lines(self, rows):

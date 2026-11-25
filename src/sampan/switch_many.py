@@ -85,7 +85,7 @@ def _names(cfg, refs, folder, out):
 
 def cmd_switch_many(cfg, run, out, ask, refs, profile, *, folder=None, from_profile=None, dry_run=False, yes=False,
                     own_pane=None, on_prompt=None, switch_fn=session_run.cmd_switch, status_fn=status_rows,
-                    no_launch=False):
+                    no_launch=False, over_limit=False):
     """ask(prompt) answers the confirmation; None = not interactive (then yes is required). Returns 0 when everything
     switched or was skipped, 1 when a switch failed, 2 for wrong input."""
     if profile not in cfg.profiles:
@@ -132,6 +132,8 @@ def cmd_switch_many(cfg, run, out, ask, refs, profile, *, folder=None, from_prof
             results.append((name, "略過", "開始前變忙了"))
             continue
         extra = {"no_launch": True} if no_launch else {}
+        if over_limit:
+            extra["over_limit"] = True
         rc = switch_fn(cfg, run, out, name, profile, own_pane=own_pane, on_prompt=on_prompt, warn_gap=False, **extra)
         if rc == 0:
             results.append((name, "已換", f"{profile}（沒啟動）" if no_launch else profile))

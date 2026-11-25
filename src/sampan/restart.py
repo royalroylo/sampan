@@ -124,9 +124,11 @@ def cmd_restart(cfg, run, out, ask, plan, *, own_pane=None, on_prompt=None, stop
     worst = 0
     if plan.restart:
         limits.hold_places(cfg, plan.restart)  # a `new` while these stop must not take their places
-        worst = stop_fn(cfg, run, out, names=tuple(plan.restart), stopped=s, left=left, why=why,
-                        own_pane=own_pane, timeout=90)
-        limits.let_go(cfg, left)
+        try:
+            worst = stop_fn(cfg, run, out, names=tuple(plan.restart), stopped=s, left=left, why=why,
+                            own_pane=own_pane, timeout=90)
+        finally:  # whatever did not stop (not found, an early return, an error) keeps running: its place is not needed
+            limits.let_go(cfg, [n for n in plan.restart if n not in s])
     again = tuple(s) + tuple(n for n in plan.resume if n not in s)
     if again:
         worst = max(worst, restore_fn(cfg, run, out, ask, names=again, confirm=False, on_prompt=on_prompt,

@@ -150,6 +150,40 @@ def read_raw(run, *, platform=None, proc_root="/proc", load=None, ncpu=None):
     return f
 
 
+def with_timeout(run, seconds=2):
+    """run, but every command it starts is given up after `seconds` (a stuck sysctl or vm_stat must never stall a
+    watcher, the screen or a check)."""
+    return lambda args, **kw: run(args, **{**kw, "timeout": seconds})
+
+
+def usable(snap):
+    """Whether a reading carries what the memory light needs (RAM and the Swapouts counter): a machine where sysctl or
+    vm_stat fails gives readings that are all unknown, and sampling it again at once would only spawn them again."""
+    return snap.ram is not None and snap.swapouts is not None
+
+
+class Backoff:
+    """Waiting longer after each sample that failed (could not be read, or could not be written to the state file):
+    base × 2^(n-1) seconds, at most `cap` (5 minutes). One success starts over. In memory, per process."""
+
+    def __init__(self, base=STALE_S, cap=300, clock=time.monotonic):
+        self.base, self.cap, self.clock = base, cap, clock
+        self.failures, self.next_at = 0, 0.0
+
+    def ready(self):
+        return self.clock() >= self.next_at
+
+    def delay(self):
+        return 0 if not self.failures else min(self.cap, self.base * 2 ** (self.failures - 1))
+
+    def ok(self):
+        self.failures, self.next_at = 0, 0.0
+
+    def failed(self):
+        self.failures += 1
+        self.next_at = self.clock() + self.delay()
+
+
 # --- the state file ----------------------------------------------------------------------------------------------
 
 def _load_state(state_dir):
@@ -202,7 +236,7 @@ def _write_state(state_dir, sample, red, boot, now):
     path = Path(state_dir) / STATE_FILE
     try:
         fsutil.private_dir(path.parent)
-        with open(path.with_name("resources.lock"), "a") as lk:
+        with os.fdopen(os.open(path.with_name("resources.lock"), os.O_WRONLY | os.O_CREAT, fsutil.PRIVATE_FILE), "w") as lk:
             fcntl.flock(lk.fileno(), fcntl.LOCK_EX)
             try:
                 samples, old_red, old_boot = _load_state(state_dir)

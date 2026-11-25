@@ -47,7 +47,6 @@
 | 看派工、取消還沒送出的 | `D` | 列出派工（編號、從、給、狀態、建立時間、原因，新的在上）；游標移到排隊中的按 `x`，在畫面底部問確定後取消；已送出、等回覆的按 `x` 問確定後不再等回覆，結果是「寄件者已取消」（訊息收不回）；已結束的只會說明為什麼不能取消。沒有派工時只顯示「沒有派工」。有排隊或等回覆的派工時，清單下方會多一行 `派工：N 排隊、M 等回覆（D 看清單）`；畫面開著時 sampan 每 3 秒在背景推進這些派工（送出、讀回覆、補發完成或失敗通知）；離開畫面時若正好在送，會等它送完（最多約 35 秒，畫面會寫「等派工送完再離開…」） |
 | 管理 plugin 與 marketplace 來源 | `p` | 進到 plugin 管理畫面，見下面「plugin 管理畫面」 |
 | 立刻存一次登記表 | `w` | 平常每 5 分鐘會自動存（畫面底部的按鍵說明放不下就沒列，照樣能用，按 `?` 看全部） |
-| 看同時執行的數量與記憶體 | `sampan limits [calibrate]`（唯讀）；`sampan status` 表尾也有一行。見「數量上限與記憶體紅燈」 |
 | 更新 sampan | `U`（有新版時按鍵說明上面會出現「有新版 v…（目前 …），按 U 更新」） | 在畫面底部問確定，跑 `uv tool upgrade sampan`（版本沒變再 `uv tool install --reinstall git+https://github.com/royalroylo/sampan@v<最新版>`），輸出顯示在訊息區；成功後自動重新開啟 sampan 回到清單，失敗就留在清單。不知道有新版時，`U` 會先當下重新查一次（不看快取）；仍是最新版（或查不到）只會告知，不會問；要重新安裝請用 `sampan update --force` |
 
 **選目錄畫面**（`n`、`m`）：左邊是目前目錄底下的資料夾，右邊是「最近用過」的目錄（登記表裡用的 session 多的在前），游標那個目錄裡已經有 session 時會列出來；終端機不到 100 欄時只顯示左邊。
@@ -207,6 +206,7 @@ Claude Code 只在狀態列指令的輸入裡提供 5h／週額度，所以要�
 | 情境 | 指令 |
 |---|---|
 | 看狀況 | `sampan status`、`sampan doctor`（第一行是 sampan 版本與最新版）。有 retired 的 session 時 `status` 多一欄「登記」（`active`／`retired`，retired 但還在跑的寫 `retired ⚠` 並在表尾列出）；「狀態」欄只講有沒有在跑，沒有 retired 時輸出和以前一樣 |
+| 看同時執行的數量與記憶體 | `sampan limits [calibrate]`（唯讀）；`sampan status` 表尾也有一行。見「數量上限與記憶體紅燈」 |
 | 更新 sampan | `sampan update [--yes] [--force]`：當下查最新版（不看快取），有新版就問要不要更新；`--force` 已是最新也重新安裝；`--yes` 不問。不需要設定檔，更新完直接結束 |
 | 互動畫面 | `sampan`（等於 `sampan ui`）：見上面「怎麼用」。tmux 裡選了會切過去、sampan 留在原 pane；tmux 外會在前景 attach，detach 後回到清單。`sampan ui --plain` 改用輸入編號，規則相同 |
 | 開新的工作視窗 | `sampan new <名稱> <claude:profile｜profile｜codex> <目錄>`（名稱不要用 `.`、`:`、換行或控制字元，也不能是「終端機」或以「未登記的 session」開頭；`rename`、`adopt` 同規則） |

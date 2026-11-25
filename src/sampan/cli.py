@@ -370,6 +370,12 @@ def _warn_limits(cfg, run, out):
         pass
 
 
+def _can_override(cfg, run):
+    """Whether a refusal of the session limit may be answered with y at this screen: a person at a terminal (stdin and
+    stdout are ttys) and not an agent's shell call. `printf y | sampan ui --plain` from an agent is neither."""
+    return bool(sys.stdin and sys.stdin.isatty() and sys.stdout.isatty()) and not _run_by_agent(cfg, run)
+
+
 def _over_limit(cfg, run, args, out):
     """The value of --over-limit, or None (and why) when an agent asked for it: only a person at a terminal may override.
     Looks at who runs the command, not at [mcp] confirm. A guard against accidents, not a security boundary."""
@@ -672,9 +678,13 @@ def _switch_many(cfg, run, out, args, refs):
         return 2
     tty = sys.stdin.isatty() and sys.stdout.isatty()
     on_prompt, want = _prompt_fn()
+    over = _over_limit(cfg, run, args, out)
+    if over is None:
+        return 2
     rc = cmd_switch_many(cfg, run, out, input if tty else None, refs, args.profile, folder=args.folder,
                          from_profile=args.from_profile, dry_run=args.dry_run, yes=args.yes,
-                         own_pane=os.environ.get("TMUX_PANE"), on_prompt=on_prompt, no_launch=args.no_launch)
+                         own_pane=os.environ.get("TMUX_PANE"), on_prompt=on_prompt, no_launch=args.no_launch,
+                         over_limit=over)
     return _go_in(run, want, rc)
 
 
@@ -725,6 +735,7 @@ def _dispatch(cfg, args):
             from .ui.resource_bar import ResourceWatcher
             from .update import show_pending_notices
             return curses_ui(cfg, run, out, **where, updater=checker, argv=argv, watcher=make_watcher(cfg, run),
+                             limit_override=_can_override(cfg, run),
                              dispatch_watcher=make_dispatch_watcher(cfg, run), detach_fn=detach_fn,
                              resource_watcher=ResourceWatcher(cfg, run) if cfg.resource_bar else None,
                              notices_fn=lambda o: show_pending_notices(cfg, run, o))
@@ -735,7 +746,7 @@ def _dispatch(cfg, args):
         from .ui.resource_bar import plain_line_now
         return cmd_ui(cfg, run, out, **where, picker_fn=None, restore_picker_fn=None, adopt_picker_fn=None, loop=True,
                       attach_fn=subprocess.call, updater=checker, argv=argv, prompt_fn=plain_prompt(out, input),
-                      detach_fn=detach_fn,
+                      detach_fn=detach_fn, limit_override=_can_override(cfg, run),
                       resource_line_fn=lambda rows: plain_line_now(cfg, run, rows))
     if cmd == "claude":
         from .launch import cmd_claude, disabled_problem

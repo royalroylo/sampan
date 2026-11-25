@@ -1,8 +1,10 @@
 """Second round: what the first review found (lock purity, the real send --restore paths, the MCP sampler, owners)."""
 import dataclasses
+import tempfile
 import threading
 import unittest
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -304,3 +306,186 @@ class ConfigTolerance(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AgentCannotAnswerY(unittest.TestCase):
+    """`printf 'y\\n' | sampan ui --plain` from an agent must not get past the limit."""
+
+    def cli_kwargs(self, *, agent, tty):
+        import io
+        import sys
+        from contextlib import redirect_stdout
+
+        from sampan import cli
+        cfg = make_env_for_cli()
+        seen = {}
+        class Tty(io.StringIO):
+            def isatty(self):
+                return tty
+        stdin = Tty("y\n")
+        with redirect_stdout(Tty()), mock.patch("sampan.cli.load_config", return_value=cfg), \
+                mock.patch("sampan.migrate.ensure", return_value=0), mock.patch("sampan.cli._upgrade_notice"), \
+                mock.patch("sampan.cli._run_by_agent", return_value=agent), \
+                mock.patch("sampan.cli._current_tmux_session", return_value=None), \
+                mock.patch("sampan.runner.run", FakeRunner(strict=True)), \
+                mock.patch("sampan.ui.cmd_ui", side_effect=lambda *a, **k: seen.update(k) or 0), \
+                mock.patch.object(sys, "stdin", stdin):
+            cli.main(["ui", "--plain"])
+        return seen
+
+    def test_an_agent_gets_no_question_even_on_a_terminal(self):
+        self.assertFalse(self.cli_kwargs(agent=True, tty=True)["limit_override"])
+
+    def test_no_terminal_no_question_even_for_a_person(self):
+        self.assertFalse(self.cli_kwargs(agent=False, tty=False)["limit_override"])
+
+    def test_a_person_at_a_terminal_may(self):
+        self.assertTrue(self.cli_kwargs(agent=False, tty=True)["limit_override"])
+
+    def test_end_to_end_the_refusal_stands_when_y_is_piped_in(self):
+        from sampan.ui.actions import cmd_ui
+        for allowed, launched in ((True, 1), (False, 0)):
+            w = World(self, running=5, mem=RED, stopped=("z1",))
+            rows = [status_row("z1", State.STOPPED)]
+            answers = iter(["1"])
+            asked = []
+
+            def ask(prompt, answers=answers, asked=asked):
+                if "仍要開" in prompt:
+                    asked.append(prompt)
+                    return "y"
+                return next(answers)
+            out = []
+            cmd_ui(w.cfg, w.runner(), out.append, ask, rows_fn=lambda c, r, rows=rows: rows,
+                   exec_fn=lambda *a: None, restore_fn=restore.cmd_restore, loop=False, limit_override=allowed)
+            self.assertEqual(len(w.launched), launched, (allowed, out))
+            self.assertEqual(len(asked), 1 if allowed else 0)
+            if not allowed:
+                self.assertTrue(any("--over-limit" in x for x in out), out)
+
+    def test_batch_switch_text_does_not_promise_a_y_and_the_flag_reaches_it(self):
+        w = World(self, running=5, mem=RED, stopped=("z1",))
+        out = []
+        self.assertFalse(limits.gate(w.cfg, w.runner(), out.append, name="z1", profile="alice"))
+        text = "\n".join(out)
+        self.assertIn("--over-limit", text)
+        self.assertIn("單一 session", text)
+        self.assertNotIn("或在畫面上按 y", text)
+        from sampan import switch_many
+        seen = []
+        with mock.patch("sampan.switch_many.status_rows", return_value=[status_row("z1", State.STOPPED)]):
+            switch_many.cmd_switch_many(w.cfg, w.runner(), out.append, None, ["z1"], "work", yes=True,
+                                        over_limit=True, own_pane=None,
+                                        switch_fn=lambda *a, **k: seen.append(k) or 0)
+        self.assertTrue(seen and seen[0].get("over_limit"))
+
+
+def make_env_for_cli():
+    from tests.helpers import make_env
+    return make_env(Path(tempfile.mkdtemp()))
+
+
+class Backoffs(unittest.TestCase):
+    def test_backoff_doubles_to_five_minutes_and_one_success_resets(self):
+        t = [0.0]
+        b = resources.Backoff(clock=lambda: t[0])
+        self.assertTrue(b.ready())
+        delays = []
+        for _ in range(6):
+            b.failed()
+            delays.append(b.delay())
+            self.assertFalse(b.ready())
+            t[0] = b.next_at
+            self.assertTrue(b.ready())
+        self.assertEqual(delays, [30, 60, 120, 240, 300, 300])
+        b.ok()
+        self.assertEqual((b.delay(), b.ready()), (0, True))
+
+    def test_a_machine_that_cannot_be_read_is_not_asked_every_round(self):
+        w = World(self, running=2)
+        r = FakeRunner(strict=True)  # sysctl and vm_stat both fail (no rule: unreadable)
+        t = [0.0]
+        srv = SimpleNamespace(cfg=w.cfg, run=r, res_backoff=resources.Backoff(clock=lambda: t[0]))
+        for _ in range(5):  # five 3-second rounds
+            Server.sample_resources(srv)
+            t[0] += 3
+        spawns = len([c for c in r.calls if c["args"][0] in ("sysctl", "vm_stat")])
+        self.assertEqual(spawns, 2)  # one try (two spawns), then it waits
+        t[0] += 40
+        Server.sample_resources(srv)
+        self.assertEqual(len([c for c in r.calls if c["args"][0] in ("sysctl", "vm_stat")]), 4)
+        t[0] += 40  # only 40 s after the second failure: it now waits 60
+        Server.sample_resources(srv)
+        self.assertEqual(len([c for c in r.calls if c["args"][0] in ("sysctl", "vm_stat")]), 4)
+        self.assertTrue(all(c["timeout"] == 2 for c in r.calls))
+
+    def test_a_state_file_that_cannot_be_written_counts_as_a_failure_too(self):
+        w = World(self, running=2)
+        t = [0.0]
+        srv = SimpleNamespace(cfg=w.cfg, run=w.runner(), res_backoff=resources.Backoff(clock=lambda: t[0]))
+        with mock.patch.object(resources, "_write_state", lambda *a, **k: None):
+            Server.sample_resources(srv)
+        self.assertEqual(srv.res_backoff.failures, 1)
+        Server.sample_resources(srv)  # not ready: nothing
+        self.assertEqual(srv.res_backoff.failures, 1)
+        t[0] += 31
+        Server.sample_resources(srv)  # the file can be written now
+        self.assertEqual(srv.res_backoff.failures, 0)
+
+    def test_the_screen_watcher_backs_off_too(self):
+        from sampan.ui import resource_bar as rb
+        w = World(self, running=2)
+        t = [0.0]
+        watcher = rb.ResourceWatcher(w.cfg, FakeRunner(strict=True), clock=lambda: t[0])
+        for _ in range(3):
+            watcher.step()
+        self.assertGreater(watcher.backoff.delay(), rb.FAST_S)
+        self.assertEqual(watcher.backoff.failures, 3)
+
+    def test_plain_line_spawns_have_the_two_second_timeout(self):
+        from sampan.ui import resource_bar as rb
+        w = World(self, running=2)
+        r = w.runner()
+        rb.plain_line_now(w.cfg, r, [])
+        self.assertTrue(r.calls and all(c["timeout"] == 2 for c in r.calls))
+
+    def test_the_lock_file_is_private(self):
+        d = tempfile.mkdtemp()
+        resources._write_state(d, {"t": 1.0, "swapouts": 1, "boot": 1.0}, None, 1.0, 1.0)
+        self.assertEqual((Path(d) / "resources.lock").stat().st_mode & 0o777, 0o600)
+
+
+class RestartLetsGo(unittest.TestCase):
+    def test_an_early_return_or_an_exception_releases_every_place(self):
+        from sampan import restart
+        for how in ("early", "raises"):
+            w = World(self, running=3)
+
+            def stop_fn(cfg, run, out, **kw):
+                if how == "raises":
+                    raise OSError("tmux gone")
+                return 2  # e.g. nothing found: stopped and left stay empty
+            plan = restart.RestartPlan(["s0", "s1"], [], [])
+            try:
+                restart.cmd_restart(w.cfg, w.runner(), lambda _l: None, lambda _p: "", plan, stop_fn=stop_fn,
+                                    restore_fn=lambda *a, **k: 0)
+            except OSError:
+                pass
+            self.assertEqual(limits.read_reservations(w.cfg.state_dir), [], how)
+
+
+class Docs(unittest.TestCase):
+    def test_the_command_row_is_in_the_command_table_in_both_languages(self):
+        root = Path(__file__).resolve().parent.parent / "docs"
+        for path, start, end, row in ((root / "usage.md", "## 指令一覽", "## 資料夾", "`sampan limits [calibrate]`"),
+                                      (root / "en" / "usage.md", "## Commands", "## Folders", "`sampan limits [calibrate]`")):
+            text = path.read_text()
+            section = text[text.index(start):text.index(end)]
+            self.assertIn(row, section, path)
+            self.assertEqual(text.count(row), 1, path)
+
+    def test_the_help_page_tells_the_red_conditions_as_the_code_does(self):
+        from sampan.ui.help import GAUGE_GROUP
+        text = " ".join(w for _k, w in GAUGE_GROUP[1])
+        for needle in ("同時偏高", "10 分鐘", "正在寫出", "<15%"):
+            self.assertIn(needle, text)

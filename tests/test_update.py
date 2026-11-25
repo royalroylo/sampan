@@ -719,7 +719,7 @@ class PendingNoticeTest(unittest.TestCase):
         with mock.patch("sampan.cli.load_config", return_value=self.cfg), \
                 mock.patch("sampan.migrate.ensure", return_value=0), \
                 mock.patch("sampan.update.after_update_notices", return_value=["重開 alpha-pm"]), \
-                mock.patch("sampan.ui.curses_ui", fake_ui), \
+                mock.patch("sampan.ui.curses_ui", fake_ui), mock.patch("sampan.cli._can_override", return_value=True), \
                 mock.patch("sampan.update.Checker"), \
                 mock.patch("sampan.ui.daemon_watch.make_watcher"), \
                 mock.patch("sampan.ui.dispatch_watch.make_dispatch_watcher"), \

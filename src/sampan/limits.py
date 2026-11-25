@@ -419,8 +419,8 @@ def give_back(cfg, name, outcome):
         release(cfg.state_dir, name, pid=outcome.reserved[0], start=outcome.reserved[1])
 
 
-OVER_LIMIT_HELP = ("一定要開：在你自己的終端機加 --over-limit，或在畫面上按 y"
-                   "（如果是在 Claude 的 ! 裡跑的，請改在畫面上按 y，或另開一個終端機視窗跑）")
+OVER_LIMIT_HELP = ("一定要開：在你自己的終端機加 --over-limit（agent 呼叫不能用；如果是在 Claude 的 ! 裡跑的，"
+                   "請改在畫面上對單一 session 操作，被擋時按 y）")
 
 
 def gate(cfg, run, out, **kw):
@@ -456,7 +456,8 @@ def _gate(cfg, run, out, *, name, profile, adds=1, replacing=False, over_limit=F
         retry = check_fn(cfg, run, name=name, profile=profile, adds=adds, replacing=replacing, over_limit=True,
                          write=not dry_run, ttl=ttl, **kw)
         return retry.ok
-    out("   " + OVER_LIMIT_HELP)
+    if ask is None:  # nobody here can say y: only the flag, in a terminal of your own, is left
+        out("   " + OVER_LIMIT_HELP)
     return False
 
 

@@ -124,17 +124,33 @@ class Render(unittest.TestCase):
         self.assertGreater(sep.find("◆"), sep.find("┴"))
 
 
+def memory_runner():
+    r = FakeRunner(strict=True)
+    r.on(["sysctl"], cp(out=sysctl_out().replace("vm.swapusage: ", "")))
+    r.on(["vm_stat"], cp(out=VM.format(comp=406_693, outs=0)))
+    return r
+
+
+def counting_runner(claudes):
+    """memory_runner, plus one agent in a tmux pane and `claudes` more outside tmux."""
+    from tests.fakes import pane_line, ps_line
+    r = memory_runner()
+    ps = [ps_line(100, 1, "zsh", "-zsh"), ps_line(200, 100, "claude", "claude")]
+    ps += [ps_line(300 + i, 1, "claude", "claude --resume x") for i in range(claudes)]
+    r.on(["ps", "-A"], cp(out="\n".join(ps) + "\n"))
+    r.on(["tmux", "-u", "list-panes"], cp(out=pane_line("a", "%1", 100, "claude", "/c") + "\n"))
+    return r
+
+
 class Watcher(unittest.TestCase):
     def runner(self):
-        r = FakeRunner(strict=True)
-        r.on(["sysctl"], cp(out=sysctl_out().replace("vm.swapusage: ", "")))
-        r.on(["vm_stat"], cp(out=VM.format(comp=406_693, outs=0)))
-        return r
+        return memory_runner()
 
     def watcher(self, **kw):
         cfg = make_env(Path(tempfile.mkdtemp()))
         clock = {"t": 100.0}
         r = self.runner()
+        kw.setdefault("report_fn", lambda *a, **k: (_ for _ in ()).throw(OSError("no count in this test")))
         w = rb.ResourceWatcher(cfg, r, clock=lambda: clock["t"], snapshot_fn=kw.pop("snapshot_fn", None) or
                                (lambda run, sd, lim, **k: resources.snapshot(run, sd, lim, platform="darwin",
                                                                               load=lambda: (0, 1, 0), ncpu=10, **k)),
@@ -144,10 +160,21 @@ class Watcher(unittest.TestCase):
     def test_a_step_is_two_spawns_and_gives_a_reading(self):
         w, r, _ = self.watcher()
         self.assertTrue(w.step())
-        self.assertEqual(len(r.calls), 2)
+        self.assertEqual(len(r.calls), 2)  # the memory reading: two spawns
         self.assertEqual(sorted(c["args"][0] for c in r.calls), ["sysctl", "vm_stat"])
         self.assertTrue(all(c["timeout"] == rb.SPAWN_TIMEOUT_S for c in r.calls))
         self.assertAlmostEqual(w.latest.snap.compressor_pct, 0.3879, places=4)
+
+    def test_the_number_is_limits_count_one_ps_one_tmux_and_includes_agents_outside_tmux(self):
+        cfg = make_env(Path(tempfile.mkdtemp()))
+        r = counting_runner(2)
+        w = rb.ResourceWatcher(cfg, r, clock=lambda: 100.0, snapshot_fn=lambda run, sd, lim, **k: resources.snapshot(
+            run, sd, lim, platform="darwin", load=lambda: (0, 1, 0), ncpu=10, **k))
+        self.assertTrue(w.step())
+        self.assertEqual((w.latest.running, w.latest.limit), (3, 16))  # 1 in tmux + 2 outside: what `new` counts
+        spawns = sorted(c["args"][0] for c in r.calls)
+        self.assertEqual(spawns, ["ps", "sysctl", "tmux", "vm_stat"])  # the memory sample, one ps, one tmux
+        self.assertTrue(all(c["timeout"] == rb.SPAWN_TIMEOUT_S for c in r.calls))
 
     def test_interval_slows_after_five_minutes_without_a_key_and_a_key_brings_it_back(self):
         w, _, clock = self.watcher()
@@ -210,14 +237,10 @@ class Watcher(unittest.TestCase):
 class Shared(unittest.TestCase):
     def test_plain_line_uses_the_same_function(self):
         cfg = make_env(Path(tempfile.mkdtemp()))
-        r = FakeRunner(strict=True)
-        r.on(["sysctl"], cp(out=sysctl_out().replace("vm.swapusage: ", "")))
-        r.on(["vm_stat"], cp(out=VM.format(comp=406_693, outs=0)))
-        from tests.helpers import status_row
-        rows = [status_row("a"), status_row("b")]
-        line = rb.plain_line_now(cfg, r, rows)
+        r = counting_runner(1)
+        line = rb.plain_line_now(cfg, r, [])
         self.assertIn("壓縮 39%", line)
-        self.assertIn("執行中 2/", line)
+        self.assertIn("執行中 2/16", line)  # the rows are not what is counted: limits.count is
 
     def test_running_and_limit(self):
         from sampan.status import State
