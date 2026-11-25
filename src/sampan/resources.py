@@ -4,6 +4,7 @@ makes anything refuse.
 
 macOS: `sysctl` (one spawn) + `vm_stat` (one spawn) + os.getloadavg(). Linux: /proc. "Being written out" is the rate
 of Swapouts against the previous sample kept in `resources.json` (a CLI call alone has no previous sample)."""
+import fcntl
 import json
 import os
 import re
@@ -164,10 +165,14 @@ def _load_state(state_dir):
 
 
 def state_age(state_dir, now=None):
-    """Seconds since the state file was last written, None when there is none."""
+    """Seconds since the state file was last written (the time it records itself, so a clock given to the sampler
+    and the one the file used agree), None when there is none or it cannot be read."""
     try:
-        return (time.time() if now is None else now) - (Path(state_dir) / STATE_FILE).stat().st_mtime
-    except OSError:
+        at = json.loads((Path(state_dir) / STATE_FILE).read_text()).get("at")
+        if isinstance(at, bool) or not isinstance(at, (int, float)):
+            raise ValueError(at)
+        return (time.time() if now is None else now) - at
+    except (OSError, ValueError, AttributeError):
         return None
 
 
@@ -190,12 +195,28 @@ def rate_since(samples, now, boot, swapouts):
     return None
 
 
-def _write_state(state_dir, samples, red, boot, now):
+def _write_state(state_dir, sample, red, boot, now):
+    """Add one sample to the state file under its own lock: another process may have written since this one read, so
+    the file is read again inside the lock and only a sample newer than its last is appended (the red time is the later
+    of the two). A sampler that cannot write still reports what it read."""
+    path = Path(state_dir) / STATE_FILE
     try:
-        fsutil.atomic_write(Path(state_dir) / STATE_FILE, json.dumps(
-            {"samples": samples[-2:], "last_swapout_red_at": red, "boot": boot, "at": now}), mode=0o600)
+        fsutil.private_dir(path.parent)
+        with open(path.with_name("resources.lock"), "a") as lk:
+            fcntl.flock(lk.fileno(), fcntl.LOCK_EX)
+            try:
+                samples, old_red, old_boot = _load_state(state_dir)
+                if old_boot is not None and boot is not None and old_boot != boot:
+                    samples, old_red = [], None
+                if sample is not None and (not samples or sample["t"] > samples[-1]["t"]):
+                    samples = samples + [sample]
+                reds = [x for x in (red, old_red) if x is not None]
+                fsutil.atomic_write(path, json.dumps({"samples": samples[-2:], "last_swapout_red_at": max(reds, default=None),
+                                                      "boot": boot, "at": now}), mode=0o600)
+            finally:
+                fcntl.flock(lk.fileno(), fcntl.LOCK_UN)
     except OSError:
-        pass  # a sampler that cannot write still reports what it read
+        pass
 
 
 # --- classification ----------------------------------------------------------------------------------------------
@@ -295,8 +316,7 @@ def snapshot(run, state_dir, limits, *, now=None, platform=None, proc_root="/pro
                              f"swap {_pct(snap.swap_pct)}、level {snap.level}")
         age = state_age(state_dir, now)
         if new_red != red_at or age is None or age >= WRITE_EVERY:
-            kept = samples + [{"t": now, "swapouts": snap.swapouts, "boot": boot}]
-            _write_state(state_dir, kept, new_red, boot, now)
+            _write_state(state_dir, {"t": now, "swapouts": snap.swapouts, "boot": boot}, new_red, boot, now)
     return snap
 
 

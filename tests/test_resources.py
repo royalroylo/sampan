@@ -127,13 +127,39 @@ class Rate(unittest.TestCase):
 
     def test_state_file_written_at_most_every_30s(self):
         d = tempfile.mkdtemp()
+        path = Path(d) / "resources.json"
         self.sample(d, 100, 1000.0)
-        t0 = (Path(d) / "resources.json").stat().st_mtime
-        self.sample(d, 100, 1001.0)
+        self.sample(d, 100, 1001.0)  # 1 s later: not written
+        self.assertEqual([x["t"] for x in json.loads(path.read_text())["samples"]], [1000.0])
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.sample(d, 100, 1031.0)  # 31 s after the file was written: written, the second sample is kept
+        self.assertEqual([x["t"] for x in json.loads(path.read_text())["samples"]], [1000.0, 1031.0])
+
+    def test_two_processes_writing_never_lose_the_newer_sample_or_the_red_time(self):
+        d = tempfile.mkdtemp()
+        resources._write_state(d, {"t": 2000.0, "swapouts": 5, "boot": 1.0}, 1990.0, 1.0, 2000.0)
+        resources._write_state(d, {"t": 1500.0, "swapouts": 3, "boot": 1.0}, None, 1.0, 2001.0)  # an older writer, late
         data = json.loads((Path(d) / "resources.json").read_text())
-        self.assertEqual(len(data["samples"]), 1)
-        self.assertEqual((Path(d) / "resources.json").stat().st_mode & 0o777, 0o600)
-        self.assertGreaterEqual((Path(d) / "resources.json").stat().st_mtime, t0)
+        self.assertEqual([x["t"] for x in data["samples"]], [2000.0])
+        self.assertEqual(data["last_swapout_red_at"], 1990.0)
+
+    def test_two_threads_write_without_breaking_the_file(self):
+        import threading
+        d = tempfile.mkdtemp()
+        errors = []
+
+        def work(n):
+            try:
+                for i in range(30):
+                    resources._write_state(d, {"t": 1000.0 + n * 100 + i, "swapouts": i, "boot": 1.0}, None, 1.0, 5.0)
+            except Exception as e:  # noqa: BLE001
+                errors.append(e)
+        ts = [threading.Thread(target=work, args=(n,)) for n in range(4)]
+        [t.start() for t in ts]
+        [t.join() for t in ts]
+        self.assertEqual(errors, [])
+        json.loads((Path(d) / "resources.json").read_text())
+        self.assertEqual([p.name for p in Path(d).iterdir() if ".tmp-" in p.name], [])
 
     def test_corrupt_state_file(self):
         d = tempfile.mkdtemp()

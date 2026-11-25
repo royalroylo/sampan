@@ -18,7 +18,20 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import dispatch, folders, heartbeat, ids, inbox, limits, machine, remote, send, send_restore, session_run
+from . import (
+    dispatch,
+    folders,
+    heartbeat,
+    ids,
+    inbox,
+    limits,
+    machine,
+    remote,
+    resources,
+    send,
+    send_restore,
+    session_run,
+)
 from . import hubproto as hp
 from .procs import list_procs
 from .prompts import SKIP
@@ -710,7 +723,7 @@ class Server:
             model = model.strip()
             if problem := session_run.model_problem(model):
                 raise ToolError(problem)
-        checked = session_run.check_new(self.cfg, self.run, name, target, cwd)
+        checked = session_run.check_new(self.cfg, self.run, name, target, cwd, limit=True)
         if isinstance(checked, str):
             raise ToolError(checked)
         agent, cwd = checked[0], checked[2]
@@ -909,8 +922,22 @@ class Server:
             except (dispatch.DispatchError, RegistryError, OSError) as e:
                 _log(f"收件 {'、'.join(inbound)}：{e}")
 
+    def sample_resources(self):
+        """Keep resources.json fresh (the previous reading a CLI check compares with): one stat per round, and a sample
+        only when the file is older than resources.STALE_S: the first of the machine's servers to see it stale takes it."""
+        if not (self.cfg.limits.pressure_guard or self.cfg.limits.max_sessions == "auto"):
+            return
+        age = resources.state_age(self.cfg.state_dir)
+        if age is not None and age < resources.STALE_S:
+            return
+        resources.snapshot(self.run, self.cfg.state_dir, self.cfg.limits, probe=False)
+
     def _watch(self, interval):
         while not self._stop.wait(interval):
+            try:
+                self.sample_resources()
+            except Exception as e:  # noqa: BLE001  a reading that fails never stops the watcher
+                _log(f"記憶體取樣失敗：{e!r}")
             try:
                 self.watch_once()
             except Exception as e:  # noqa: BLE001  the watcher thread must outlive any one bad pass

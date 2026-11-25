@@ -12,7 +12,7 @@ from pathlib import Path
 
 from . import actionlog, codex_daemon, limits, steps
 from .claude_state import transcript_problem
-from .codex_state import _is_codex, find_rollout
+from .codex_state import _is_codex, codex_pid_in_pane, find_rollout
 from .observe import agent_sessions, live_by_pane
 from .procs import codex_resume_id, descendant_claude, list_procs
 from .prompts import ATTACH, SKIP, Relay
@@ -296,8 +296,10 @@ def _wait_up(run, pane_id, sleep, limit=60):
     for _ in range(limit):
         panes = tmux.panes()
         pane = next((p for p in panes or () if p.pane_id == pane_id), None)
-        if pane is not None and descendant_claude(list_procs(run), pane.pane_pid) is not None:
-            return True
+        if pane is not None:
+            procs = list_procs(run)
+            if descendant_claude(procs, pane.pane_pid) is not None or codex_pid_in_pane(procs, pane.pane_pid) is not None:
+                return True
         sleep(1)
     return False
 
@@ -426,7 +428,10 @@ def cmd_restore(cfg, run, out, ask, *, names=(), select_all=False, dry_run=False
     launched, serialnote = {}, []
     # an agent just launched has no process/session file yet, so re-observing cannot see it: ids started in this run are tracked separately
     started_ids = {}
-    for name in dict.fromkeys(picked):  # the result of picker_fn may contain duplicates
+    # the most recently active first: when the limit leaves room for only some, those are the ones that come back
+    order = sorted(dict.fromkeys(picked), key=lambda n: by_name[n].last.timestamp() if n in by_name and by_name[n].last
+                   else float("-inf"), reverse=True)
+    for name in order:  # the result of picker_fn may contain duplicates
         c = by_name.get(name)
         if c is None or c.skip:
             continue  # not a candidate, or already listed in skipped

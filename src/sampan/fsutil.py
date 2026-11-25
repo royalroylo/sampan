@@ -1,5 +1,6 @@
 import os
 import stat
+import threading
 from pathlib import Path
 
 
@@ -46,7 +47,7 @@ def atomic_write(path, text, *, mode=None, new_mode=None, encoding=None):
     old = stat.S_IMODE(target.stat().st_mode) if target.exists() else None
     final = mode if mode is not None else (old if old is not None else new_mode)
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_name(f".{target.name}.tmp-{os.getpid()}")
+    tmp = target.with_name(f".{target.name}.tmp-{os.getpid()}-{threading.get_ident()}")  # two threads of one process must not share it
     try:
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, PRIVATE_FILE if final is not None else 0o666)
         with os.fdopen(fd, "w", encoding=encoding) as fh:  # encoding None: the locale's default

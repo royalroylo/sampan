@@ -360,18 +360,43 @@ def restart_hint(counts):
         + "：按 R 立刻重開，其他鍵稍後"
 
 
+def _running_of(cfg, run, profile, own_pane):
+    """Names of the running Claude sessions of a profile that a restart may stop (not the pane sampan runs in)."""
+    try:
+        from .status import status_rows
+        return [r.name for r in status_rows(cfg, run, activity=False) if r.agent == "claude" and r.profile == profile
+                and r.state is State.RUNNING and not (own_pane and r.pane == own_pane)]
+    except Exception:  # noqa: BLE001  not knowing the names only means no place is held
+        return []
+
+
+def _memory_red(cfg, run):
+    try:
+        from . import limits as _limits
+        rep = _limits.report(cfg, run)
+        return rep.memory == "red" and cfg.limits.pressure_guard
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def restart_profiles(cfg, run, out, ask, profiles, *, own_pane=None, on_prompt=None, stop_fn=None, restore_fn=None):
     """Stop idle sessions of the profiles and restore exactly those; busy / own-pane ones are listed once. Returns the worst rc."""
     out = actionlog.tee(cfg, "重開", out)
     on_prompt = actionlog.logged_prompt(cfg, "重開", on_prompt)
-    from . import restore, session_run  # lazy: session_run imports a lot
+    from . import limits, restore, session_run  # lazy: session_run imports a lot
     stop_fn = stop_fn or session_run.cmd_stop
     restore_fn = restore_fn or restore.cmd_restore
     worst, left_all, why = 0, [], {}
     for p in profiles:
         s, left = [], []
+        held = _running_of(cfg, run, p, own_pane)
+        if held:
+            limits.hold_places(cfg, held)  # a `new` while these stop must not take their places
+            if _memory_red(cfg, run):
+                out("記憶體紅燈：重開會一個一個來；要晚一點再按 R 也可以")
         worst = max(worst, stop_fn(cfg, run, out, profile=p, own_pane=own_pane, stopped=s, left=left, why=why,
                                    timeout=90))
+        limits.let_go(cfg, [n for n in held if n not in s])  # the ones that kept running need no place
         if s:
             worst = max(worst, restore_fn(cfg, run, out, ask, names=tuple(s), confirm=False, on_prompt=on_prompt,
                                           replacing=frozenset(s)))

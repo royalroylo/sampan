@@ -109,9 +109,12 @@ def name_problem(name):
     return None
 
 
-def check_new(cfg, run, name, target, cwd):
-    """The checks `sampan new` (and the MCP new_session tool, before it asks) runs before creating anything.
-    (agent, profile, resolved cwd) — profile "" for Codex — or why not (str, without ❌)."""
+def check_new(cfg, run, name, target, cwd, *, limit=False):
+    """The checks `sampan new` (and the MCP new_session tool, first thing once it is called: the client's own
+    permission prompt came before the call, so nothing here can come before it) runs before it creates anything.
+    (agent, profile, resolved cwd) — profile "" for Codex — or why not (str, without ❌).
+    limit: also the session limit (a read-only look, no place is kept): the MCP tool asks it first, and cmd_new asks
+    again, with the place, right before it creates anything."""
     problem = name_problem(name)
     if problem:
         return problem
@@ -144,6 +147,13 @@ def check_new(cfg, run, name, target, cwd):
         return f"目錄（解析後）不能含換行或控制字元：{resolved!r}"
     if not Path(resolved).is_dir():
         return f"目錄不存在：{resolved}"
+    if limit:
+        try:
+            o = limits.check(cfg, run, name=name, profile=profile or cfg.codex.profile, write=False, probe=False)
+        except Exception:  # noqa: BLE001  a reading that fails never refuses
+            o = None
+        if o is not None and not o.ok:
+            return o.lines(name)[0] + "；請使用者在終端機加 --over-limit，或到畫面上處理"
     return agent, profile, resolved
 
 

@@ -42,7 +42,8 @@ class Config(unittest.TestCase):
     def test_errors(self):
         for text, word in (("[limits]\nenforce = 'off'\n", "count_mode"), ("[limits]\nmin_sessions = 3\n", "min_auto"),
                            ("[limits]\ncount_mode = 'x'\n", "count_mode"), ("[limits]\nmax_sessions = -1\n", "max_sessions"),
-                           ("[limits]\nfoo = 1\n", "foo"), ("[limits.owners]\nreserve_per_owner = 3\n", "reserve_per_owner"),
+                           ("[limits]\nreserve_gb = nan\n", "reserve_gb"), ("[limits]\nreserve_gb = inf\n", "reserve_gb"),
+                           ("[limits.owners]\nreserve_per_owner = 3\n", "reserve_per_owner"),
                            ("[limits.owners]\na = ['alice']\nb = ['alice']\n", "alice"),
                            ("[limits]\npressure_guard = 1\n", "pressure_guard")):
             with self.subTest(text), self.assertRaises(ConfigError) as cm:
@@ -181,7 +182,8 @@ class Check(unittest.TestCase):
         ps = [ps_line(100 + i, 1, "zsh", "-zsh") + "" for i in range(running)]
         ps = [ps_line(200 + i, 100 + i, "claude", "claude") for i in range(running)] + ps
         panes = [pane_line(f"s{i}", f"%{i}", 100 + i, "claude", "/c") for i in range(running)]
-        r = FakeRunner()
+        r = FakeRunner(strict=True)
+        r.on(["ps", "-o", "lstart="], cp(out="Wed Nov 25 18:00:00 2026\n"))
         r.on(["ps", "-A"], cp(out="\n".join(ps) + "\n"))
         r.on(["tmux"], cp(out="\n".join(panes) + "\n"))
         r.on(["sysctl"], cp(out=sysctl_out(swap_used=swap).replace("vm.swapusage: ", "")))
@@ -233,8 +235,8 @@ class Check(unittest.TestCase):
 
     def test_nothing_readable_never_refuses(self):
         cfg, _ = self.build(2)
-        out = limits.check(cfg, FakeRunner(), name="x", profile="alice", platform="darwin", env={})
-        self.assertTrue(out.ok)
+        gate = limits.Gate(cfg, FakeRunner(strict=True), lambda _l: None, "x", "alice")  # nothing answers at all
+        self.assertTrue(gate.passed)
 
     def test_pressure_guard_off_just_shows(self):
         cfg, r = self.build(5, comp=700_000, swap="8400M", toml=TOML + "\n[limits]\npressure_guard = false\n")

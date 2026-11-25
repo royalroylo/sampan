@@ -257,7 +257,7 @@ def phase_names(cfg):
     """Dispatch targets being reattached right now (phase launching / starting): a read-only look at the database,
     never the dispatches lock."""
     try:
-        items = dispatch.load(cfg.state_dir)
+        items = dispatch.load(cfg.state_dir, ids=())  # live messages only: a phase belongs to a queued one
     except dispatch.DispatchError:
         return []
     names = []
@@ -288,6 +288,8 @@ def candidates(cfg, run, owner, *, rows=None, env=None, limit=MAX_CANDIDATES):
     """Sessions the caller's owner could stop: running, idle, no open dispatch, not protected, not the one sampan runs
     in, and of the same owner. Retired-but-running first, then the idle ones that have been quiet the longest."""
     from . import status
+    if owner is not None and not cfg.limits.owners:
+        return []  # nobody is told apart without [limits.owners]: another person's session is never offered
     try:
         srows = status.status_rows(cfg, run)
         regs = rows if rows is not None else load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)
@@ -313,7 +315,8 @@ def candidates(cfg, run, owner, *, rows=None, env=None, limit=MAX_CANDIDATES):
             out.append(Candidate(r.name, "retired"))
         elif r.agent_status in ("idle", "shell"):
             out.append(Candidate(r.name, "idle", r.last, r.tokens))
-    out.sort(key=lambda c: (c.why != "retired", c.idle_since is not None, str(c.idle_since or ""), -(c.tokens or 0)))
+    # retired-but-running first; then the longest quiet; an idle time that is not known goes last
+    out.sort(key=lambda c: (c.why != "retired", c.idle_since is None, str(c.idle_since or ""), -(c.tokens or 0)))
     return out[:limit]
 
 
@@ -333,6 +336,7 @@ class Outcome:
     maxn: object = None
     override: bool = False
     reserved: tuple | None = None  # (pid, start) of the reservation this check wrote
+    owners_set: bool = True
 
     @property
     def red(self):
@@ -350,7 +354,9 @@ class Outcome:
             head += f"；記憶體紅燈（{'、'.join(self.classified.reasons)}）"
         if self.cands:
             return [head, "   可以先停（閒著、你的、最久沒動）："] + candidate_lines(self.cands)
-        return [head, "   目前沒有可以代你判斷「可以停」的 session（沒有閒著、沒有未結案派工的）"]
+        if not self.owners_set:
+            return [head, "   設定檔沒有 [limits.owners]，分不出哪些是你的，所以不列可以停的 session；sampan status 看全部"]
+        return [head, "   目前沒有可以停的 session（沒有閒著、沒有未結案派工、不是受保護的）"]
 
 
 def check(cfg, run, *, name, profile, adds=1, replacing=False, over_limit=False, ttl=None, write=True,
@@ -376,6 +382,12 @@ def check(cfg, run, *, name, profile, adds=1, replacing=False, over_limit=False,
         snap = resources.snapshot(run, cfg.state_dir, lim, now=now, platform=platform, probe=probe and adds > 0, sleep=sleep)
         cl = resources.classify(snap, lim, now)
     maxn = effective_max(lim, snap.ram if snap is not None else None)
+    start = None
+    if write and reserve_name and (adds > 0 or replacing):
+        try:  # outside the lock: it is a `ps`
+            start = procs_mod.start_time(os.getpid(), run)
+        except Exception:  # noqa: BLE001  the start time only guards against a reused pid
+            start = None
     with _Lock(cfg.state_dir) as lk:
         res = read_reservations(cfg.state_dir) if lk.held else []
         base = count(cfg, procs, panes, rows, [], [])
@@ -387,16 +399,13 @@ def check(cfg, run, *, name, profile, adds=1, replacing=False, over_limit=False,
         reserved = None
         if write and lk.held and reserve_name and (verdict.kind != "refuse" or override) and (adds > 0 or replacing):
             kept = [r for r in res if r["name"] != name and r["expires"] > now]
-            try:
-                reserved = (os.getpid(), procs_mod.start_time(os.getpid(), run))
-            except Exception:  # noqa: BLE001  the start time only guards against a reused pid
-                reserved = (os.getpid(), None)
+            reserved = (os.getpid(), start)
             kept.append({"name": name, "pid": reserved[0], "start": reserved[1],
                          "expires": now + (ttl if ttl is not None else send_restore.START_LIMIT_S)})
             _write_reservations(cfg.state_dir, kept)
     if not lk.held:
         (log or (lambda m: actionlog.append(cfg, "limits", [m])))(f"{name}：limits.lock 等了 {LOCK_WAIT_S} 秒沒拿到，不含佔位照算")
-    out = Outcome(verdict, [], cnt, snap, cl, maxn, override, reserved)
+    out = Outcome(verdict, [], cnt, snap, cl, maxn, override, reserved, bool(lim.owners))
     if verdict.kind != "ok":
         out.cands = candidates(cfg, run, owner, rows=rows, env=env)
     if override:
@@ -432,8 +441,11 @@ def _gate(cfg, run, out, *, name, profile, adds=1, replacing=False, over_limit=F
     if o.verdict.kind == "ok":
         return True
     lines = o.lines(name)
-    if o.verdict.kind == "warn" or o.override:
-        out(("⚠ " if not o.override else "⚠ 已越過：") + lines[0])
+    if o.override:
+        out(f"⚠ 已越過（{o.verdict.reason}），照常開 {name}")
+        return True
+    if o.verdict.kind == "warn":
+        out("⚠ " + lines[0])
         for line in lines[1:]:
             out(line)
         return True
@@ -472,33 +484,42 @@ _HINT = {}  # (state dir) -> (monotonic time, answer): room_hint is looked at by
 
 def room_hint(cfg, run, row, items, *, clock=time.monotonic):
     """Why a stopped target may not be reattached right now ("" = there is room), for the first judgement of
-    `send --restore`. Called inside the dispatches lock, so it takes neither limits.lock nor reads the reservations;
-    it uses `ps`, the memory reading and the phases of the messages already loaded. The authoritative check is the
-    one right before the launch (check / Gate)."""
+    `send --restore`. Called inside the dispatches lock, so it takes no limits.lock and runs no tmux: only one `ps`,
+    the memory reading, the reservation file and the phases of the messages already loaded. Without panes every agent
+    counts under no owner, so it is a hint: the authoritative check is the one right before the launch (Gate). While
+    it says there is room, the warning the check would give is kept in hint_warning()."""
     key = (str(cfg.state_dir), row.name)
     hit = _HINT.get(key)
     if hit is not None and clock() - hit[0] < 5:
         return hit[1]
-    why = ""
+    why, warn = "", ""
     try:
         lim = cfg.limits
         procs = procs_mod.list_procs(run)
-        panes = Tmux(run).panes()
         rows = load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)
         phases = [d.to_name for d in items if d.state == "queued" and d.extra.get(send_restore.PHASE) in
                   (send_restore.LAUNCHING, send_restore.STARTING)]
         snap = resources.snapshot(run, cfg.state_dir, lim, probe=False)
         cl = resources.classify(snap, lim)
-        cnt = count(cfg, procs, panes, rows, [], phases, exclude=(row.name,))
+        held = valid_reservations(read_reservations(cfg.state_dir), time.time(), set())
+        cnt = count(cfg, procs, None, rows, held, phases, exclude=(row.name,))
         reg = next((r for r in rows if r.tmux == row.name), None)
         prof = reg.profile if reg is not None else ""
         v = decide(cnt, lim, effective_max(lim, snap.ram), lim.owner_of(prof), 1, cl.red, reasons=cl.reasons)
         if v.kind == "refuse":
             why = v.reason
+        elif v.kind == "warn":
+            warn = v.reason
     except Exception:  # noqa: BLE001  not knowing is "there is room"
-        why = ""
-    _HINT[key] = (clock(), why)
+        why = warn = ""
+    _HINT[key] = (clock(), why, warn)
     return why
+
+
+def hint_warning(cfg, row):
+    """The count warning room_hint last saw for this target (\"\" = none)."""
+    hit = _HINT.get((str(cfg.state_dir), row.name))
+    return hit[2] if hit else ""
 
 
 STOP_WAIT_S = 90  # how long a restart waits for one session to stop (restart.py, plugin_apply.py)
@@ -610,6 +631,9 @@ def doctor_lines(cfg, run):
     except Exception:  # noqa: BLE001  a reading that fails is not a finding
         return []
     out = []
+    if cfg.limits.unknown:
+        out.append(("warn", f"[limits] 有這個版本不認得的鍵：{'、'.join(cfg.limits.unknown)}（已忽略）",
+                    "可能是比較新的 sampan 寫的；升級 sampan，或從設定檔拿掉"))
     if r.over:
         cands = candidates(cfg, run, None)  # the doctor has no owner: everybody's
         out.append(("warn", f"執行中 {r.running}，超過上限 {r.limit} 共 {r.over} 個（{'只警告' if r.count_mode == 'warn' else '新增會被擋'}）",
@@ -625,7 +649,11 @@ def doctor_lines(cfg, run):
 def cmd_limits(cfg, run, out, *, calibrate=False):
     """sampan limits [calibrate]: the readings, the owners, and how the limit comes out. Read-only."""
     lim = cfg.limits
-    r = report(cfg, run)
+    try:
+        r = report(cfg, run)
+    except Exception as e:  # noqa: BLE001  a reading that fails is said, not a traceback
+        out(f"❌ 讀不到上限與記憶體：{type(e).__name__}: {e}")
+        return 2
     sn, c = r.snap, r.classified
     out("目前生效的是" + ("設定檔的 [limits]" if lim.explicit else "預設值（設定檔沒有 [limits]）"))
     if r.limit is None:

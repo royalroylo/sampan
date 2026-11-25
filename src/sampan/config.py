@@ -1,3 +1,4 @@
+import math
 import os
 import re
 import tomllib
@@ -115,6 +116,7 @@ class Limits:
     protect: tuple = ("*-pm",)  # name patterns never offered as a session to stop
     owners: tuple = ()  # ((owner, (profile, ...)), ...)
     explicit: bool = False  # a [limits] section was written
+    unknown: tuple = ()  # keys of [limits] this sampan does not know (ignored; the doctor says so)
 
     def owner_of(self, profile):
         """The owner a profile belongs to; "" (the others) when it is in no list."""
@@ -343,13 +345,12 @@ def _load_limits(raw, table):
                           "記憶體紅燈要不要擋用 pressure_guard = true 或 false")
     if "min_sessions" in raw:
         raise ConfigError("[limits] min_sessions 已拆成 min_auto（auto 的下限）與 red_floor（記憶體紅燈下全機至少可開幾個）")
-    for key in raw:
-        if key not in LIMIT_KEYS:
-            raise ConfigError(f"[limits] 不認得的鍵 {key}（可用：{', '.join(LIMIT_KEYS)}）")
+    unknown = tuple(k for k in raw if k not in LIMIT_KEYS)  # kept, not an error: a newer sampan's key must not make an older one unreadable
 
     def num(key, kind, default, minimum=0):
         v = raw.get(key, default)
-        if isinstance(v, bool) or not isinstance(v, (int, float) if kind is float else int) or v < minimum:
+        if (isinstance(v, bool) or not isinstance(v, (int, float) if kind is float else int) or v < minimum
+                or (kind is float and not math.isfinite(v))):
             raise ConfigError(f"[limits] {key} 要是{'非負數' if kind is float else '非負整數'}，目前是 {v!r}")
         return v
 
@@ -381,4 +382,4 @@ def _load_limits(raw, table):
         swapout_per_min=num("swapout_per_min", int, 1000, 1), reserve_gb=num("reserve_gb", float, 8),
         per_session_gb=num("per_session_gb", float, 0.5, 0.01), min_auto=num("min_auto", int, 4, 1),
         red_floor=num("red_floor", int, 4), reserve_per_owner=num("reserve_per_owner", int, 3),
-        protect=tuple(protect), owners=tuple(owners), explicit=True)
+        protect=tuple(protect), owners=tuple(owners), explicit=True, unknown=unknown)

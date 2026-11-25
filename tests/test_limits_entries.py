@@ -39,7 +39,7 @@ class World:
             (proj / f"1111111{i}-0000-4000-8000-000000000000.jsonl").write_text("")
 
     def runner(self):
-        r = FakeRunner()
+        r = FakeRunner(strict=True)
         ps = [ps_line(100 + i, 1, "zsh", "-zsh") for i in range(self.running)]
         ps += [ps_line(200 + i, 100 + i, "claude", "claude") for i in range(self.running)]
         panes = [pane_line(f"s{i}", f"%{i}", 100 + i, "claude", "/c") for i in range(self.running)]
@@ -47,6 +47,13 @@ class World:
         r.on(["tmux", "-u", "list-panes"], cp(out="\n".join(panes) + "\n"))
         r.on(["tmux", "-u", "new-session"], lambda a: (self.launched.append(a), cp(out="%50\n"))[1])
         r.on(["tmux", "-u", "has-session"], cp(rc=1))
+        for sub in ("set-option", "send-keys", "capture-pane", "list-sessions", "load-buffer", "paste-buffer",
+                    "delete-buffer", "display-message", "show-options"):
+            r.on(["tmux", "-u", sub], cp())
+        r.on(["ps", "-o", "lstart="], cp(out="Wed Nov 25 18:00:00 2026\n"))
+        r.on(["ps", "eww"], cp())
+        r.on(["codex"], cp(rc=1))
+        r.on(["lsof"], cp())
         r.on(["sysctl"], cp(out=sysctl_out(swap_used=self.mem["swap"]).replace("vm.swapusage: ", "")))
         r.on(["vm_stat"], cp(out=VM.format(comp=self.mem["comp"], outs=0)))
         return r
@@ -351,3 +358,53 @@ class SampanClaudeTest(unittest.TestCase):
         self.assertEqual(out, [])
         cli._warn_limits(calm.cfg, None, out.append)  # a broken runner: silent
         self.assertEqual(out, [])
+
+
+class _Terminal:
+    pass
+
+
+class OverLimitEveryCommandTest(unittest.TestCase):
+    """--over-limit reaches new, restore, restart, move and switch, through the real caller_kind: a person at a
+    terminal may use it, an agent (with [mcp] confirm on or off) is refused and nothing runs."""
+    COMMANDS = (
+        (["new", "x", "alice", "/tmp", "--over-limit"], "sampan.session_run.cmd_new"),
+        (["restore", "x", "--over-limit"], "sampan.restore.cmd_restore"),
+        (["restart", "x", "--over-limit"], "sampan.restart.cmd_restart"),
+        (["move", "x", "/tmp", "--over-limit"], "sampan.session_run.cmd_move"),
+        (["switch", "x", "work", "--over-limit"], "sampan.session_run.cmd_switch"),
+    )
+
+    def run_cli(self, argv, target, caller, confirm):
+        import dataclasses
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        from sampan.restart import RestartPlan
+        cfg = dataclasses.replace(make_env(Path(tempfile.mkdtemp())), mcp_confirm=confirm)
+        buf = io.StringIO()
+        with redirect_stdout(buf), mock.patch("sampan.cli.load_config", return_value=cfg), \
+                mock.patch("sampan.runner.run", FakeRunner(strict=True)), \
+                mock.patch("sampan.send.command_caller", return_value=caller), \
+                mock.patch("sampan.cli._resolve_one", return_value="x"), \
+                mock.patch("sampan.cli._resolve_refs", return_value=["x"]), \
+                mock.patch("sampan.status.status_rows", return_value=[]), \
+                mock.patch("sampan.restart.plan_restart", return_value=RestartPlan(["x"], [], [])), \
+                mock.patch(target, return_value=0) as fn:
+            rc = cli.main(argv)
+        return rc, buf.getvalue(), fn
+
+    def test_terminal_may_agent_may_not(self):
+        from sampan.send import TERMINAL, Caller
+        agent = Caller("a", "alice", "claude", "%1")
+        for argv, target in self.COMMANDS:
+            for confirm in (True, False):
+                with self.subTest(argv[0], confirm=confirm):
+                    rc, text, fn = self.run_cli(argv, target, TERMINAL, confirm)
+                    self.assertEqual(fn.call_count, 1, text)
+                    self.assertTrue(fn.call_args.kwargs.get("over_limit"), fn.call_args)
+                    rc, text, fn = self.run_cli(argv, target, agent, confirm)
+                    self.assertEqual((rc, fn.call_count), (2, 0), text)
+                    self.assertIn("--over-limit", text)
+                    self.assertIn("畫面上按 y", text)

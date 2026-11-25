@@ -891,7 +891,8 @@ def _restoring(cfg, d, row, now, save, items, work, run=None):
                 _finish(x, "failed", now, why)
             _log(cfg, "send", f"派工 {'、'.join(x.id for x in group)}：{why}")
             return True
-        _set_phase(group, send_restore.LAUNCHING, now, send_restore.REASON_RESTORING)
+        warn = limits.hint_warning(cfg, row)  # over the count limit and only warned: said beside the reason
+        _set_phase(group, send_restore.LAUNCHING, now, send_restore.REASON_RESTORING + (f"（{warn}）" if warn else ""))
         for x in group:
             x.extra = {**x.extra, send_restore.LAUNCHES: n + 1}
     else:
@@ -929,7 +930,12 @@ def _restore_work(cfg, run, job, *, sleep, snapshot_fn, status_fn, now):
             if gate is not None and not gate.passed:  # no room after all: back in line, not a failed start
                 _back_to_waiting(cfg, ids, gate, now)
                 return
-            why = restore_mod.start_one(cfg, run, name, sleep=sleep, target_id=target_id, profile=profile)
+            try:
+                why = restore_mod.start_one(cfg, run, name, sleep=sleep, target_id=target_id, profile=profile)
+            except BaseException:
+                if gate is not None:
+                    gate.give_back()
+                raise
             if why and gate is not None:
                 gate.give_back()
         else:
@@ -1600,7 +1606,8 @@ def resend(cfg, did, *, now=None, notify=None):
                 _leave_deliveries(items, d, now)
             # a resent restore dispatch starts over: whatever its earlier try left (a launch that failed) is no claim
             d.state, d.status = "queued", "queued"
-            d.extra = {**{k: v for k, v in d.extra.items() if k not in (send_restore.PHASE, send_restore.PHASE_AT)},
+            d.extra = {**{k: v for k, v in d.extra.items()
+                          if k not in (send_restore.PHASE, send_restore.PHASE_AT, send_restore.LIMIT_WAIT_AT)},
                        REQUEUED_AT: _iso(now)}
             d.reason, d.sent_at, d.done_at, d.reply = "", None, None, None
             d.startup = False  # its session is up by now: an ordinary message
