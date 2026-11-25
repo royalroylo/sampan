@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import actionlog, folder_cmd, folders, ids, steps
+from . import actionlog, folder_cmd, folders, ids, limits, steps
 from .claude_state import move_transcript, transcript_carry, transcript_problem
 from .clock import now_iso
 from .codex_state import _is_codex, codex_pid_in_pane, find_rollout
@@ -171,7 +171,8 @@ def cmd_new(cfg, run, out, name, target, cwd, *, folder=None, **kw):
 
 
 def _cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.sleep, timeout=15, uuid4=uuid.uuid4,
-             on_prompt=None, wait=True, message=None, caller=None, notify=None, trust=False, model=None):
+             on_prompt=None, wait=True, message=None, caller=None, notify=None, trust=False, model=None,
+             over_limit=False, ask_limit=None):
     """target: claude:<profile>, <profile> (taken as claude) or codex.
 
     model: start the Claude with `--model <model>` and record it on the row (Claude only).
@@ -206,6 +207,10 @@ def _cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.slee
     tmux = Tmux(run)
     if _load(cfg, out) is None:  # registry broken: stop first, so no unregistered empty session is left behind
         return 2
+    gate = limits.Gate(cfg, run, out, name, profile or cfg.codex.profile, over_limit=over_limit, ask=ask_limit,
+                       dry_run=dry_run)
+    if not gate.passed:
+        return 2
     session_id = str(uuid4()) if agent == "claude" else None
     cmd = launch_line(cfg, agent, profile, session_id=session_id, name=name, model=model,
                       prompt_file=outbox_path(cfg.state_dir, "<派工編號>") if message is not None else None)
@@ -217,6 +222,7 @@ def _cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.slee
         d = submit_new(cfg, caller or TERMINAL, name, agent, profile or cfg.codex.profile, message,
                        notify=caller is not None if notify is None else notify, now=datetime.now(timezone.utc))
         if isinstance(d, str):
+            gate.give_back()
             out(f"❌ {d}")
             return 2
         did = d.id
@@ -224,6 +230,7 @@ def _cmd_new(cfg, run, out, name, target, cwd, *, dry_run=False, sleep=time.slee
                           prompt_file=outbox_path(cfg.state_dir, did))
 
     def abort(reason):
+        gate.give_back()
         if did is not None:
             abort_new(cfg, did, reason, now=datetime.now(timezone.utc))
 

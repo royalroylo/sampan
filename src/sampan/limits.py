@@ -332,7 +332,11 @@ class Outcome:
     classified: object = None
     maxn: object = None
     override: bool = False
-    reserved: bool = False
+    reserved: tuple | None = None  # (pid, start) of the reservation this check wrote
+
+    @property
+    def red(self):
+        return bool(self.classified is not None and self.classified.red)
 
     @property
     def ok(self):
@@ -380,13 +384,16 @@ def check(cfg, run, *, name, profile, adds=1, replacing=False, over_limit=False,
         red = cl.red if cl is not None else False
         verdict = decide(cnt, lim, maxn, owner, adds, red, reasons=cl.reasons if cl is not None else ())
         override = verdict.kind == "refuse" and over_limit
-        reserved = False
+        reserved = None
         if write and lk.held and reserve_name and (verdict.kind != "refuse" or override) and (adds > 0 or replacing):
             kept = [r for r in res if r["name"] != name and r["expires"] > now]
-            kept.append({"name": name, "pid": os.getpid(), "start": procs_mod.start_time(os.getpid(), run),
+            try:
+                reserved = (os.getpid(), procs_mod.start_time(os.getpid(), run))
+            except Exception:  # noqa: BLE001  the start time only guards against a reused pid
+                reserved = (os.getpid(), None)
+            kept.append({"name": name, "pid": reserved[0], "start": reserved[1],
                          "expires": now + (ttl if ttl is not None else send_restore.START_LIMIT_S)})
             _write_reservations(cfg.state_dir, kept)
-            reserved = True
     if not lk.held:
         (log or (lambda m: actionlog.append(cfg, "limits", [m])))(f"{name}：limits.lock 等了 {LOCK_WAIT_S} 秒沒拿到，不含佔位照算")
     out = Outcome(verdict, [], cnt, snap, cl, maxn, override, reserved)
@@ -395,3 +402,66 @@ def check(cfg, run, *, name, profile, adds=1, replacing=False, over_limit=False,
     if override:
         actionlog.append(cfg, "limits", [f"{name}：已越過（{verdict.reason}）"])
     return out
+
+
+def give_back(cfg, name, outcome):
+    """The starter takes its own reservation back after a failed start."""
+    if outcome is not None and outcome.reserved:
+        release(cfg.state_dir, name, pid=outcome.reserved[0], start=outcome.reserved[1])
+
+
+OVER_LIMIT_HELP = ("一定要開：在你自己的終端機加 --over-limit，或在畫面上按 y"
+                   "（如果是在 Claude 的 ! 裡跑的，請改在畫面上按 y，或另開一個終端機視窗跑）")
+
+
+def gate(cfg, run, out, **kw):
+    return _gate(cfg, run, out, **kw)
+
+
+def _gate(cfg, run, out, *, name, profile, adds=1, replacing=False, over_limit=False, ask=None, dry_run=False,
+          ttl=None, check_fn=None, **kw):
+    """check + the words. True = go ahead (a reservation is written unless dry_run), False = refused (said why, with the
+    sessions that could be stopped). ask(question) -> bool: a person at a screen who may say yes to a refusal."""
+    check_fn = check_fn or check
+    try:
+        o = check_fn(cfg, run, name=name, profile=profile, adds=adds, replacing=replacing, over_limit=over_limit,
+                     write=not dry_run, ttl=ttl, **kw)
+    except Exception as e:  # noqa: BLE001  a broken reading must never stop sampan from starting a session
+        actionlog.append(cfg, "limits", [f"{name}：檢查上限時出錯（{type(e).__name__}: {e}），這次不擋"])
+        return True
+    if o.verdict.kind == "ok":
+        return True
+    lines = o.lines(name)
+    if o.verdict.kind == "warn" or o.override:
+        out(("⚠ " if not o.override else "⚠ 已越過：") + lines[0])
+        for line in lines[1:]:
+            out(line)
+        return True
+    out("❌ " + lines[0])
+    for line in lines[1:]:
+        out(line)
+    if ask is not None and ask("仍要開？(y/N) "):
+        retry = check_fn(cfg, run, name=name, profile=profile, adds=adds, replacing=replacing, over_limit=True,
+                         write=not dry_run, ttl=ttl, **kw)
+        return retry.ok
+    out("   " + OVER_LIMIT_HELP)
+    return False
+
+
+class Gate:
+    """gate() as an object: `passed`, and `give_back()` for a start that failed after the reservation was written."""
+
+    def __init__(self, cfg, run, out, name, profile, **kw):
+        self.cfg, self.name, self.outcome = cfg, name, None
+        box = []
+        real_check = kw.pop("check_fn", check)
+
+        def spy(*a, **k):
+            o = real_check(*a, **k)
+            box.append(o)
+            return o
+        self.passed = _gate(cfg, run, out, name=name, profile=profile, check_fn=spy, **kw)
+        self.outcome = box[-1] if box else None
+
+    def give_back(self):
+        give_back(self.cfg, self.name, self.outcome)

@@ -10,11 +10,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import actionlog, codex_daemon, steps
+from . import actionlog, codex_daemon, limits, steps
 from .claude_state import transcript_problem
 from .codex_state import _is_codex, find_rollout
 from .observe import agent_sessions, live_by_pane
-from .procs import codex_resume_id, list_procs
+from .procs import codex_resume_id, descendant_claude, list_procs
 from .prompts import ATTACH, SKIP, Relay
 from .registry import RegistryError, Row, id_problem, load_rows
 from .screens import at_trust_prompt
@@ -289,6 +289,19 @@ def _watch(cfg, run, launched, timeout, sleep, out=lambda _l: None, relay=None):
     return resumed, at_trust, [row.tmux for row in pending.values()]
 
 
+def _wait_up(run, pane_id, sleep, limit=60):
+    """Until the agent just launched in the pane shows up in the process table (or limit seconds): under a memory red
+    light a restart brings sessions back one at a time."""
+    tmux = Tmux(run)
+    for _ in range(limit):
+        panes = tmux.panes()
+        pane = next((p for p in panes or () if p.pane_id == pane_id), None)
+        if pane is not None and descendant_claude(list_procs(run), pane.pane_pid) is not None:
+            return True
+        sleep(1)
+    return False
+
+
 def start_one(cfg, run, name, *, sleep, out=lambda _l: None, alive=os.kill, target_id="", profile=""):
     """Reattach one stopped session for a send that asked for it (`send --restore`): the same checks and the same launch
     line as `sampan restore <name>`, but it only starts the agent: it neither waits for it nor does the Remote Control
@@ -343,13 +356,17 @@ def start_one(cfg, run, name, *, sleep, out=lambda _l: None, alive=os.kill, targ
 
 def cmd_restore(cfg, run, out, ask, *, names=(), select_all=False, dry_run=False, interval=3, sleep=time.sleep,
                 picker_fn=None, now_fn=lambda: datetime.now(timezone.utc), timeout=10, alive=os.kill,
-                confirm=True, opened=None, on_prompt=None, wait=True, interactive=True):
+                confirm=True, opened=None, on_prompt=None, wait=True, interactive=True, replacing=frozenset(),
+                over_limit=False, ask_limit=None):
     """confirm=False: do not ask, reattach the default-selected ones directly (used when the ui presses Enter on a single stopped session).
     wait=False: finish once the reattach command is sent, without waiting or looking at the screen (when the ui reattaches one with Enter, it then goes straight into tmux and the user handles any menu).
     Unless a launched row gets the Remote Control reset (steps.rc_wanted): then it waits as with wait=True, so the ui
     goes in only after the reset.
     interactive=False (no terminal to confirm at): with names they are reattached without asking; without names
     nothing is done and it says why (2).
+    replacing: names this very call (a restart) stopped a moment ago: they add nothing to the count and a memory red
+    light does not stop them (but under a red light they come back one at a time). Every other name goes through
+    limits.gate (over_limit / ask_limit: the person's override); one that is refused is skipped with the reason.
     opened: given a list, append the names of tmux sessions created / sent the reattach command, in order (the ui then attaches to the first).
     on_prompt(name, agent, prompt): asked when an agent stops at a startup menu during the wait (see prompts.Relay); None = press no keys."""
     if confirm and not interactive and not dry_run:
@@ -406,7 +423,7 @@ def cmd_restore(cfg, run, out, ask, *, names=(), select_all=False, dry_run=False
     by_name = {c.row.tmux: c for c in cands}
     tmux = Tmux(run)
     skipped = [(c.row.tmux, c.skip) for c in cands if c.skip]
-    launched = {}
+    launched, serialnote = {}, []
     # an agent just launched has no process/session file yet, so re-observing cannot see it: ids started in this run are tracked separately
     started_ids = {}
     for name in dict.fromkeys(picked):  # the result of picker_fn may contain duplicates
@@ -431,7 +448,21 @@ def cmd_restore(cfg, run, out, ask, *, names=(), select_all=False, dry_run=False
         if why:
             skipped.append((name, why))
             continue
+        gate = limits.Gate(cfg, run, out if not dry_run else (lambda _l: None), name,
+                           c.row.profile or cfg.codex.profile, replacing=name in replacing, over_limit=over_limit,
+                           ask=ask_limit, dry_run=dry_run, probe=name not in replacing)
+        if not gate.passed:
+            skipped.append((name, "超過上限，略過"))
+            continue
+        serial = gate.outcome is not None and gate.outcome.red and name in replacing
+        if serial and not serialnote and not dry_run:
+            out("記憶體紅燈：重開會一個一個來")
+            serialnote.append(1)
         pane = _launch(cfg, tmux, c.row, live, out, sleep, dry_run)
+        if serial and pane is not None:
+            _wait_up(run, pane, sleep)
+        if pane is None and not dry_run:
+            gate.give_back()
         if pane is not None:
             launched[pane] = c.row
             if opened is not None:

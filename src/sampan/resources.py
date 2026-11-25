@@ -90,17 +90,24 @@ def _int(text):
         return None
 
 
+def _safe(run, args):
+    try:
+        return run(args)
+    except Exception:  # noqa: BLE001  a reading that cannot be had is unknown, never an error
+        return None
+
+
 def _read_macos(run):
     """Fields from `sysctl` and `vm_stat`: two spawns. Any failure leaves its fields None."""
     f = {}
-    r = run(["sysctl", "-n", "vm.swapusage", "kern.memorystatus_level", "hw.memsize", "hw.ncpu", "kern.boottime"])
-    lines = (r.stdout or "").splitlines() if r.returncode == 0 else []
+    r = _safe(run, ["sysctl", "-n", "vm.swapusage", "kern.memorystatus_level", "hw.memsize", "hw.ncpu", "kern.boottime"])
+    lines = (r.stdout or "").splitlines() if r is not None and r.returncode == 0 else []
     if len(lines) >= 5:
         f["swap_total"], f["swap_used"] = parse_swapusage(lines[0])
         f["level"], f["ram"], f["cores"] = _int(lines[1]), _int(lines[2]), _int(lines[3])
         f["boot"] = parse_boottime(lines[4])
-    r = run(["vm_stat"])
-    if r.returncode == 0:
+    r = _safe(run, ["vm_stat"])
+    if r is not None and r.returncode == 0:
         page, comp, outs = parse_vm_stat(r.stdout)
         f["compressed"] = comp * page if comp is not None and page else None
         f["swapouts"] = outs

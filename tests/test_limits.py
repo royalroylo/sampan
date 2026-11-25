@@ -14,8 +14,8 @@ from tests.test_resources import VM, sysctl_out
 
 OWNERS = TOML + """
 [limits.owners]
-roy = ["alice"]
-mel = ["work"]
+ann = ["alice"]
+bob = ["work"]
 """
 
 
@@ -36,8 +36,8 @@ class Config(unittest.TestCase):
         self.assertEqual((lim.max_sessions, lim.count_mode, lim.pressure_guard, lim.explicit), ("auto", "warn", True, False))
 
     def test_owners(self):
-        lim = self.load("\n[limits]\nmax_sessions = 10\n[limits.owners]\nroy = [\"alice\"]\n")
-        self.assertEqual((lim.max_sessions, lim.owner_of("alice"), lim.owner_of("zzz")), (10, "roy", ""))
+        lim = self.load("\n[limits]\nmax_sessions = 10\n[limits.owners]\nann = [\"alice\"]\n")
+        self.assertEqual((lim.max_sessions, lim.owner_of("alice"), lim.owner_of("zzz")), (10, "ann", ""))
 
     def test_errors(self):
         for text, word in (("[limits]\nenforce = 'off'\n", "count_mode"), ("[limits]\nmin_sessions = 3\n", "min_auto"),
@@ -78,7 +78,7 @@ class Count(unittest.TestCase):
         panes = [Pane("a", "%1", 100, "claude", "/"), Pane("b", "%2", 101, "claude", "/")]
         rows = [Row("a", "claude", "alice", "i1", "/"), Row("b", "claude", "work", "i2", "/")]
         c = count_for(self.cfg, procs, panes, rows)
-        self.assertEqual((c.total, c.by_owner, c.outside), (3, {"roy": 1, "mel": 1, "": 1}, 1))
+        self.assertEqual((c.total, c.by_owner, c.outside), (3, {"ann": 1, "bob": 1, "": 1}, 1))
 
     def test_codex_interactive_counts_daemon_does_not(self):
         procs = [P(30, 300, "codex", "codex resume x"), P(31, 1, "codex", "codex app-server --listen x")]
@@ -102,12 +102,12 @@ def cnt(by_owner):
 
 
 class Decide(unittest.TestCase):
-    lim = Limits(owners=(("roy", ("alice",)), ("mel", ("work",))))
+    lim = Limits(owners=(("ann", ("alice",)), ("bob", ("work",))))
 
     def test_warn_over_limit(self):
-        v = limits.decide(cnt({"roy": 22}), Limits(), 16, "roy", 1, False)
+        v = limits.decide(cnt({"ann": 22}), Limits(), 16, "ann", 1, False)
         self.assertEqual((v.kind, v.why, v.over), ("warn", "count", True))
-        self.assertEqual(limits.decide(cnt({"roy": 10}), Limits(), 16, "roy", 1, False).kind, "ok")
+        self.assertEqual(limits.decide(cnt({"ann": 10}), Limits(), 16, "ann", 1, False).kind, "ok")
 
     def test_block_mode(self):
         lim = Limits(count_mode="block")
@@ -116,18 +116,18 @@ class Decide(unittest.TestCase):
 
     def test_block_leaves_other_owners_reserve(self):
         lim = Limits(count_mode="block", owners=self.lim.owners)
-        # 15 running all roy; mel has 0 and 3 reserved: roy's 16th would eat mel's reserve
-        self.assertEqual(limits.decide(cnt({"roy": 12}), lim, 16, "roy", 1, False).kind, "ok")
-        self.assertEqual(limits.decide(cnt({"roy": 13}), lim, 16, "roy", 1, False).kind, "refuse")
-        self.assertEqual(limits.decide(cnt({"roy": 14}), lim, 16, "mel", 1, False).kind, "ok")
+        # 15 running all ann; bob has 0 and 3 reserved: ann's 16th would eat bob's reserve
+        self.assertEqual(limits.decide(cnt({"ann": 12}), lim, 16, "ann", 1, False).kind, "ok")
+        self.assertEqual(limits.decide(cnt({"ann": 13}), lim, 16, "ann", 1, False).kind, "refuse")
+        self.assertEqual(limits.decide(cnt({"ann": 14}), lim, 16, "bob", 1, False).kind, "ok")
 
     def test_red_with_owners(self):
         d = lambda by, owner, adds=1, **kw: limits.decide(cnt(by), self.lim, 16, owner, adds, True, **kw).kind  # noqa: E731
-        self.assertEqual(d({"roy": 4}, "mel"), "ok")
-        self.assertEqual(d({"roy": 4, "mel": 2}, "mel"), "ok")
-        self.assertEqual(d({"roy": 4, "mel": 3}, "mel"), "refuse")
-        self.assertEqual(d({"roy": 3}, "roy"), "refuse")
-        self.assertEqual(d({"roy": 2}, "roy"), "ok")
+        self.assertEqual(d({"ann": 4}, "bob"), "ok")
+        self.assertEqual(d({"ann": 4, "bob": 2}, "bob"), "ok")
+        self.assertEqual(d({"ann": 4, "bob": 3}, "bob"), "refuse")
+        self.assertEqual(d({"ann": 3}, "ann"), "refuse")
+        self.assertEqual(d({"ann": 2}, "ann"), "ok")
         self.assertEqual(d({}, ""), "refuse")  # others have no reserve under red
 
     def test_red_without_owners_uses_floor(self):
@@ -135,7 +135,7 @@ class Decide(unittest.TestCase):
         self.assertEqual((v(3), v(4), v(3, red_floor=3)), ("ok", "refuse", "refuse"))
 
     def test_replacement_adds_nothing(self):
-        self.assertEqual(limits.decide(cnt({"roy": 30}), Limits(count_mode="block"), 16, "roy", 0, True).kind, "ok")
+        self.assertEqual(limits.decide(cnt({"ann": 30}), Limits(count_mode="block"), 16, "ann", 0, True).kind, "ok")
 
     def test_pressure_guard_off(self):
         lim = Limits(pressure_guard=False)
@@ -195,7 +195,7 @@ class Check(unittest.TestCase):
     def test_under_limit_ok_and_reserved(self):
         cfg, r = self.build(3)
         out = self.run_check(cfg, r)
-        self.assertEqual((out.verdict.kind, out.reserved), ("ok", True))
+        self.assertEqual((out.verdict.kind, out.reserved is not None), ("ok", True))
         self.assertEqual([x["name"] for x in limits.read_reservations(cfg.state_dir)], ["new1"])
 
     def test_second_check_counts_the_reservation(self):

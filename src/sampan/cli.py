@@ -33,6 +33,7 @@ def build_parser():
     nw.add_argument("target", help="claude:<profile>、<profile>（當成 claude）或 codex")
     nw.add_argument("cwd")
     nw.add_argument("--dry-run", action="store_true")
+    nw.add_argument("--over-limit", action="store_true", help=OVER_LIMIT_HELP)
     nw.add_argument("--folder", help="放進這個資料夾（沒有就建；用 / 分層）；開成功才記")
     nw.add_argument("--message", help="開場訊息，當作 agent 啟動時的第一個 prompt（會建一筆派工）；- 從 stdin 讀")
     nw.add_argument("--model", help="這個 Claude session 用的模型（--model 的值，例如 opus[1m]、sonnet）；記在登記表，之後每次啟動都帶；只影響這個 session")
@@ -40,6 +41,7 @@ def build_parser():
     rs.add_argument("names", nargs="*", help="只看這些 session（有終端機時會先確認）")
     rs.add_argument("--all", action="store_true", help="勾選所有可接回的（要有終端機確認）")
     rs.add_argument("--dry-run", action="store_true")
+    rs.add_argument("--over-limit", action="store_true", help=OVER_LIMIT_HELP)
     ad = sub.add_parser("adopt", help="接手 tmux 外的終端機（例如 iTerm、Terminal）裡的 claude／codex：你自己 /exit 後在 tmux 接回同一段對話")
     ad.add_argument("--dry-run", action="store_true", help="只列出會接手哪些、用什麼指令；不等待、不改任何東西")
     sp = sub.add_parser("stop", help="存檔後讓閒置的 claude／codex 正常結束")
@@ -344,6 +346,21 @@ def _shows_upgrade_notice(args):
     if args.cmd in ("claude", "codex", "ui"):
         return False
     return not (args.cmd == "save" and args.quiet)
+
+
+OVER_LIMIT_HELP = "超過數量上限或記憶體紅燈時仍要開（只有你自己在終端機跑才有效；agent 呼叫會被拒絕）"
+
+
+def _over_limit(cfg, run, args, out):
+    """The value of --over-limit, or None (and why) when an agent asked for it: only a person at a terminal may override.
+    Looks at who runs the command, not at [mcp] confirm. A guard against accidents, not a security boundary."""
+    if not getattr(args, "over_limit", False):
+        return False
+    if _run_by_agent(cfg, run):
+        out("❌ --over-limit 只有你自己在終端機（或畫面上按 y）才能用，agent 呼叫不行；"
+            "如果是你在 Claude 的 ! 裡跑的，請改在畫面上按 y，或另開一個終端機視窗跑")
+        return None
+    return True
 
 
 def _run_by_agent(cfg, run):
@@ -721,8 +738,12 @@ def _dispatch(cfg, args):
         if names is None:
             return 2
         on_prompt, want = _prompt_fn()
+        over = _over_limit(cfg, run, args, out)
+        if over is None:
+            return 2
         rc = cmd_restore(cfg, run, out, input, names=tuple(names), select_all=args.all, dry_run=args.dry_run,
-                         on_prompt=on_prompt, interactive=bool(sys.stdin and sys.stdin.isatty()))
+                         on_prompt=on_prompt, interactive=bool(sys.stdin and sys.stdin.isatty()),
+                         **({"over_limit": True} if over else {}))
         return _go_in(run, want, rc)
     if cmd == "adopt":
         from .adopt import cmd_adopt
@@ -882,6 +903,11 @@ def _dispatch(cfg, args):
                 extra.update(caller=caller, notify=False)
             if args.model is not None:
                 extra["model"] = args.model
+            over = _over_limit(cfg, run, args, out)
+            if over is None:
+                return 2
+            if over:
+                extra["over_limit"] = True
             rc = session_run.cmd_new(cfg, run, out, args.name, args.target, args.cwd, dry_run=args.dry_run,
                                      on_prompt=on_prompt, **extra)
             if rc == 0 and not args.dry_run and not want:  # the command returns to the shell: say where the session went
