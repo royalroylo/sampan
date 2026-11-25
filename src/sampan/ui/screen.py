@@ -21,6 +21,7 @@ from ..plugin_view import card_lines as plugin_card
 from ..prompts import SKIP, prompt_choices
 from ..status import State, status_rows
 from ..tmux import TMUX, Tmux
+from . import resource_bar
 from .actions import cancel_flow, cmd_ui, dir_context
 from .cards import Wrap, _quote_of, adopt_card, card_lines, folder_card, gather_cards, preview_header, restore_card
 from .codex_others import GO_DESKTOP, OTHER_KEY, ListNote, OwnCols, block_left, other_card, other_cells, other_rows
@@ -189,8 +190,11 @@ class CursesScreen:
 
     def __init__(self, scr, cfg=None, run=None, now_fn=_now, *, clock=time.monotonic, rows_fn=status_rows,
                  own_pane=None, updater=None, usage_fn=None, interactive=None, sampan_path=None, watcher=None,
-                 dispatch_watcher=None, dispatches_load=dispatch.load, cancel_fn=None, tty_gone=None):
+                 dispatch_watcher=None, dispatches_load=dispatch.load, cancel_fn=None, tty_gone=None,
+                 resource_watcher=None):
         self.scr, self.cfg, self.run, self.now_fn = scr, cfg, run, now_fn
+        # resource_watcher: resource_bar.ResourceWatcher; its last reading is the line at the right end of the separator
+        self.resource_watcher = resource_watcher
         # tty_gone() -> bool, asked whenever a read returns no key (terminal_gone; None: never asked, the tests)
         self.tty_gone = tty_gone
         # watcher: daemon_watch.DaemonWatcher (curses_ui starts / stops it); its latest snapshot colours the Codex rows
@@ -614,6 +618,15 @@ class CursesScreen:
         cursor = len(left) - picker.n_rows + picker.cursor + (1 if picker.on_other() else 0)
         return left + block, cursor, name_w
 
+    def _gauge(self, rows):
+        """The resource line for render (a function width -> segments), None when it is off or there is no watcher."""
+        w = self.resource_watcher
+        if w is None or self.cfg is None or not self.cfg.resource_bar:
+            return None
+        reading, running = w.latest, resource_bar.running_of(rows)
+        limit = resource_bar.limit_of(self.cfg, reading)
+        return lambda width: resource_bar.gauge(reading, running, limit, width, now=w.clock())
+
     def _account_lines(self, rows):
         """The account lines under the list. Usage (a Codex rollout scan, Claude record files) is cached for USAGE_S
         seconds; the running counts follow rows on every draw."""
@@ -740,12 +753,15 @@ class CursesScreen:
                                  help=KEYS_HELP, cols=list_cols(rows),
                                  empty=list_empty(rows, picker.query, picker.filter_name),
                                  name_w=name_w, accounts=self._account_lines(rows), dispatch=self._dispatch_line(),
+                                 gauge=self._gauge(rows),
                                  notice=self.warning or fnote or (self.updater.hint() if self.updater is not None else None))
                 picker.width = self.scr.getmaxyx()[1] - 2  # draw()'s width less the prompt row's leading space
                 self.prompt = picker.prompt
                 self.draw()
                 k = self._list_key(picker)
                 tick = k is None
+                if not tick and self.resource_watcher is not None:
+                    self.resource_watcher.note_key()  # a key: the line goes back to every 5 seconds
                 if tick:
                     if self.updater is not None:
                         self.updater.tick()
@@ -1173,7 +1189,8 @@ def _caused_by_gone(e):
 
 
 def curses_ui(cfg, run, out, *, current_session=None, own_pane=None, exec_fn=os.execvp, wrapper=None,
-              run_outside=run_outside, updater=None, watcher=None, dispatch_watcher=None, notices_fn=None, **kw):
+              run_outside=run_outside, updater=None, watcher=None, dispatch_watcher=None, notices_fn=None,
+              resource_watcher=None, **kw):
     """The whole ui opens curses only once. When attaching to a session outside tmux, curses steps out temporarily and tmux attach runs in the foreground; after detach we are back at the list.
     On exit the last contents of the message area are printed on the terminal.
     watcher (daemon_watch.DaemonWatcher, None = none) and dispatch_watcher (dispatch_watch.DispatchWatcher) are started here
@@ -1181,15 +1198,24 @@ def curses_ui(cfg, run, out, *, current_session=None, own_pane=None, exec_fn=os.
     message area once the screen is up (update.show_pending_notices)."""
     pending, box = [], {}
 
+    def outside(scr, args, env=None):  # curses is out while another program has the terminal: nothing is read meanwhile
+        if resource_watcher is not None:
+            resource_watcher.pause()
+        try:
+            return run_outside(scr, args, env) if env is not None else run_outside(scr, args)
+        finally:
+            if resource_watcher is not None:
+                resource_watcher.resume()
+
     def ui_rows(c, r):  # the daemon is read by the watcher thread only: never on the ui thread
         return status_rows(c, r, snapshot_fn=lambda *a, **k: watcher.latest if watcher is not None else None)
     rows_fn = kw.get("rows_fn", ui_rows)
 
     def main(scr):
         screen = box["screen"] = CursesScreen(scr, cfg, run, rows_fn=rows_fn, own_pane=own_pane,
-                                              updater=updater, interactive=lambda args, env: run_outside(scr, args, env),
+                                              updater=updater, interactive=lambda args, env: outside(scr, args, env),
                                               watcher=watcher, dispatch_watcher=dispatch_watcher,
-                                              tty_gone=terminal_gone)
+                                              tty_gone=terminal_gone, resource_watcher=resource_watcher)
 
         def set_cfg(c):
             screen.cfg = c
@@ -1203,7 +1229,7 @@ def curses_ui(cfg, run, out, *, current_session=None, own_pane=None, exec_fn=os.
                     dispatches_fn=screen.dispatches, choose_folder_fn=screen.choose_folder,
                     set_cfg_fn=set_cfg,
                     exec_fn=lambda f, args: pending.append((f, args)),
-                    attach_fn=lambda args: run_outside(scr, args), loop=True,
+                    attach_fn=lambda args: outside(scr, args), loop=True,
                     choose_dir_fn=lambda start, *, allow_missing: screen.choose_dir(
                         start, home=str(cfg.home), allow_missing=allow_missing,
                         title="選搬過去的目錄" if allow_missing else "選工作目錄", **dir_context(screen.cfg)))
@@ -1225,6 +1251,8 @@ def curses_ui(cfg, run, out, *, current_session=None, own_pane=None, exec_fn=os.
         watcher.start()
     if dispatch_watcher is not None:
         dispatch_watcher.start()
+    if resource_watcher is not None:
+        resource_watcher.start()
     gone = False
     try:
         rc = wrapper(main)
@@ -1237,6 +1265,8 @@ def curses_ui(cfg, run, out, *, current_session=None, own_pane=None, exec_fn=os.
             raise
         rc, gone = 0, True
     finally:
+        if resource_watcher is not None:
+            resource_watcher.stop()
         if watcher is not None:
             watcher.stop()
         if dispatch_watcher is not None:  # curses is closed: let a delivery in flight finish before exec / exit

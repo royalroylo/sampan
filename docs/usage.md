@@ -47,6 +47,7 @@
 | 看派工、取消還沒送出的 | `D` | 列出派工（編號、從、給、狀態、建立時間、原因，新的在上）；游標移到排隊中的按 `x`，在畫面底部問確定後取消；已送出、等回覆的按 `x` 問確定後不再等回覆，結果是「寄件者已取消」（訊息收不回）；已結束的只會說明為什麼不能取消。沒有派工時只顯示「沒有派工」。有排隊或等回覆的派工時，清單下方會多一行 `派工：N 排隊、M 等回覆（D 看清單）`；畫面開著時 sampan 每 3 秒在背景推進這些派工（送出、讀回覆、補發完成或失敗通知）；離開畫面時若正好在送，會等它送完（最多約 35 秒，畫面會寫「等派工送完再離開…」） |
 | 管理 plugin 與 marketplace 來源 | `p` | 進到 plugin 管理畫面，見下面「plugin 管理畫面」 |
 | 立刻存一次登記表 | `w` | 平常每 5 分鐘會自動存（畫面底部的按鍵說明放不下就沒列，照樣能用，按 `?` 看全部） |
+| 看同時執行的數量與記憶體 | `sampan limits [calibrate]`（唯讀）；`sampan status` 表尾也有一行。見「數量上限與記憶體紅燈」 |
 | 更新 sampan | `U`（有新版時按鍵說明上面會出現「有新版 v…（目前 …），按 U 更新」） | 在畫面底部問確定，跑 `uv tool upgrade sampan`（版本沒變再 `uv tool install --reinstall git+https://github.com/royalroylo/sampan@v<最新版>`），輸出顯示在訊息區；成功後自動重新開啟 sampan 回到清單，失敗就留在清單。不知道有新版時，`U` 會先當下重新查一次（不看快取）；仍是最新版（或查不到）只會告知，不會問；要重新安裝請用 `sampan update --force` |
 
 **選目錄畫面**（`n`、`m`）：左邊是目前目錄底下的資料夾，右邊是「最近用過」的目錄（登記表裡用的 session 多的在前），游標那個目錄裡已經有 session 時會列出來；終端機不到 100 欄時只顯示左邊。
@@ -214,7 +215,7 @@ Claude Code 只在狀態列指令的輸入裡提供 5h／週額度，所以要�
 | 讓 agent 正常結束（先收起來，要用時再 restore） | `sampan stop [名稱…] [--profile <p>] [--force] [--keep-tmux] [-v]`：結束後若那個 tmux session 只剩這一個 pane，就一起關掉；有其他視窗或 pane 則保留。停之前會先存檔，已停止的只給數量（`存檔：已停止 7（-v 看清單）`），警告照樣全部列出；`-v` 列出每一個 |
 | 重開指定的 session | `sampan restart <名稱…>`：閒置的先停再背景接回原對話（不會把你帶進去），已停止的直接接回；忙碌中的、sampan 自己所在的 pane、retired 的略過，並在最後列出名稱與原因。全部都不能重開時回傳 1 |
 | 只校正執行中 session 的 Remote Control 名稱 | `sampan rc <名稱…>`、`--all`、`--profile <p>`、`--dry-run`、`--yes`：不重開 Claude；忙的、已停止的、Codex、沒開 Remote Control 的、sampan 自己的 pane 略過並列出原因；有失敗結束碼 1 |
-| 重開機後接回 | `sampan restore [名稱…] [--all] [--dry-run]` |
+| 重開機後接回 | `sampan restore [名稱…] [--all] [--dry-run] [--over-limit]` |
 | 接手在 tmux 外（例如終端機程式的分頁）跑的 claude／codex | `sampan adopt [--dry-run]`（或 ui 按 A）：列出 tmux 外的 claude／codex（目錄、最後活動、最後一句話），勾選後逐一問 session 名稱；你自己在原視窗 `/exit`（Codex：`/quit`），sampan 等它結束後才在新的 tmux session 接回同一段對話並登記。sampan 不對原視窗按任何鍵；判斷不出對話 id 或 profile 的不能選（Codex：新開的要先送出第一個 prompt、剛 `codex resume` 的要先送一則訊息，sampan 才認得出是哪段對話） |
 | 改 session 名稱 | `sampan rename <名稱> <新名稱>`（或 ui 按 e）：tmux session 與登記表一起改，agent 照常執行、不送任何按鍵。名稱不能含 `.` 或 `:` |
 | 設／清別名 | `sampan alias <名稱> <別名>`、`sampan alias <名稱> --clear`（或 ui 按 L）：別名下次啟動時套用 |
@@ -270,6 +271,20 @@ session 可以放進資料夾（多層用 `/`，例如 `客戶/甲`）。資料�
 - `sampan folder move s1 客戶/甲 開發 [--merge]`：最後一個是目的（`/` 是最外層），前面的可以是 session 名稱或資料夾路徑；不能把資料夾搬進它自己裡面。
 - `sampan new <名稱> <目標> <目錄> --folder 開發`：開成功才放進資料夾（沒有就建）；Codex 已經開好、只是還沒登記（結束碼 1）也算開成功。
 - `sampan rename`、`sampan forget`、`sampan profile forget` 會一併更新資料夾裡的名稱；`folders.json` 壞掉時這些指令照常完成，只多一行警告。`folders.json` 壞掉時資料夾指令一律拒絕（結束碼 2）、不覆寫它；修好或刪掉再試。
+
+## 數量上限與記憶體紅燈（0.28）
+
+同時跑太多 agent 會把機器的記憶體耗盡（一個 Claude 連同它底下的 MCP 行程約 0.4–0.5 GB）。sampan 兩層都管，**沒寫 `[limits]` 也照預設生效**：
+
+- **數量上限**：`auto` ＝ 這台機器的 RAM 推出來的數字（16 GiB 是 16，經驗值）。預設只**警告**：超過時新開照常成功，印「已超過上限（17／16）」與可以先停的 session；`[limits] count_mode = "block"` 才會拒絕。現有的 session 不會被停。
+- **記憶體紅燈**：壓縮或 swap 偏高**而且正在寫出 swap**、或兩者同時偏高、或寫出停止後 10 分鐘內仍偏高、或可用記憶體 <15%。紅燈時所有會**增加**執行中數量的動作都被拒絕：`new`、`restore`、`restart` 裡本來停著的、停著的 `switch`、`move`／`switch` 在 agent 已結束時、`send --restore`（派工排隊「排隊等額度」，有空位自動繼續，最多等 30 分鐘）、畫面 Enter 接回；`restart`、`plugins sync` 剛停掉的、agent 在跑的 `move`／`switch` 是「取代」，照常放行（紅燈下一個一個接回）。有 `[limits.owners]` 時每位擁有者紅燈下保底 3 個。
+- **sampan 從不代你停 session**。被拒絕或警告時會列最多 5 個「可以先停」的：閒著、沒有未結案派工、不是 `*-pm`、你的（沒寫 `[limits.owners]` 就分不出誰的，會明說並不列）。
+- **硬要開**：在你自己的終端機加 `--over-limit`（`new`、`restore`、`restart`、`move`、`switch`），或在畫面上被擋後按 `y`（「仍要開？(y/N)」）。agent 呼叫（含 MCP）不能越過，直接被拒；如果是你在 Claude 的 `!` 裡跑的，請改在畫面上按 `y` 或另開終端機。這是防誤用的護欄，不是安全邊界：手動開的 `claude` 或改設定檔都繞得過去，繞過去開的照樣被計數。
+- 全部關掉：`[limits] max_sessions = 0` 加 `pressure_guard = false`（`status` 表尾也不印）。
+
+**右下角的資源列**（`[ui] resource_bar`，預設開）：`◆ 壓縮 39% │ swap 3.6G │ 負載 3.6 │ 執行中 21/16!`。總燈只看記憶體（綠／黃／紅；紅＝新開會被擋）；負載只上色；數量超過寫 `21/16!`（警告色，不會變紅）；`?` 是讀不到或讀數超過 15 秒。窄的終端機有短的寫法（100／70／50 欄），`?` 說明頁有各欄意思。背景每 5 秒讀一次，5 分鐘沒按鍵改 15 秒，離開 sampan 或終端機消失就停。`--plain` 在每次列清單前印一行。
+
+`sampan limits` 印目前的讀數、上限怎麼算出來的、誰在哪個擁有者、生效的是預設值還是設定檔；`sampan limits calibrate` 多印校正用的原始讀數。門檻（壓縮 >40%、swap ≥45%、寫出 >1000 次／分）來自有限的幾次實測，跑一陣子後依 `actions.log` 裡 `[limits]` 開頭的行（寫出速率超過門檻一半時才記）調整。
 
 ## 傳訊息給 session
 

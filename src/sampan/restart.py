@@ -113,7 +113,7 @@ def confirm_line(plan, limit=8, *, width=None):
 
 
 def cmd_restart(cfg, run, out, ask, plan, *, own_pane=None, on_prompt=None, stop_fn=None, restore_fn=None,
-                over_limit=False):
+                over_limit=False, ask_limit=None):
     """Stop plan.restart, then reattach what stopped plus plan.resume with one restore (no going in). Returns the worst rc."""
     out = actionlog.tee(cfg, "重開", out)
     on_prompt = actionlog.logged_prompt(cfg, "重開", on_prompt)
@@ -130,7 +130,8 @@ def cmd_restart(cfg, run, out, ask, plan, *, own_pane=None, on_prompt=None, stop
     again = tuple(s) + tuple(n for n in plan.resume if n not in s)
     if again:
         worst = max(worst, restore_fn(cfg, run, out, ask, names=again, confirm=False, on_prompt=on_prompt,
-                                      replacing=frozenset(s), **({"over_limit": True} if over_limit else {})))
+                                      replacing=frozenset(s), **({"over_limit": True} if over_limit else {}),
+                                      **({"ask_limit": ask_limit} if ask_limit is not None else {})))
     skipped = list(plan.skip) + [(n, why.get(n, "")) for n in left]
     if skipped:
         out(skip_text(skipped))

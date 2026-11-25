@@ -13,6 +13,8 @@ For migration or conversion scripts. A version sampan does not understand is nev
 | `[ui] start_dir` | path where the directory chooser of `n` (start new work) starts; default `~/Projects` if it exists, else `~` |
 | `[ui] detach_key` | string, default `"C-q"`. In a session sampan manages, this key jumps back to sampan: a client attached from outside tmux detaches, and when sampan switched over from inside tmux it switches back to the previous session; in other tmux sessions the key goes to the program as usual. sampan writes the binding into the running tmux server when its screen opens and before attaching (never into `~/.tmux.conf`) and marks its sessions with the `@sampan` session option; if you already bound the key to something else, sampan leaves it and `sampan doctor` says so. `""` binds nothing (and removes a binding sampan wrote). Limits: a session opened outside the `sampan` screen (say `sampan new`, then `tmux attach`) is marked the next time the screen opens or finishes an action; after attaching from outside and switching sessions yourself (`Ctrl-b s`), Ctrl-q switches back to the previous session instead of detaching |
 | `[ui] codex_auto_start` | boolean, default `true`. When the `sampan` screen opens and the Codex daemon is not running, run `codex remote-control start` once in the background; `false` never starts it |
+| `[ui] resource_bar` | boolean, default `true`. The resource line at the right end of the main list's separator (light, compressor, swap, load, running / limit); `false` draws nothing and starts no background sampling |
+| `[limits]` | How many agents may run at once and the memory guard. **In force with these defaults even when the section is not written** (table below). Unknown keys are ignored (`sampan doctor` says so); the old `enforce` and `min_sessions` are errors that point at `count_mode`, `pressure_guard`, `min_auto` and `red_floor` |
 | `[mcp] confirm` | boolean, default `true`. The `send`, `send_batch`, `new_session`, `cancel_dispatch`, `folder_move` and `resend` tools of `sampan mcp serve` are approved every time through the agent's own permission prompt (Claude Code's permission prompt, Codex's `approval_mode = "prompt"`); a client not known to ask a person first is refused, never skipped. An agent running `sampan send`, `sampan send-batch`, `sampan new … --message`, `sampan dispatches cancel` or `sampan dispatches resend` from Bash is refused as well. `false` never asks and just acts (still logged in `actions.log`, still cancellable). The read-only `list_sessions` and `dispatch_result` never ask; `inbox_take` and `reply` (receiving mail) are not asked by sampan either (whether Claude Code asks depends on `sampan mcp install --allow-inbox`) |
 | `[dispatches] keep_days` | non-negative integer, default `90`. A finished (`done`, `failed`, `cancelled`) dispatch older than this many days loses its bodies: `text`, the reply and every reply part, the text of its deliveries, `extra`; the row, its id and the statistics columns (`text_len`, `reply_len`…) stay, the id is never reused, and `purged` becomes 1. There is no cap on the number of rows any more |
 | `[codex] enabled` | boolean, default `true`. With no `agent = "codex"` profile, `[codex]` acts in memory as an implicit Codex profile, converted to `[profiles.<name>]` by the first `sampan profile rename / disable / enable / forget / add --codex`; once any `agent = "codex"` profile exists, all of `[codex]` is ignored; `false` means Codex is off (no Codex profile), and forgetting the last Codex profile writes it |
@@ -26,6 +28,25 @@ For migration or conversion scripts. A version sampan does not understand is nev
 | `[profiles.<name>] plugins` | list of `plugin@marketplace`; the marketplace must be in `[marketplaces]` |
 
 Overrides: `SAMPAN_CONFIG` (config file, default `~/.config/sampan/config.toml`), `SAMPAN_STATE_DIR` (state folder, default `~/.local/state/sampan/`).
+
+### `[limits]` (0.28)
+
+| Key | Default | Meaning |
+|---|---|---|
+| `max_sessions` | `"auto"` | `"auto"`, an integer, or `0` (no count limit). `auto` = `clamp(floor((RAM GiB − reserve_gb) ÷ per_session_gb), min_auto, 64)`; 16 on a 16 GiB machine (**an empirical figure**: the formula's constants only give a starting point, they are not the real use) |
+| `count_mode` | `"warn"` | Past the count limit: `"warn"` only warns and lists sessions you could stop; `"block"` refuses a new one too |
+| `pressure_guard` | `true` | Refuse new agents under a red memory light; `false` only shows it |
+| `swapout_per_min` | `1000` | "Being written out to swap" (the `Swapouts` counter, per minute) |
+| `reserve_gb`, `per_session_gb`, `min_auto` | `8`, `0.5`, `4` | The constants and floor of `auto` |
+| `red_floor` | `4` | Without `[limits.owners]`: how many agents the machine may still have under a red light |
+| `reserve_per_owner` | `3` | Each owner's reserve (how many it may have under a red light; in `block` mode the places others have not used cannot be taken either) |
+| `protect` | `["*-pm"]` | Name patterns never offered as "could be stopped" |
+
+`[limits.owners]` holds only `owner = [profiles]` (a profile may appear once; a profile that is not listed, and a `claude` outside tmux, belong to "others", which have no reserve under a red light). **The red memory light** (the only thing that refuses) is any of: compressor >40 % or swap ≥45 % of RAM *and* being written out; compressor and swap both high; within 10 minutes of the first case while either is still high; free memory (`kern.memorystatus_level`) under 15. Load is only shown. A reading that cannot be had is "unknown" and never refuses.
+
+New in the state directory: `resources.json` (the last two readings, `last_swapout_red_at`, boot time; written at most every 30 s), `limits-reservations.json` (places of agents that are starting and not in `ps` yet; each lapses after about 2 minutes), `limits.lock`, `resources.lock`. Older versions ignore them.
+
+MCP `list_sessions` has a top-level `limits`: `running`, `starting`, `limit`, `over`, `count_mode`, `by_owner`, `outside_tmux`, `memory` (`green` / `yellow` / `red` / `unknown`), `items` (`compressor`, `swap`, `level`), `load` and `resources` (`ram_bytes`, `swap_used_bytes`, `swap_total_bytes`, `compressor_pct`, `swapout_rate`, `level`, `load5`, `cores`, `at`; `null` when unreadable).
 
 ## `registry.json` (`version = 3`, in the state folder)
 

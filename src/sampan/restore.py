@@ -359,7 +359,7 @@ def start_one(cfg, run, name, *, sleep, out=lambda _l: None, alive=os.kill, targ
 def cmd_restore(cfg, run, out, ask, *, names=(), select_all=False, dry_run=False, interval=3, sleep=time.sleep,
                 picker_fn=None, now_fn=lambda: datetime.now(timezone.utc), timeout=10, alive=os.kill,
                 confirm=True, opened=None, on_prompt=None, wait=True, interactive=True, replacing=frozenset(),
-                over_limit=False, ask_limit=None):
+                over_limit=False, ask_limit=None, refused=None):
     """confirm=False: do not ask, reattach the default-selected ones directly (used when the ui presses Enter on a single stopped session).
     wait=False: finish once the reattach command is sent, without waiting or looking at the screen (when the ui reattaches one with Enter, it then goes straight into tmux and the user handles any menu).
     Unless a launched row gets the Remote Control reset (steps.rc_wanted): then it waits as with wait=True, so the ui
@@ -369,6 +369,8 @@ def cmd_restore(cfg, run, out, ask, *, names=(), select_all=False, dry_run=False
     replacing: names this very call (a restart) stopped a moment ago: they add nothing to the count and a memory red
     light does not stop them (but under a red light they come back one at a time). Every other name goes through
     limits.gate (over_limit / ask_limit: the person's override); one that is refused is skipped with the reason.
+    refused: given a list, the names the limit check turned away are appended (the ui's Enter then does not go on to
+    "go in anyway").
     opened: given a list, append the names of tmux sessions created / sent the reattach command, in order (the ui then attaches to the first).
     on_prompt(name, agent, prompt): asked when an agent stops at a startup menu during the wait (see prompts.Relay); None = press no keys."""
     if confirm and not interactive and not dry_run:
@@ -458,6 +460,8 @@ def cmd_restore(cfg, run, out, ask, *, names=(), select_all=False, dry_run=False
                            ask=ask_limit, dry_run=dry_run, probe=name not in replacing)
         if not gate.passed:
             skipped.append((name, "超過上限，略過"))
+            if refused is not None:
+                refused.append(name)
             continue
         serial = gate.outcome is not None and gate.outcome.red and name in replacing
         if serial and not serialnote and not dry_run:

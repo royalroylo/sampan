@@ -13,6 +13,8 @@
 | `[ui] start_dir` | 字串路徑，`n`（開新工作）的選目錄畫面從這裡開始；沒寫時用 `~/Projects`（存在的話），否則 `~` |
 | `[ui] detach_key` | 字串，預設 `"C-q"`。在 sampan 管的 session 裡按這個鍵就跳回 sampan：從 tmux 外接上的會 detach，sampan 在 tmux 裡切過去的會切回原本的 session；其他 tmux session 裡這個鍵照常傳給程式。sampan 打開畫面與接上 session 前把綁定寫進正在跑的 tmux（不改 `~/.tmux.conf`），並在它管的 session 設 `@sampan` 標記；你自己已經把這個鍵綁成別的，sampan 不覆蓋，`sampan doctor` 會提示。`""` 不綁（並拿掉 sampan 之前綁的）。限制：在 `sampan` 畫面外（例如 `sampan new` 後直接 `tmux attach`）開的 session，要等 `sampan` 畫面下次打開或做完一個動作才有標記；從 tmux 外接上後自己切過別的 session（`Ctrl-b s`），Ctrl-q 會切回上一個 session 而不是 detach |
 | `[ui] codex_auto_start` | 布林，預設 `true`。打開 `sampan` 畫面時若 Codex 常駐服務沒在執行，就在背景跑一次 `codex remote-control start`；`false` 不啟動 |
+| `[ui] resource_bar` | 布林，預設 `true`。主列表分隔線右端的資源列（總燈、壓縮、swap、負載、執行中／上限）；`false` 不畫、也不開背景取樣 |
+| `[limits]` | 同時執行的 agent 數量與記憶體保護，**沒寫這一段也用預設值生效**（見下表）。不認得的鍵會忽略（`sampan doctor` 提示）；舊的 `enforce`、`min_sessions` 會報錯並指向 `count_mode`、`pressure_guard`、`min_auto`、`red_floor` |
 | `[mcp] confirm` | 布林，預設 `true`。`sampan mcp serve` 的 `send`、`send_batch`、`new_session`、`cancel_dispatch`、`folder_move`、`resend` 每次都由 agent 自己的權限詢問問你（Claude Code 的權限提示、Codex 的 `approval_mode = "prompt"`）；不確定會先問人的 client 一律拒絕，不跳過。agent 從 Bash 跑 `sampan send`、`sampan send-batch`、`sampan new … --message`、`sampan dispatches cancel`、`sampan dispatches resend` 也被拒絕。`false` 都不問、直接做（照樣記 `actions.log`、可取消）。唯讀的 `list_sessions`、`dispatch_result` 永遠不問；收件用的 `inbox_take`、`reply` 也不經 sampan 問（Claude Code 自己會不會問，看 `sampan mcp install --allow-inbox`） |
 | `[dispatches] keep_days` | 非負整數，預設 `90`。已完成（`done`、`failed`、`cancelled`）超過這麼多天的派工會清掉本文：`text`、回覆與每段回覆、每次送達的文字、`extra`；那一列、編號與統計欄位（`text_len`、`reply_len`…）留著，編號也不會再被用，`purged` 記成 1。不再有筆數上限 |
 | `[codex] enabled` | 布林，預設 `true`。沒有任何 `agent = "codex"` 的 profile 時，`[codex]` 在記憶體裡當成一個隱含的 Codex profile，第一次 `sampan profile rename／disable／enable／forget／add --codex` 才轉成 `[profiles.<名稱>]`；只要有任何 `agent = "codex"` 的 profile，整個 `[codex]` 都不再作用；設成 `false` 表示不用 Codex（沒有 Codex profile），forget 最後一個 Codex profile 時會寫入 |
@@ -26,6 +28,25 @@
 | `[profiles.<名稱>] plugins` | 字串清單，每項 `plugin@marketplace`，marketplace 必須在 `[marketplaces]` |
 
 路徑覆寫：環境變數 `SAMPAN_CONFIG`（設定檔，預設 `~/.config/sampan/config.toml`）、`SAMPAN_STATE_DIR`（狀態資料夾，預設 `~/.local/state/sampan/`）。
+
+### `[limits]`（0.28）
+
+| 鍵 | 預設 | 說明 |
+|---|---|---|
+| `max_sessions` | `"auto"` | `"auto"`、整數、或 `0`（不限數量）。`auto` ＝ `clamp(floor((RAM GiB − reserve_gb) ÷ per_session_gb), min_auto, 64)`；16 GiB 的機器是 16（**經驗值**：公式的常數只為了給這台一個起點，不代表實際占用） |
+| `count_mode` | `"warn"` | 超過數量上限時：`"warn"` 只警告並列出可以停的 session；`"block"` 也拒絕新增 |
+| `pressure_guard` | `true` | 記憶體紅燈時拒絕新增；`false` 只顯示 |
+| `swapout_per_min` | `1000` | 「正在把記憶體寫進 swap」的門檻（`Swapouts` 計數器，每分鐘次數） |
+| `reserve_gb`、`per_session_gb`、`min_auto` | `8`、`0.5`、`4` | `auto` 的常數與下限 |
+| `red_floor` | `4` | 沒寫 `[limits.owners]` 時，記憶體紅燈下全機最多還能有幾個 |
+| `reserve_per_owner` | `3` | 每位擁有者的保底（紅燈下可以開到幾個；`block` 模式下別人沒用到的保底也不能被占走） |
+| `protect` | `["*-pm"]` | 不列為「可以停」的名稱樣式 |
+
+`[limits.owners]` 只放「擁有者名稱 = profile 清單」（一個 profile 只能在一處；沒列的 profile 與 tmux 外的 `claude` 歸「其他」，紅燈下沒有保底）。**記憶體紅燈**（只有這個會擋）＝下列任一：壓縮 >40% 或 swap ≥45%（占 RAM）而且正在寫出 swap；壓縮與 swap 同時偏高；上述第一種成立後 10 分鐘內壓縮或 swap 仍偏高；可用記憶體 `kern.memorystatus_level` <15。負載只顯示，不參與。讀不到的項目當「不知道」，不會因為量不到就拒絕。
+
+狀態資料夾多了：`resources.json`（最近兩次取樣、`last_swapout_red_at`、開機時間，最多每 30 秒寫一次）、`limits-reservations.json`（正在啟動、還沒出現在 `ps` 的名額，每筆約 2 分鐘後自己失效）、`limits.lock`、`resources.lock`。舊版會忽略它們。
+
+MCP `list_sessions` 頂層多一個 `limits`：`running`、`starting`、`limit`、`over`、`count_mode`、`by_owner`、`outside_tmux`、`memory`（`green`／`yellow`／`red`／`unknown`）、`items`（`compressor`、`swap`、`level`）、`load` 與 `resources`（`ram_bytes`、`swap_used_bytes`、`swap_total_bytes`、`compressor_pct`、`swapout_rate`、`level`、`load5`、`cores`、`at`；讀不到是 `null`）。
 
 ## `registry.json`（`version = 3`，在狀態資料夾裡）
 

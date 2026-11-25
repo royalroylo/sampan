@@ -722,17 +722,21 @@ def _dispatch(cfg, args):
             checker.start()  # check for a new version in the background: the list appears first
             from .ui.daemon_watch import make_watcher
             from .ui.dispatch_watch import make_dispatch_watcher
+            from .ui.resource_bar import ResourceWatcher
             from .update import show_pending_notices
             return curses_ui(cfg, run, out, **where, updater=checker, argv=argv, watcher=make_watcher(cfg, run),
                              dispatch_watcher=make_dispatch_watcher(cfg, run), detach_fn=detach_fn,
+                             resource_watcher=ResourceWatcher(cfg, run) if cfg.resource_bar else None,
                              notices_fn=lambda o: show_pending_notices(cfg, run, o))
         _upgrade_notice(cfg, run, out)
         import subprocess
 
         from .prompts import plain_prompt
+        from .ui.resource_bar import plain_line_now
         return cmd_ui(cfg, run, out, **where, picker_fn=None, restore_picker_fn=None, adopt_picker_fn=None, loop=True,
                       attach_fn=subprocess.call, updater=checker, argv=argv, prompt_fn=plain_prompt(out, input),
-                      detach_fn=detach_fn)
+                      detach_fn=detach_fn,
+                      resource_line_fn=lambda rows: plain_line_now(cfg, run, rows))
     if cmd == "claude":
         from .launch import cmd_claude, disabled_problem
         rest = list(args.rest)

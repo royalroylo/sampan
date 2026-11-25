@@ -168,7 +168,8 @@ def _fit_messages(groups, n, width):
 
 
 def render(*, title, left, cursor, card, preview=None, messages=(), prompt=None, help="", width, height,
-           cols=LIST_COLS, empty=None, notice=None, extra=(), name_w=None, accounts=(), dispatch=None, solo=False):
+           cols=LIST_COLS, empty=None, notice=None, extra=(), name_w=None, accounts=(), dispatch=None, solo=False,
+           gauge=None):
     """Turn one screen into [(text, style), …] lines that fit within height lines, each with display width at most width (styles: title / sel / dim / prompt / "").
     At width >= WIDE the info card sits to the right of the list, otherwise under it; when too small, lines are dropped from the top, keeping the message area and key help to the end.
     When preview (lines already through clean_capture) is not None, card is a compact header, followed by a separator line and the last lines of the pane screen.
@@ -177,7 +178,9 @@ def render(*, title, left, cursor, card, preview=None, messages=(), prompt=None,
     name_w, when given, is the name column width to cap at instead of the widest name in left (a filtered list keeps the full list's columns).
     accounts (the main list's one line per profile, a str or (text, style)) sit between the list area and the message area, kept to the end like notice.
     dispatch (the dispatch summary line, or None) follows the accounts.
-    solo: the list takes the whole width (no info card), for screens whose rows say everything themselves."""
+    solo: the list takes the whole width (no info card), for screens whose rows say everything themselves.
+    gauge: None, or a function width -> [(text, style), …] drawn at the right end of the separator line under the list
+    (resource_bar.gauge; it returns [] when there is no room)."""
     if width <= 0 or height <= 0:
         return []
     messages = list(messages)
@@ -218,8 +221,21 @@ def render(*, title, left, cursor, card, preview=None, messages=(), prompt=None,
             shown += [[(pad("", width), "")]] * (card_h - len(shown))
             body += [[("─" * width, "dim")]] + shown
         sep = "─" * width
-    lines = [title_line] + body + [[(sep, "dim")]] + account_lines + msg_lines + prompt_lines + [help_line]
+    lines = [title_line] + body + [_sep_line(sep, gauge, width)] + account_lines + msg_lines + prompt_lines + [help_line]
     return lines[-height:]
+
+
+def _sep_line(sep, gauge, width):
+    """The separator line, with the gauge at its right end when there is one and it fits clear of the ┴. The gauge is
+    asked for the terminal's width first, then for the shorter forms (a card beside the list leaves less room)."""
+    if gauge is not None:
+        for w in (width, 99, 69):
+            segs = gauge(min(w, width))
+            gw = sum(text_width(t) for t, _ in segs)
+            keep = width - gw - 2
+            if segs and keep >= 1 and keep > sep.find("┴") + 1:
+                return [(sep[:keep] + " ", "dim"), *segs, (" ", "dim")]
+    return [(sep, "dim")]
 
 
 DIR_HELP = ("↑↓ 移動　→/Enter 進入　← 上一層　空白 選這個目錄　+ 新建資料夾　/ 直接打路徑　Tab 最近用過　. 顯示隱藏"

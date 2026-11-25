@@ -16,6 +16,11 @@ def row(name, state=State.RUNNING, profile="alice", agent_status="idle", tokens=
                       sid="aaaaaaaa-x")
 
 
+
+def _kw(kw):
+    """The keywords a fake action got, without the answer function the screen always passes (ask_limit)."""
+    return {k: v for k, v in kw.items() if k != "ask_limit"}
+
 ROWS = [row("a"), row("b", agent_status="busy", tokens=300_000), row("old", state=State.RETIRED, agent_status="-")]
 
 
@@ -39,8 +44,8 @@ class UiTest(unittest.TestCase):
             new_fn=lambda cfg, run, out, name, profile, cwd, **kw: self.calls.append(("new", name, profile, cwd)) or 0,
             set_state_fn=lambda cfg, out, name, state: self.calls.append(("state", name, state)) or 0,
             retire_fn=lambda cfg, run, out, name, **kw: self.calls.append(("retire", name, kw)) or 0,
-            move_fn=lambda cfg, run, out, name, dest, **kw: self.calls.append(("move", name, dest, kw)) or 0,
-            switch_fn=lambda cfg, run, out, name, prof, **kw: self.calls.append(("switch", name, prof, kw)) or 0,
+            move_fn=lambda cfg, run, out, name, dest, **kw: self.calls.append(("move", name, dest, _kw(kw))) or 0,
+            switch_fn=lambda cfg, run, out, name, prof, **kw: self.calls.append(("switch", name, prof, _kw(kw))) or 0,
             rename_fn=lambda cfg, run, out, old, new: self.calls.append(("rename", old, new)) or 0,
             alias_fn=lambda cfg, out, name, alias, **kw: self.calls.append(("alias", name, alias, kw)) or 0,
             forget_fn=lambda cfg, run, out, name: self.calls.append(("forget", name)) or 0,
@@ -256,7 +261,7 @@ class UiTest(unittest.TestCase):
         seen = []
 
         def fake(*a, **kw):
-            seen.append(kw)
+            seen.append(_kw(kw))
             return 0
         common = dict(rows_fn=lambda c, r: ROWS, exec_fn=lambda *a: self.execs.append(a), new_fn=fake,
                       restore_fn=fake, move_fn=fake, current_session="a", loop=False)
@@ -308,7 +313,7 @@ class UiTest(unittest.TestCase):
         seen = []
 
         def restore(cfg, run, out, ask, opened=None, **kw):
-            seen.append(kw)
+            seen.append(_kw(kw))
             opened.append(kw["names"][0])
             return 0
         rows = [dataclasses.replace(ROWS[0], state=State.STOPPED)]
@@ -1171,7 +1176,7 @@ class InteractiveUiTest(UiTest):
             set_state_fn=lambda cfg, out, name, state: self.calls.append(("state", name, state)) or 0,
             retire_fn=lambda cfg, run, out, name, **kw: self.calls.append(("retire", name, kw)) or 0,
             move_fn=lambda cfg, run, out, name, dest, **kw: self.calls.append(("move", name, dest)) or 0,
-            switch_fn=lambda cfg, run, out, name, prof, **kw: self.calls.append(("switch", name, prof, kw)) or 0,
+            switch_fn=lambda cfg, run, out, name, prof, **kw: self.calls.append(("switch", name, prof, _kw(kw))) or 0,
             rename_fn=lambda cfg, run, out, old, new: self.calls.append(("rename", old, new)) or 0,
             alias_fn=lambda cfg, out, name, alias, **kw: self.calls.append(("alias", name, alias, kw)) or 0,
             forget_fn=lambda cfg, run, out, name: self.calls.append(("forget", name)) or 0,
@@ -1211,7 +1216,7 @@ class InteractiveUiTest(UiTest):
         asked = []
         cmd_ui(self.cfg, self.r, self.msgs.append, lambda p: asked.append(p) or next(answers), own_pane="%9",
                rows_fn=lambda c, r: rows, picker_fn=lambda rows, cur: ("switch_many", ["a", "b", "c"]),
-               switch_fn=lambda cfg, run, out, name, prof, **kw: self.calls.append(("switch", name, prof, kw)) or 0)
+               switch_fn=lambda cfg, run, out, name, prof, **kw: self.calls.append(("switch", name, prof, _kw(kw))) or 0)
         self.assertIn("開始？ y/N: ", asked)
         self.assertEqual([c[:3] for c in self.calls], [("switch", "a", "work"), ("switch", "b", "work")])
         self.assertIn("跳過 1 個：c（忙碌中）", self.text())
@@ -1489,7 +1494,7 @@ class FolderUiTest(unittest.TestCase):
             answers = iter(["fresh", "", "", "/tmp"])
             cmd_ui(self.cfg, self.r, self.msgs.append, lambda _p: next(answers), rows_fn=lambda c, r: ROWS,
                    picker_fn=lambda rows, cur, t=target: ("new", t), exec_fn=lambda *a: self.execs.append(a),
-                   new_fn=lambda cfg, run, out, name, profile, cwd, **kw: seen.append(kw) or 0)
+                   new_fn=lambda cfg, run, out, name, profile, cwd, **kw: seen.append(_kw(kw)) or 0)
         self.assertEqual(seen, [{"wait": False, "folder": "客戶"}, {"wait": False}, {"wait": False}])
 
     def test_plain_lists_folder_prefix_and_S_restarts(self):

@@ -46,6 +46,15 @@ KEY_GROUPS = [
     ]),
 ]
 
+# what the line at the right end of the list's separator says (not keys: the page appends it, FOOTER ignores it)
+GAUGE_GROUP = ("右下角的資源列", [
+        ("◆", "總燈：只看記憶體。紅＝新開、接回會被擋（按 y 才硬開）；黃＝偏緊；綠＝正常"),
+        ("壓縮／swap", "黃：壓縮 >30%／swap ≥25%；偏高：壓縮 >40%／swap ≥45%（要同時在寫出 swap 才算紅）"),
+        ("負載", "每核 5 分鐘負載，>1 黃、>2 紅；只上色，不影響總燈和擋不擋"),
+        ("執行中 a/b", "執行中數量／上限；超過寫 a/b!（只警告，不變紅）。`?` 表示讀不到或讀數太舊"),
+    ])
+
+
 def _footer():
     """The bottom line: ? first, then the keys with a short name in the table's order. Tab／Shift+Tab shows as Tab."""
     items = [(k.split("／")[0], e[2]) for _g, keys in KEY_GROUPS for e in keys if len(e) == 3 for k in [e[0]]]
@@ -67,6 +76,13 @@ def _lines():
         out.append([(group, "head")])
         out += [[("  " + ljust(e[0], key_w) + "  ", "key"), (e[1], "")] for e in keys]
     return out
+
+
+def _gauge_lines():
+    """The legend of the line at the right end of the separator; shown only when the page has room left for it."""
+    group, keys = GAUGE_GROUP
+    key_w = max(text_width(k) for k, _w in keys)
+    return [[(group, "head")]] + [[("  " + ljust(k, key_w) + "  ", "key"), (what, "")] for k, what in keys]
 
 
 def _cut(segs, width):
@@ -94,6 +110,9 @@ def help_frame(width, height):
         breaks = [i for i, line in enumerate(body) if not line]  # split at a group break, columns as even as can be
         split = min(breaks, key=lambda i: max(i, len(body) - i - 1))
         columns = [body[:split], body[split + 1:]]
+    extra = _gauge_lines()
+    if len(columns[-1]) + 1 + len(extra) <= room:
+        columns[-1] = columns[-1] + [[]] + extra
     rows = []
     for i in range(max(len(c) for c in columns)):
         segs = []

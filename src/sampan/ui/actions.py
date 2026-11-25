@@ -166,7 +166,8 @@ def _restart(cfg, run, out, ask, plan, own_pane, restart_fn, kw, *, rows=None, c
         if (_ask(ask, "確定？(y/N): ") or "").lower() != "y":
             out("已取消")
             return 0
-    return restart_fn(cfg, run, out, ask, plan, own_pane=own_pane, on_prompt=kw.get("on_prompt"))
+    return restart_fn(cfg, run, out, ask, plan, own_pane=own_pane, on_prompt=kw.get("on_prompt"),
+                      **({"ask_limit": kw["ask_limit"]} if kw.get("ask_limit") else {}))
 
 
 def _move(cfg, run, out, ask, name, agent, own_pane, move_fn, choose_dir_fn=None, prompt_kw=None):
@@ -479,8 +480,10 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
            adopt_fn=adopt_mod.cmd_adopt, adopt_picker_fn=None, save_fn=save_mod.cmd_save, loop=False,
            attach_fn=None, choose_dir_fn=None, updater=None, update_fn=update_mod.do_update, argv=(), prompt_fn=None, plugins_fn=None,
            profiles_fn=None, set_cfg_fn=None, dispatches_fn=None, choose_folder_fn=None, restart_fn=None,
-           detach_fn=None, typeahead_fn=None, notices_fn=None):
-    """typeahead_fn() drops the keys typed while an action ran (curses: CursesScreen.drop_typeahead).
+           detach_fn=None, typeahead_fn=None, notices_fn=None, resource_line_fn=None):
+    """resource_line_fn(rows) -> str: the plain-text list prints this line before each listing (the curses screen draws it
+    itself); None = none.
+    typeahead_fn() drops the keys typed while an action ran (curses: CursesScreen.drop_typeahead).
     dispatches_fn(ask=…) is the dispatch list for D (curses: CursesScreen.dispatches); when None, the dispatches are printed.
     picker_fn(rows, current) returns (action, list of names); when None, use the plain-text menu where a number is typed.
     restore_picker_fn / adopt_picker_fn are the checklist interfaces for R / A; when None, restore / adopt ask in text themselves.
@@ -538,6 +541,10 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
         if set_cfg_fn is not None:
             set_cfg_fn(cfg)
 
+    def _ask_limit(question):
+        """The limit refused: ask the person at this screen (y = start it anyway; logged by the check)."""
+        return (_ask(ask, question) or "").strip().lower() == "y"
+
     def _refresh():
         """Re-read the config only when config.toml changed since the last read (so a broken file warns once)."""
         if _stamp() != seen:
@@ -552,7 +559,11 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
         if r is not None and r.state is State.STOPPED:
             opened = []
             # only one reattached: go straight in once sent; the user answers any startup menu (trust, update…) inside tmux
-            rc = restore_fn(cfg, run, out, ask, names=(name,), confirm=False, opened=opened, wait=False)
+            turned_away = []
+            rc = restore_fn(cfg, run, out, ask, names=(name,), confirm=False, opened=opened, wait=False,
+                            refused=turned_away, **({"ask_limit": kw["ask_limit"]} if kw.get("ask_limit") else {}))
+            if turned_away:  # the limit said no: neither "reattach here" nor "go in and press Enter again" is true
+                return rc, None
             if not opened and name == current_session:
                 # sampan itself occupies this session's pane (e.g. sampan opened in the same pane after claude exited):
                 # shut sampan down and reattach in place in this pane; when the agent exits we are back at the original shell
@@ -612,7 +623,7 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
         return rc, None
 
     def _new_here(names, rows, kw):
-        prompt_kw = {"wait": False}  # go straight in once opened
+        prompt_kw = {"wait": False, **({"ask_limit": kw["ask_limit"]} if kw.get("ask_limit") else {})}  # go straight in once opened
         if names and names[0]:
             prompt_kw["folder"] = names[0]
         return _new(cfg, run, out, ask, new_fn, choose_dir_fn, prompt_kw)
@@ -713,6 +724,8 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
         if picker_fn:
             action, names = picker_fn(rows, current_session)
         else:
+            if resource_line_fn is not None and (line := resource_line_fn(rows)):
+                out(line)
             action, names = _plain_action(ask, out, rows, current_session, _plain_tree())
         if action == "quit":
             return 0
@@ -720,10 +733,10 @@ def cmd_ui(cfg, run, out, ask=input, *, current_session=None, own_pane=None, pic
             rc, go = 1, None
         else:
             _refresh()  # picker_fn waits for keys: the config may have been edited elsewhere meanwhile
-            kw, want = {}, []
+            kw, want = {"ask_limit": _ask_limit}, []  # a person is at this screen: a refusal may be answered y
             if prompt_fn is not None:
                 on_prompt, want = recording(prompt_fn)
-                kw = {"on_prompt": on_prompt}
+                kw["on_prompt"] = on_prompt
             try:
                 rc, go = act(action, names, rows, kw)
                 if want:  # "go in and handle it myself" was chosen: attach to that session when the action ends
