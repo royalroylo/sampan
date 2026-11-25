@@ -95,6 +95,35 @@ class CodexConfig:
     profile: str = ""  # name of the Codex profile in effect; "" when there is none
 
 
+LIMIT_KEYS = ("max_sessions", "count_mode", "pressure_guard", "swapout_per_min", "reserve_gb", "per_session_gb",
+              "min_auto", "red_floor", "reserve_per_owner", "protect")
+
+
+@dataclass(frozen=True)
+class Limits:
+    """[limits]: how many agents may run at once, and when a memory red light stops new ones (limits.py, resources.py).
+    Absent section = these defaults, in force."""
+    max_sessions: object = "auto"  # "auto", an integer, or 0 (no count limit)
+    count_mode: str = "warn"  # "warn": over the limit only warns; "block": it refuses too
+    pressure_guard: bool = True  # False: a memory red light is shown but never refuses
+    swapout_per_min: int = 1000  # Swapouts per minute above which memory is "being written out"
+    reserve_gb: float = 8  # constant of the "auto" formula (not the real system use)
+    per_session_gb: float = 0.5  # constant of the "auto" formula
+    min_auto: int = 4  # lower bound of "auto"
+    red_floor: int = 4  # without [limits.owners]: agents still allowed in total under a memory red light
+    reserve_per_owner: int = 3  # per owner in [limits.owners]
+    protect: tuple = ("*-pm",)  # name patterns never offered as a session to stop
+    owners: tuple = ()  # ((owner, (profile, ...)), ...)
+    explicit: bool = False  # a [limits] section was written
+
+    def owner_of(self, profile):
+        """The owner a profile belongs to; "" (the others) when it is in no list."""
+        for name, profiles in self.owners:
+            if profile in profiles:
+                return name
+        return ""
+
+
 @dataclass(frozen=True)
 class Config:
     version: int
@@ -112,6 +141,8 @@ class Config:
     detach_key: str = "C-q"  # [ui] detach_key: the tmux key that jumps out of a sampan session ("" = none)
     keep_days: int = 90  # [dispatches] keep_days: a finished message older than this loses its text and reply (the row stays)
     mcp_confirm: bool = True  # [mcp] confirm: the MCP tools that act are marked, so the agent's own permission prompt asks the user
+    limits: Limits = Limits()
+    resource_bar: bool = True  # [ui] resource_bar: the memory / load / count line at the bottom right of the main list
 
     @property
     def codex_profiles(self):
@@ -273,6 +304,10 @@ def load_config(path, *, home=None, state_dir=None):
     detach_key = ui.get("detach_key", "C-q")
     if not isinstance(detach_key, str) or (detach_key and not KEY_RE.match(detach_key)):
         raise ConfigError(f"[ui] detach_key 要是 tmux 的按鍵名稱（例如 \"C-q\"，空字串＝不綁），目前是 {detach_key!r}")
+    resource_bar = ui.get("resource_bar", True)
+    if not isinstance(resource_bar, bool):
+        raise ConfigError(f"[ui] resource_bar 要是 true 或 false，目前是 {resource_bar!r}")
+    limits = _load_limits(data.get("limits"), table)
     mcp = table(data.get("mcp", {}), "[mcp]")
     mcp_confirm = mcp.get("confirm", True)
     if not isinstance(mcp_confirm, bool):
@@ -293,4 +328,57 @@ def load_config(path, *, home=None, state_dir=None):
         detach_key=detach_key,
         keep_days=keep_days,
         mcp_confirm=mcp_confirm,
+        limits=limits,
+        resource_bar=resource_bar,
     )
+
+
+def _load_limits(raw, table):
+    if raw is None:
+        return Limits()
+    raw = dict(table(raw, "[limits]"))
+    owners_raw = raw.pop("owners", {})
+    if "enforce" in raw:
+        raise ConfigError("[limits] enforce 已改名：數量要不要擋用 count_mode = \"warn\" 或 \"block\"，"
+                          "記憶體紅燈要不要擋用 pressure_guard = true 或 false")
+    if "min_sessions" in raw:
+        raise ConfigError("[limits] min_sessions 已拆成 min_auto（auto 的下限）與 red_floor（記憶體紅燈下全機至少可開幾個）")
+    for key in raw:
+        if key not in LIMIT_KEYS:
+            raise ConfigError(f"[limits] 不認得的鍵 {key}（可用：{', '.join(LIMIT_KEYS)}）")
+
+    def num(key, kind, default, minimum=0):
+        v = raw.get(key, default)
+        if isinstance(v, bool) or not isinstance(v, (int, float) if kind is float else int) or v < minimum:
+            raise ConfigError(f"[limits] {key} 要是{'非負數' if kind is float else '非負整數'}，目前是 {v!r}")
+        return v
+
+    mx = raw.get("max_sessions", "auto")
+    if mx != "auto" and (isinstance(mx, bool) or not isinstance(mx, int) or mx < 0):
+        raise ConfigError(f"[limits] max_sessions 要是 \"auto\" 或非負整數（0＝不限數量），目前是 {mx!r}")
+    mode = raw.get("count_mode", "warn")
+    if mode not in ("warn", "block"):
+        raise ConfigError(f"[limits] count_mode 要是 \"warn\" 或 \"block\"，目前是 {mode!r}")
+    guard = raw.get("pressure_guard", True)
+    if not isinstance(guard, bool):
+        raise ConfigError(f"[limits] pressure_guard 要是 true 或 false，目前是 {guard!r}")
+    protect = raw.get("protect", ["*-pm"])
+    if not isinstance(protect, list) or not all(isinstance(x, str) for x in protect):
+        raise ConfigError("[limits] protect 要是字串清單")
+    owners_raw = table(owners_raw, "[limits.owners]")
+    owners, seen = [], {}
+    for name, profiles in owners_raw.items():
+        if not isinstance(profiles, list) or not all(isinstance(x, str) for x in profiles):
+            raise ConfigError(f"[limits.owners] {name}：要是 profile 名稱的清單"
+                              "（保底數量放在 [limits] 的 reserve_per_owner，不是這裡）")
+        for prof in profiles:
+            if prof in seen:
+                raise ConfigError(f"[limits.owners] profile {prof} 同時在 {seen[prof]} 和 {name}")
+            seen[prof] = name
+        owners.append((name, tuple(profiles)))
+    return Limits(
+        max_sessions=mx, count_mode=mode, pressure_guard=guard,
+        swapout_per_min=num("swapout_per_min", int, 1000, 1), reserve_gb=num("reserve_gb", float, 8),
+        per_session_gb=num("per_session_gb", float, 0.5, 0.01), min_auto=num("min_auto", int, 4, 1),
+        red_floor=num("red_floor", int, 4), reserve_per_owner=num("reserve_per_owner", int, 3),
+        protect=tuple(protect), owners=tuple(owners), explicit=True)
