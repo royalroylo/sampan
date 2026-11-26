@@ -5,6 +5,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.28.2] - 2026-11-27
+
+Upgrading: nothing to do; no setting, registry, dispatch or config format changes.
+
+### Added
+
+- **The screen's list shows the context and the model of each session.** Two columns at the right end of the list, the same data as `sampan status` (context as the info card prints it, from the rows already read: no extra transcript reads and the 60-second display cache is untouched; the model is what `sampan model` set, `-` when unset, and the column appears only once somebody has set one). A context of 250k or more is drawn in the warning colour (`CONTEXT_WARN`, the same 250k as the `⚠`): a reattached session re-reads all of it on its first message. On a narrow terminal the model goes first, then the context, and the name is never squeezed; beside the info card, the card gives up width (down to 36 columns) before the columns go. The `?` page says so.
+
 ## [0.28.1] - 2026-11-27
 
 Upgrading: nothing to do; no setting, registry, dispatch or config format changes. This fixes what failed on CI after 0.28.0 (the tests, plus two small product edges); the limits behave as in 0.28.0 on macOS.
@@ -709,7 +717,8 @@ First public release. Versions up to 0.5.3 were released privately under the nam
 ### Security
 - Credentials in git URLs are no longer shown in output.
 
-[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.28.1...HEAD
+[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.28.2...HEAD
+[0.28.2]: https://github.com/royalroylo/sampan/releases/tag/v0.28.2
 [0.28.1]: https://github.com/royalroylo/sampan/releases/tag/v0.28.1
 [0.28.0]: https://github.com/royalroylo/sampan/releases/tag/v0.28.0
 [0.13.3]: https://github.com/royalroylo/sampan/releases/tag/v0.13.3

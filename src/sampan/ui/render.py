@@ -2,6 +2,7 @@
 from .. import update as update_mod
 from ..lights import IDLE, RUNNING, UNSEEN, WAITING
 from ..prompts import prompt_choices, prompt_lines
+from ..status import CONTEXT_LIMIT, _fmt_tokens
 from .cards import Keys, StateLine, Wrap, agent_style, message_style, name_with_alias, state_style
 from .codex_others import ListNote, OwnCols
 from .dirpick import tilde
@@ -10,6 +11,8 @@ from .text import _wrap, pad, text_width, wrap_items
 
 WIDE = 100  # at this width and above the info card goes on the right, below it goes under the list
 LIST_COLS = (6, 10, 7)  # render's default column widths (other than the name); the session list uses list_cols (one more column, profile)
+CONTEXT_WARN = CONTEXT_LIMIT  # (250k, status.py) a context at or above this many tokens is drawn in the warning colour (waking it re-reads all of it)
+MODEL_MAX = 18  # maximum width of the model column
 PROFILE_MAX = 14  # maximum width of the profile column (longer ones are truncated)
 NAME_GAP = 2  # how many cells the name column keeps beyond the longest name; the other columns follow right after, the extra width stays on the right
 PREVIEW_MIN = 5  # minimum number of lines left for the preview in a narrow layout (when the list is long)
@@ -46,6 +49,12 @@ def _fit(segs, width):
     return out + ([(" " * (width - used), "")] if used < width else [])
 
 
+class Cols(tuple):
+    """Column widths of the session list. The last `optional` columns (context, then model leftmost-last) are dropped, the
+    rightmost first, whenever the name column would otherwise get less than it needs."""
+    optional = 0
+
+
 def _cells(cells, cols, width, cap=None):
     """One list row → [(text, style), …]: the first column uses the remaining width (at most cap cells when cap is given), the other columns follow cols, extra width stays on the right.
     A cell may be a string or (string, style); the first one may also be a list of (string, style) runs. A row of one
@@ -55,6 +64,11 @@ def _cells(cells, cols, width, cap=None):
     if len(cells) == 1:  # a row with no other columns (a folder row) spans the whole width
         return _fit(([(" ", "")] + runs) if runs else [(" " + cells[0][0], cells[0][1])], width)
     first = width - 1 - sum(cols) - len(cols)
+    optional = getattr(cols, "optional", 0)
+    while optional and first < (cap if cap is not None else 4):  # the name keeps its room: model goes first, then context
+        cols = cols[:-1]
+        optional -= 1
+        first = width - 1 - sum(cols) - len(cols)
     if first < 4:
         return _fit([(" " + " ".join(t for t, _s in cells), "")], width)
     if cap is not None:
@@ -202,6 +216,10 @@ def render(*, title, left, cursor, card, preview=None, messages=(), prompt=None,
     msg_lines = [[(pad(" " + m, width), style)] for m, style in shown]
     if width >= WIDE and not solo:
         cw = max(36, min(64, width // 2))
+        if getattr(cols, "optional", 0) and left:  # the card gives up width (down to 36) before the list gives up columns
+            plain = [c for c in left if not isinstance(c, (ListNote, OwnCols))]
+            widest = name_w if name_w is not None else max((text_width(_cell_text(c[0])) for c in plain), default=0)
+            cw = max(36, min(cw, width - 3 - (1 + widest + NAME_GAP + sum(cols) + len(cols))))
         lw = width - cw - 3
         lrows = _list_rows(left, cursor, cols, lw, body_h, empty, name_w)
         crows = _panel(_card_rows(card, cw), preview, cw, body_h)
@@ -306,7 +324,18 @@ def list_empty(rows, query, kind="全部"):
 def list_cols(rows):
     """Widths of the session list columns other than the name: agent, profile (the longest profile, at most PROFILE_MAX cells), state, claude status."""
     pw = max([text_width(_profile_cell(r)) for r in rows] + [1])
-    return (6, min(PROFILE_MAX, pw), 10, 7)
+    with_model = any(r.model for r in rows)  # like `sampan status`: the column only shows once somebody sets a model
+    cols = Cols((6, min(PROFILE_MAX, pw), 10, 7, 6) + ((min(MODEL_MAX, max(text_width(r.model) for r in rows if r.model)),)
+                                                       if with_model else ()))
+    cols.optional = 2 if with_model else 1
+    return cols
+
+
+def _context_cell(r):
+    """The context column: the same text as `sampan status` and the info card; warning colour from CONTEXT_WARN."""
+    if r.tokens is None:
+        return ("-", "muted")
+    return (_fmt_tokens(r.tokens, r.context_window), "warn" if r.tokens >= CONTEXT_WARN or "⚠" in _fmt_tokens(r.tokens, r.context_window) else "")
 
 
 LIGHT_STYLE = {RUNNING: "info", WAITING: "warn", UNSEEN: "warn", IDLE: "muted"}
@@ -329,7 +358,8 @@ def _list_cells(r, marked, current, num=None, total=0, *, depth=0, prefix="", li
     else:
         name = f"{head}  {shown}{here}"
     status = (light, style) if style else (r.agent_status, agent_style(r.agent_status))
-    return (name, r.agent, _profile_cell(r), (list_state(r), state_style(r.state)), status)
+    return (name, r.agent, _profile_cell(r), (list_state(r), state_style(r.state)), status, _context_cell(r),
+            (r.model or "-", "" if r.model else "muted"))
 
 
 def folder_cells(item, marked, total=0):

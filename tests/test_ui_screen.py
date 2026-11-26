@@ -444,7 +444,7 @@ class CursesScreenTest(unittest.TestCase):
         self.assertIn("│ m", shown)  # info card for the cursor row
         self.assertEqual(s.messages, [])  # new action starts: message area is cleared
         first = self.scr.screens[-1][1]
-        self.assertRegex(first, r"^ +1 +◆ a +claude alice +執行中 +閒置 +│")  # profile column follows agent, fields sit right against the name
+        self.assertRegex(first, r"^ +1 +◆ a +claude alice +執行中 +閒置 +93k +│")  # profile column follows agent, fields sit right against the name
 
     def test_cursor_stays_on_same_session_after_an_action(self):
         rows = [row("a"), row("b"), row("c")]
@@ -949,10 +949,10 @@ class ColorTest(unittest.TestCase):
         rows = [row("a", profile="carol"), row("b", profile="work-team-1"), row("cx", agent="codex", profile="-")]
         self.assertEqual(_list_cells(rows[0], set(), None)[:3], ("    a", "claude", "carol"))
         self.assertEqual(_list_cells(rows[2], set(), None)[2], "-")
-        self.assertEqual(list_cols(rows), (6, 11, 10, 7))
+        self.assertEqual(list_cols(rows), (6, 11, 10, 7, 6))
         self.assertEqual(list_cols([row("a", profile="x" * 30)])[1], 14)
         self.assertEqual(list_cols([row("cx", agent="codex", profile="-")])[1], 1)
-        self.assertEqual(list_cols([]), (6, 1, 10, 7))
+        self.assertEqual(list_cols([]), (6, 1, 10, 7, 6))
         left = [_list_cells(r, set(), None) for r in rows]
         lines = frame_text(render(title="sampan", left=left, cursor=0, card=[], cols=list_cols(rows), width=120,
                                   height=8))

@@ -55,6 +55,12 @@ GAUGE_GROUP = ("右下角的資源列", [
     ])
 
 
+# the two last columns of the session list (not keys either)
+COLUMNS_GROUP = ("清單右邊的欄", [
+        ("context／模型", "和 sampan status 同一份資料；context 超過 250k 用黃字（接回後第一次互動會整段重讀）；窄螢幕先藏模型、再藏 context；模型欄只在有人設過模型時才出現"),
+    ])
+
+
 def _footer():
     """The bottom line: ? first, then the keys with a short name in the table's order. Tab／Shift+Tab shows as Tab."""
     items = [(k.split("／")[0], e[2]) for _g, keys in KEY_GROUPS for e in keys if len(e) == 3 for k in [e[0]]]
@@ -80,9 +86,12 @@ def _lines():
 
 def _gauge_lines():
     """The legend of the line at the right end of the separator; shown only when the page has room left for it."""
-    group, keys = GAUGE_GROUP
-    key_w = max(text_width(k) for k, _w in keys)
-    return [[(group, "head")]] + [[("  " + ljust(k, key_w) + "  ", "key"), (what, "")] for k, what in keys]
+    out = []
+    for group, keys in (GAUGE_GROUP, COLUMNS_GROUP):
+        key_w = max(text_width(k) for k, _w in keys)
+        out += ([[]] if out else []) + [[(group, "head")]]
+        out += [[("  " + ljust(k, key_w) + "  ", "key"), (what, "")] for k, what in keys]
+    return out
 
 
 def _cut(segs, width):

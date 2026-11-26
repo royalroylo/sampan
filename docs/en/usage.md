@@ -26,6 +26,8 @@ below. For a session running in tmux the right side shows its live screen (refre
 to go in and type). All questions, progress and results appear on this screen, and after each action you are back at the
 list. Press `q` to quit (a lone Esc on the list does not quit).
 
+The list ends with a **context** and a **model** column (the same data as `sampan status`; context is in the warning colour from 250k, because the first interaction after a reattach re-reads all of it; the model column appears only once somebody has set a model with `sampan model`, unset ones show `-`). A narrow terminal hides the model first, then the context, and never squeezes the name; on a wide one the info card gives up width (down to 36 columns) to keep them.
+
 | To do this | Press | What happens |
 |---|---|---|
 | Work in a session | Enter on its row | Goes into its tmux (switches if you are already in tmux). A stopped one is resumed first |
