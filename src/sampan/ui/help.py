@@ -57,7 +57,7 @@ GAUGE_GROUP = ("右下角的資源列", [
 
 # the two last columns of the session list (not keys either)
 COLUMNS_GROUP = ("清單右邊的欄", [
-        ("context／模型", "和 sampan status 同一份資料；context 超過 250k 用黃字（接回後第一次互動會整段重讀）；窄螢幕先藏模型、再藏 context；模型欄只在有人設過模型時才出現"),
+        ("context／模型", "和 sampan status 同一份資料；context 帶 ⚠ 的用黃字（Claude 250k 起；Codex 達它自己 window 的 80%；接回後第一次互動會整段重讀）；窄螢幕先藏模型、再藏 context；模型欄只在有人設過模型時才出現"),
     ])
 
 
