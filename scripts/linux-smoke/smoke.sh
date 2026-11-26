@@ -71,7 +71,7 @@ step "sampan ui outside tmux (pty via script, q to quit)"
 script -qec "stty rows 30 cols 120; timeout --foreground 10 sampan" /dev/null < <(sleep 3; printf q; sleep 3) 2>&1 | strip_ansi > /tmp/ui.out
 echo "  captured $(wc -c </tmp/ui.out) bytes"
 expect "ui drew the session list" grep -q 'c1' /tmp/ui.out
-expect "ui drew the key hints" grep -q '離開' /tmp/ui.out
+expect "ui drew the key hints" grep -q 'q 退' /tmp/ui.out
 
 step "sampan ui inside tmux (send-keys q)"
 tmux new-session -d -s zz-sampan-ui -x 120 -y 30 sampan
