@@ -57,8 +57,14 @@ step "sampan status (stopped)"
 out=$(sampan status); echo "$out"
 expect "2 rows, both stopped" test "$(grep -cE '^(c1|x1) .*已停止' <<<"$out")" = 2
 
+step "sampan restore --all without a terminal is refused"
+out=$(printf 'y\n' | sampan restore --all 2>&1) && rc=0 || rc=$?; echo "$out"
+expect "refused (exit 2)" test "$rc" = 2
+expect "says why" has "沒有終端機可以確認" "$out"
+expect "nothing was started" test "$(agents)" = 0
+
 step "sampan restore c1 x1"
-out=$(sampan restore c1 x1 2>&1)  # named: no terminal needed to confirm; echo "$out"
+out=$(sampan restore c1 x1 2>&1); echo "$out"  # named: no terminal needed to confirm
 expect "2 reattached" has "接回 2" "$out"
 expect "agents running again" test "$(agents)" = 2
 expect "resumed the same conversations (ids in process args)" test "$(ps -A -o args= | grep -cE 'fake-bin/(claude --resume|codex resume) ')" = 2

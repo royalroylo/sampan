@@ -20,4 +20,4 @@ sampan 依賴 Unix 的行程工具與 tmux，不支援 Windows。Windows 請用 
 - 一個 tmux session 只能跑一個 agent；同一個 session 裡偵測到不只一個 agent，整個 session 不記、不接回、不停、不搬，並提醒你拆開。
 - 找對話依賴 Claude Code 非公開的 session 檔（`<config_dir>/sessions/`）與逐字稿格式，以及 Codex 的 rollout 檔；它們改版時 sampan 可能需要跟著更新。`sampan doctor` 會提示已知的問題。
 - 只完整支援 macOS；Linux 實驗性（沒有自動存檔排程）；不支援 Windows。
-- 記憶體紅燈（session 上限）只在 macOS 判斷。Linux 從 `/proc` 讀 RAM 與 swap，讀不到的顯示 `?`，缺讀數不會拒絕，數量上限照常生效。
+- 記憶體紅燈（session 上限）在 Linux 沒有壓縮與 level 這兩項，只看 swap 的占用與寫出（從 `/proc` 讀）；讀不到的顯示 `?`，讀不到就不判紅、不擋，數量上限照常生效。

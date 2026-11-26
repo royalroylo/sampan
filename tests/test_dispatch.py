@@ -50,6 +50,21 @@ class StoreTest(unittest.TestCase):
         sqlite3.connect(self.dir / store.DB_FILE).close()  # the file is there before its schema (another process is creating it)
         self.assertEqual(dispatch.load(self.dir), [])
 
+    def test_user_version_read_error_is_a_dispatch_error(self):
+        self.put(mk("aaaa"))
+
+        class Broken:
+            def execute(self, *a):
+                raise sqlite3.OperationalError("database is locked")
+
+            def close(self):
+                self.closed = True
+        broken = Broken()
+        with mock.patch.object(store, "connect", return_value=broken):
+            with self.assertRaises(DispatchError):
+                dispatch.load(self.dir)
+        self.assertTrue(broken.closed)
+
     def test_round_trip_and_permissions(self):
         items = [mk("aaaa", reply="x", notify=True, thread_id="t1"), mk("bbbb", "done", sent_at=ago(1), done_at=ago(0))]
         self.put(*items)
