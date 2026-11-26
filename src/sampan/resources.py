@@ -8,6 +8,7 @@ import fcntl
 import json
 import os
 import re
+import sys
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -138,9 +139,21 @@ def _read_linux(proc_root):
     return f
 
 
+PLATFORM = sys.platform  # tests set this (or pass platform=): a run on Linux must not read the real /proc as a Mac
+
+
+def _physical_ram():
+    try:
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (ValueError, OSError, AttributeError):
+        return None
+
+
 def read_raw(run, *, platform=None, proc_root="/proc", load=None, ncpu=None):
-    platform = platform or os.sys.platform
+    platform = platform or PLATFORM
     f = _read_macos(run) if platform == "darwin" else _read_linux(proc_root) if platform.startswith("linux") else {}
+    if f.get("ram") is None and platform != "darwin":
+        f["ram"] = _physical_ram()  # without it the automatic limit would fall to its floor on a machine we cannot read
     if f.get("cores") is None:
         f["cores"] = ncpu if ncpu is not None else os.cpu_count()
     try:

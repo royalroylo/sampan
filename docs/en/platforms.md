@@ -26,3 +26,4 @@ and consider turning off its `resume_agents_on_restore` so it does not resume ev
 - Finding a conversation relies on Claude Code's undocumented session files (`<config_dir>/sessions/`) and transcript
   format, and on Codex's rollout files. They may change, and sampan may need updating with them; `sampan doctor` flags known problems.
 - macOS is the only fully supported platform; Linux is experimental (no auto-save schedule); Windows is not supported.
+- The memory red light (session limits) is judged on macOS only. On Linux sampan reads RAM and swap from `/proc`, shows what it cannot read as `?`, never refuses for a missing reading, and still applies the session count limit.

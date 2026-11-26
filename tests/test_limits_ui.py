@@ -9,10 +9,14 @@ from sampan.ui import resource_bar as rb
 from sampan.ui.actions import cmd_ui
 from sampan.ui.screen import CursesScreen
 from tests.fakes import FakeRunner, cp
-from tests.helpers import make_env, status_row
+from tests.helpers import as_macos, make_env, status_row
 from tests.test_resource_bar import reading
 
 ROW = status_row("a")
+
+
+def setUpModule():
+    as_macos()
 
 
 class Base(unittest.TestCase):

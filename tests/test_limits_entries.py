@@ -10,13 +10,17 @@ from sampan.dispatch import Dispatch
 from sampan.registry import Row, load_rows, write_rows
 from sampan.session_run import cmd_new
 from tests.fakes import FakeRunner, cp, pane_line, ps_line
-from tests.helpers import TOML, make_env
+from tests.helpers import TOML, as_macos, make_env
 from tests.test_resources import VM, sysctl_out
 
 RED = {"comp": 700_000, "swap": "8400M"}  # compressor 66% and swap 49% of RAM: both high = red without a rate
 CALM = {"comp": 100_000, "swap": "2000M"}
 OWNERS = "\n[limits.owners]\nann = ['alice']\nbob = ['work']\n"
 A = "aaaaaaaa-0000-4000-8000-000000000001"
+
+
+def setUpModule():
+    as_macos()
 
 
 class World:

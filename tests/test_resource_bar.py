@@ -11,7 +11,7 @@ from sampan.config import Limits
 from sampan.textwidth import text_width
 from sampan.ui import resource_bar as rb
 from tests.fakes import FakeRunner, cp
-from tests.helpers import make_env
+from tests.helpers import as_macos, make_env
 from tests.test_resources import RAM, VM, sysctl_out
 
 ui_render = importlib.import_module("sampan.ui.render")  # the package re-exports a function named render
@@ -30,6 +30,10 @@ def reading(**kw):
 
 def text(segs):
     return rb.gauge_text(segs)
+
+
+def setUpModule():
+    as_macos()
 
 
 class Gauge(unittest.TestCase):

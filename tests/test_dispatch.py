@@ -45,6 +45,11 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(dispatch.load(self.dir), [])
         self.assertFalse((self.dir / store.DB_FILE).exists())
 
+    def test_db_still_being_created_reads_as_empty(self):
+        self.dir.mkdir(parents=True)
+        sqlite3.connect(self.dir / store.DB_FILE).close()  # the file is there before its schema (another process is creating it)
+        self.assertEqual(dispatch.load(self.dir), [])
+
     def test_round_trip_and_permissions(self):
         items = [mk("aaaa", reply="x", notify=True, thread_id="t1"), mk("bbbb", "done", sent_at=ago(1), done_at=ago(0))]
         self.put(*items)

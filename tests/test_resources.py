@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from sampan import resources
 from sampan.config import Limits
@@ -59,6 +60,23 @@ class Parse(unittest.TestCase):
         self.assertEqual((f["ram"], f["swap_used"], f["swapouts"], f["boot"], f["load5"], f["cores"]),
                          (16000000 << 10, 1000000 << 10, 123, 1_700_000_000.0, 1.5, 4))
         self.assertIsNone(f.get("compressed"))
+
+    def test_linux_without_proc_files_is_unknown_not_red(self):
+        empty = Path(tempfile.mkdtemp())  # no /proc/meminfo, vmstat or stat
+        with mock.patch.object(resources, "_physical_ram", return_value=8 << 30):
+            f = resources.read_raw(FakeRunner(strict=True), platform="linux", proc_root=empty, load=lambda: (0, 0, 0), ncpu=2)
+        self.assertEqual(f["ram"], 8 << 30)  # the page count of the OS stands in, so the automatic limit is not at its floor
+        self.assertIsNone(f.get("swapouts"))
+        state = Path(tempfile.mkdtemp())
+        snap = resources.snapshot(FakeRunner(strict=True), state, Limits(), platform="linux", proc_root=empty,
+                                  load=lambda: (0, 0, 0), ncpu=2)
+        self.assertFalse(resources.usable(snap))  # an unusable reading never refuses (limits turns it into "unknown")
+
+    def test_platform_is_the_modules_unless_given(self):
+        r = FakeRunner(strict=True)
+        with mock.patch.object(resources, "PLATFORM", "freebsd"):
+            self.assertIsNone(resources.read_raw(r, load=lambda: (0, 0, 0), ncpu=1).get("swapouts"))
+        self.assertEqual(r.calls, [])  # neither sysctl nor vm_stat on a platform we do not know
 
 
 class Units(unittest.TestCase):

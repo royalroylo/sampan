@@ -5,6 +5,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.28.1] - 2026-11-27
+
+Upgrading: nothing to do; no setting, registry, dispatch or config format changes. This fixes what failed on CI after 0.28.0 (the tests, plus two small product edges); the limits behave as in 0.28.0 on macOS.
+
+### Fixed
+
+- **Linux: the memory reading.** The memory sampler chose its platform from `sys.platform` in a place the tests could not set, so on Linux the 0.28.0 tests read the real `/proc` instead of their fake `sysctl` / `vm_stat`. Now there is one module constant that tests set. On Linux the memory red light is **not judged** (there is no compressor and no free-memory level to read): swap and RAM come from `/proc`, a field that cannot be read is `?`, and a missing reading never blocks. The count limit works the same everywhere. If RAM cannot be read on Linux, the OS's page count is used so that `max_sessions = "auto"` is not stuck at its floor. The red light is judged on macOS only (Linux is experimental).
+- **A first dispatch could make a concurrent reader fail.** The dispatch database file exists a moment before its tables; a read in that moment (for example two `new_session` calls at once on a fresh install) said "no such table: messages" and refused. A database without its schema yet now reads as empty.
+
+### Tests
+
+- The limit, resource-line and MCP tests set the platform they fake, so the suite no longer depends on the host's `/proc`, `sysctl` or `vm_stat`; new tests cover Linux with no readable files (unknown, not red, the count still applies) and the race above.
+
 ## [0.28.0] - 2026-11-26
 
 Upgrading: **the limits are on from the first run, with no setting needed.** Past 16 running agents (the formula's result for 16 GiB of RAM) a new one only prints a warning and the sessions that could be stopped; but while the memory light is **red** (the compressor or swap is high *and* being written out, or both are high, or free memory is under 15 %) `new`, `restore`, `restart` for a stopped one, `switch` of a stopped one, `send --restore` and Enter on a stopped row are refused. To switch all of it off: `[limits] max_sessions = 0` and `pressure_guard = false`. `sampan limits` shows what is in force. A running `sampan mcp serve` keeps the old code until its session restarts. No registry, dispatch or config format changes. A downgrade is safe: 0.27 does not read `[limits]` or `[ui] resource_bar` (it ignores keys it does not know), and the new state files (`resources.json`, `limits-reservations.json`, the lock files `limits.lock` and `resources.lock`) are ignored by older versions.
@@ -696,7 +709,8 @@ First public release. Versions up to 0.5.3 were released privately under the nam
 ### Security
 - Credentials in git URLs are no longer shown in output.
 
-[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.28.0...HEAD
+[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.28.1...HEAD
+[0.28.1]: https://github.com/royalroylo/sampan/releases/tag/v0.28.1
 [0.28.0]: https://github.com/royalroylo/sampan/releases/tag/v0.28.0
 [0.13.3]: https://github.com/royalroylo/sampan/releases/tag/v0.13.3
 [0.13.2]: https://github.com/royalroylo/sampan/releases/tag/v0.13.2

@@ -85,3 +85,15 @@ def status_row(name, state=State.RUNNING, *, agent="claude", profile="alice", ag
                 else "unknown" if state == State.UNKNOWN else "stopped")
     return StatusRow(name, agent, profile, sid, state, detail, agent_status, last, tokens, pane=pane,
                      tmux_alive=tmux_alive, id=id, alias=alias, model=model, registry=registry, live=live)
+
+
+def as_macos():
+    """For setUpModule: the memory sampler reads the machine through the fake sysctl / vm_stat, whatever the host is
+    (on Linux CI it would otherwise read the real /proc)."""
+    import unittest
+    from unittest import mock
+
+    from sampan import resources
+    p = mock.patch.object(resources, "PLATFORM", "darwin")
+    p.start()
+    unittest.addModuleCleanup(p.stop)

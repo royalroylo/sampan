@@ -16,7 +16,7 @@ from sampan.registry import Row, write_rows
 from sampan.send import Caller
 from sampan.status import State
 from tests.fakes import FakeRunner, cp, pane_line, ps_line
-from tests.helpers import make_env, status_row
+from tests.helpers import as_macos, make_env, status_row
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 EMPTY = (FIXTURES / "claude_empty_placeholder.ansi").read_text()
@@ -56,6 +56,10 @@ def tmux_runner(screen=EMPTY):
 
 def tmux_writes(run):
     return [c["args"] for c in run.calls if c["args"][0] == "tmux" and not {"capture-pane", "display-message"} & set(c["args"])]
+
+
+def setUpModule():
+    as_macos()
 
 
 class Client:
@@ -841,7 +845,7 @@ class NewSessionToolTest(Base):
                                    call(3, "new_session", self.args(name="n2", model="a b")),
                                    call(4, "new_session", self.args(name="n3", model=7)),
                                    call(5, "new_session", self.args(name="n4"))]), confirm=False, run=new_runner())
-        self.assertCountEqual(seen, ["sonnet[1m]", None])  # stripped; the two bad ones never reached cmd_new (the two calls that did run on threads: no order)
+        self.assertCountEqual(seen, ["sonnet[1m]", None], [tool_text(c.response(i)) for i in (2, 5)])  # stripped; the two bad ones never reached cmd_new (the two calls that did run on threads: no order)
         self.assertFalse(c.response(2)["result"]["isError"])
         for rid, text in ((3, "模型不能含空白"), (4, "參數 model 要是字串")):
             self.assertTrue(c.response(rid)["result"]["isError"], rid)

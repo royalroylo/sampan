@@ -216,9 +216,13 @@ def _open(state_dir, *, fresh_ok):
     if not exists and not fresh_ok:
         return None
     try:
-        return store.connect(state_dir, create=not exists)
+        conn = store.connect(state_dir, create=not exists)
     except store.StoreError as e:
         raise DispatchError(str(e)) from e
+    if not fresh_ok and conn.execute("PRAGMA user_version").fetchone()[0] == 0:
+        conn.close()  # being created right now by another process (the file is there before its schema): nothing yet
+        return None
+    return conn
 
 
 # a message still moving (queued, sent) or whose caller is still owed its notice (see send._owes_notice: a plain one

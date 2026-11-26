@@ -15,7 +15,7 @@ from sampan.registry import Row, write_rows
 from sampan.send import Caller
 from sampan.status import State
 from tests.fakes import FakeRunner, cp, pane_line, ps_line
-from tests.helpers import TOML, status_row
+from tests.helpers import TOML, as_macos, status_row
 from tests.test_limits_entries import RED, World
 
 BLOCK4 = TOML + "\n[limits]\nmax_sessions = 4\ncount_mode = 'block'\n"
@@ -29,6 +29,10 @@ def watching(r, state):
             state["bad"].append(list(args))
         return r(args, **kw)
     return run
+
+
+def setUpModule():
+    as_macos()
 
 
 class LockPurity(unittest.TestCase):
@@ -249,6 +253,21 @@ class RestoreOrderAndWait(unittest.TestCase):
         slept = []
         self.assertTrue(restore._wait_up(r, "%7", slept.append))
         self.assertEqual(slept, [])  # up at once: no 60 s of waiting
+
+
+class OnLinux(unittest.TestCase):
+    """No sysctl, no vm_stat: the memory light reads /proc (or nothing) and never refuses on a missing reading; the
+    count limit works all the same."""
+
+    def test_count_limit_without_a_memory_reading(self):
+        w = World(self, running=3, toml=BLOCK4)
+        with mock.patch.object(resources, "read_raw", lambda run, **k: {"cores": 2, "ram": None}):
+            below = limits.check(w.cfg, w.runner(), name="n1", profile="alice", platform="linux", write=False)
+            w4 = World(self, running=4, toml=BLOCK4)
+            full = limits.check(w4.cfg, w4.runner(), name="n1", profile="alice", platform="linux", write=False)
+        self.assertTrue(below.ok)
+        self.assertFalse(full.ok)
+        self.assertFalse(full.red)  # refused for the count, not for a memory it could not read
 
 
 class Owners(unittest.TestCase):

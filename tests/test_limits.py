@@ -9,7 +9,7 @@ from sampan.procs import Proc
 from sampan.registry import Row, write_rows
 from sampan.tmux import Pane
 from tests.fakes import FakeRunner, cp, pane_line, ps_line
-from tests.helpers import TOML, make_env
+from tests.helpers import TOML, as_macos, make_env
 from tests.test_resources import VM, sysctl_out
 
 OWNERS = TOML + """
@@ -25,6 +25,10 @@ def P(pid, ppid, comm="claude", args="claude", stat="S"):
 
 def count_for(cfg, procs, panes=(), rows=(), res=(), phases=(), exclude=()):
     return limits.count(cfg, {p.pid: p for p in procs}, list(panes), list(rows), list(res), list(phases), exclude=exclude)
+
+
+def setUpModule():
+    as_macos()
 
 
 class Config(unittest.TestCase):
