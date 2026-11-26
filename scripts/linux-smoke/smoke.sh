@@ -41,7 +41,7 @@ expect "two fake agents running" test "$(agents)" = 2
 
 step "sampan status (before save)"
 out=$(sampan status); echo "$out"
-expect "2 rows" test "$(grep -c '執行中' <<<"$out")" = 2
+expect "2 rows" test "$(grep -cE '^(c1|x1) .*執行中' <<<"$out")" = 2
 
 step "sampan save"
 out=$(sampan save); echo "$out"
@@ -55,17 +55,17 @@ expect "tmux sessions closed" bash -c '! tmux ls 2>/dev/null | grep -q .'
 
 step "sampan status (stopped)"
 out=$(sampan status); echo "$out"
-expect "2 rows, both should-be-running-but-not" test "$(grep -c '該跑沒跑' <<<"$out")" = 2
+expect "2 rows, both stopped" test "$(grep -cE '^(c1|x1) .*已停止' <<<"$out")" = 2
 
-step "sampan restore --all"
-out=$(printf 'y\n' | sampan restore --all 2>&1); echo "$out"
+step "sampan restore c1 x1"
+out=$(sampan restore c1 x1 2>&1)  # named: no terminal needed to confirm; echo "$out"
 expect "2 reattached" has "接回 2" "$out"
 expect "agents running again" test "$(agents)" = 2
 expect "resumed the same conversations (ids in process args)" test "$(ps -A -o args= | grep -cE 'fake-bin/(claude --resume|codex resume) ')" = 2
 
 step "sampan status (after restore)"
 out=$(sampan status); echo "$out"
-expect "2 rows running" test "$(grep -c '執行中' <<<"$out")" = 2
+expect "2 rows running" test "$(grep -cE '^(c1|x1) .*執行中' <<<"$out")" = 2
 
 step "sampan ui outside tmux (pty via script, q to quit)"
 script -qec "stty rows 30 cols 120; timeout --foreground 10 sampan" /dev/null < <(sleep 3; printf q; sleep 3) 2>&1 | strip_ansi > /tmp/ui.out
