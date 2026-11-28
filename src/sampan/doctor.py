@@ -487,33 +487,33 @@ def _codex(cfg):
     return [Check("ok", "Codex 狀態資料庫可讀")]
 
 
-def _codex_registered(cfg):
+def _codex_registered(cfg, run):
     """A Codex session registered on a review subagent's conversation (nothing can be sent to it, restore would resume
-    the wrong one): the fix `sampan save` makes by itself, or why it cannot."""
+    the wrong one): what `sampan save` will do about it, or why it cannot (the same judgement save uses)."""
     from . import codex_subagent
     if not cfg.codex.enabled:
         return []
     try:
-        rows = [r for r in load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)
-                if r.agent == "codex" and r.state != "retired" and r.session_id]
+        rows = load_rows(cfg.registry_path, codex_profile=cfg.codex.profile)
     except (RegistryError, OSError):
         return []
-    if not rows:
+    if not any(r.agent == "codex" and r.state != "retired" and r.session_id for r in rows):
         return []
-    known = codex_subagent.db_rows(cfg.codex.home, [r.session_id for r in rows])
+    decisions = codex_subagent.plan_rows(cfg, run, rows, ())
+    if not decisions:
+        return [Check("ok", "登記的 Codex 對話都是主對話")]
     out = []
-    for r in rows:
-        if codex_subagent.thread_is_subagent(cfg.codex.home, r.session_id, row=known.get(r.session_id)) is not True:
-            continue
-        parent, why = codex_subagent.root_of(cfg.codex.home, r.session_id)
-        problem = why or codex_subagent.parent_problem(cfg.codex.home, parent, r.cwd)
-        if problem is None:
-            todo = ("跑一次 sampan save 會改回父對話" if cfg.heal_subagent
-                    else "設定檔 [save] heal_subagent 是 false，不會自動改回；打開它再跑 sampan save")
+    for d in decisions:
+        r = d.row
+        title = f"{r.tmux}：登記的 Codex 對話是審查小代理（{r.session_id[:8]}），不是主對話"
+        if d.parent is None:
+            detail = f"{d.problem}，所以 sampan save 不會改；請在畫面接上它再存檔，或 sampan forget {r.tmux} 後重新登記"
+        elif cfg.heal_subagent:
+            detail = f"跑一次 sampan save 會改回父對話（{d.parent[:8]}）"
         else:
-            todo = f"{problem}，所以 sampan save 不會改；請在畫面接上它再存檔，或 sampan forget {r.tmux} 後重新登記"
-        out.append(Check("warn", f"{r.tmux}：登記的 Codex 對話是審查小代理（{r.session_id[:8]}），不是主對話", todo))
-    return out or [Check("ok", "登記的 Codex 對話都是主對話")]
+            detail = "設定檔 [save] heal_subagent 是 false，不會自動改回；打開它再跑 sampan save"
+        out.append(Check("warn", title, detail))
+    return out
 
 
 def _codex_daemon(cfg, run, snapshot_fn=None):
@@ -724,7 +724,7 @@ def run_checks(cfg, run, *, now, uid, sampan_path=None, proc_root=PROC_ROOT, whi
     current = current or update_mod.current_version()
     latest_fn = latest_fn or (lambda: update_mod.check(cfg.state_dir, run=run)[0])
     return (_version(current, latest_fn) + _deps(cfg, which, env, platform) + _claude_versions(cfg, run) + _profile_dirs(cfg) + _owners(cfg, uid) + _plugins(cfg) + _auth(cfg, run) + _two_logins(cfg, run, platform) + _stale(cfg, run)
-            + _hooks(cfg) + _statusline(cfg, now) + _codex(cfg) + _codex_registered(cfg) + _codex_daemon(cfg, run, daemon_fn) + _mcp(cfg) + _detach_key(cfg, run) + _tmux_conf(cfg, run) + _multi_agent(cfg, run, proc_root) + _action_log(cfg) + _data_format(cfg)
+            + _hooks(cfg) + _statusline(cfg, now) + _codex(cfg) + _codex_registered(cfg, run) + _codex_daemon(cfg, run, daemon_fn) + _mcp(cfg) + _detach_key(cfg, run) + _tmux_conf(cfg, run) + _multi_agent(cfg, run, proc_root) + _action_log(cfg) + _data_format(cfg)
             + _profile_mismatch(cfg, run, rows_fn)
             + _lifecycle(cfg, run, rows_fn)
             + _limits(cfg, run)

@@ -20,16 +20,16 @@ def source_is_subagent(source):
     {"subagent": "review"}, {"subagent": {"thread_spawn": {...}}}, or a plain word like vscode / cli), the rollout's
     session_meta (the same, parsed), the daemon's reduced one (the first key: "subagent")."""
     if isinstance(source, dict):
-        return "subagent" in source
+        return any(isinstance(k, str) and k.lower() == "subagent" for k in source)  # the app-server writes subAgent
     if isinstance(source, str):
         text = source.strip()
-        if text == "subagent":
+        if text.lower() == "subagent":
             return True
         if text.startswith("{"):
             try:
                 return source_is_subagent(json.loads(text))
             except ValueError:
-                return text.startswith('{"subagent"')
+                return text.lower().startswith('{"subagent"')
     return False
 
 
@@ -186,44 +186,111 @@ def daemon_parent_fn(cfg, run, snapshot_fn=None):
     return parent
 
 
-def heal_rows(cfg, run, rows, observed, panes, procs, snapshot_fn=None):
-    """Put a Codex row whose registered conversation is a review subagent back on its parent conversation.
-    Returns (rows, healed, warnings): healed is [(name, old id, new id)]. A row is healed only when this round did not
-    observe it (what the screen shows now wins: /new, /clear), it is not retired, no Codex runs in its tmux session
-    (an unreadable one is only reported), the parent can be found and is a main conversation in the same directory,
-    no other row has the parent's id, and no other live Codex pane is in that directory. Anything else: not changed,
-    one warning."""
+@dataclass(frozen=True)
+class Decision:
+    row: object
+    parent: str | None  # what the row would become; None = left alone
+    problem: str | None  # why it is left alone
+    looked: bool = False  # the problem came from the (costly) lookup of the parent, not from what is running now
+
+
+def warning_text(decision):
+    r = decision.row
+    return f"{r.tmux}：登記的 Codex 對話是審查小代理（{r.session_id[:8]}），{decision.problem}，沒有改"
+
+
+def plan_rows(cfg, run, rows, observed, panes=None, procs=None, snapshot_fn=None, skip=None):
+    """One Decision for every Codex row whose registered conversation is a review subagent (none when there is none: then
+    nothing else is read). The one place that says whether and to what a row is changed; `sampan save` applies it and
+    `sampan doctor` reports it. A row is changed only when this round did not observe it (what the screen shows now wins:
+    /new, /clear), it is not retired, no Codex runs in its tmux session (an unreadable one is only reported), the parent
+    is found and is a main conversation in the same directory, no other row holds it, no other row is changed to it too,
+    and no other live Codex pane is in that directory. skip: {tmux: sid} of rows whose lookup failed recently: left alone,
+    nothing looked up again."""
     from . import codex_state
-    if not cfg.heal_subagent or not cfg.codex.enabled:
-        return rows, [], []
+    if not cfg.codex.enabled:
+        return []
     home = cfg.codex.home
     observed = set(observed)
-    out, healed, warnings = [], [], []
     cands = [r for r in rows if r.agent == "codex" and r.state != "retired" and r.tmux not in observed and r.session_id]
     known = db_rows(home, [r.session_id for r in cands])
-    live_codex_panes = [p for p in panes if codex_state.codex_pid_in_pane(procs, p.pane_pid) is not None]
+    subs = [r for r in cands if thread_is_subagent(home, r.session_id, row=known.get(r.session_id)) is True]
+    skip = skip or {}
+    subs = [r for r in subs if skip.get(r.tmux) != r.session_id]
+    if not subs:
+        return []
+    if panes is None or procs is None:
+        from .procs import list_procs
+        from .tmux import Tmux
+        panes = Tmux(run).panes() or []
+        procs = list_procs(run)
+    live_panes = [p for p in panes if codex_state.codex_pid_in_pane(procs, p.pane_pid) is not None]
     daemon_parent = daemon_parent_fn(cfg, run, snapshot_fn)
-    for r in rows:
-        if r not in cands or thread_is_subagent(home, r.session_id, row=known.get(r.session_id)) is not True:
-            out.append(r)
-            continue
-        problem = None
-        if any(p.session == r.tmux for p in live_codex_panes):
+    out = []
+    for r in subs:
+        parent = problem = None
+        looked = False
+        if any(p.session == r.tmux for p in live_panes):
             problem = "它的 tmux 裡有 codex 在跑，但這輪沒認出是哪一段對話"
         else:
-            parent, why = root_of(home, r.session_id, daemon_parent)
-            problem = why
+            parent, problem = root_of(home, r.session_id, daemon_parent)
             if problem is None:
                 problem = parent_problem(home, parent, r.cwd)
+            looked = problem is not None
             if problem is None and any(o.tmux != r.tmux and o.session_id == parent for o in rows):
                 problem = "父對話已經登記在別的 session"
             if problem is None and any(p.session != r.tmux and os.path.realpath(p.path) == os.path.realpath(r.cwd)
-                                       for p in live_codex_panes):
+                                       for p in live_panes):
                 problem = "同目錄還有別的 codex 在跑，不確定哪一段是這個 session 的"
-        if problem is not None:
-            warnings.append(f"{r.tmux}：登記的 Codex 對話是審查小代理（{r.session_id[:8]}），{problem}，沒有改")
-            out.append(r)
-            continue
-        healed.append((r.tmux, r.session_id, parent))
-        out.append(replace(r, session_id=parent))
+        out.append(Decision(r, None if problem else parent, problem, looked))
+    wanted = {}
+    for d in out:
+        if d.parent:
+            wanted[d.parent] = wanted.get(d.parent, 0) + 1
+    return [Decision(d.row, None, "另一個 session 也登記在同一個父對話的小代理上，分不出哪個才是它") if d.parent and wanted[d.parent] > 1 else d
+            for d in out]
+
+
+SKIP_FILE = "heal-skip.json"
+SKIP_S = 3600  # a row whose parent cannot be found is looked at again after this long (each look reads the sessions tree)
+
+
+def _skip_load(path, now):
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {k: v for k, v in data.items() if isinstance(v, dict) and isinstance(v.get("at"), (int, float))
+            and now - v["at"] < SKIP_S} if isinstance(data, dict) else {}
+
+
+def heal_rows(cfg, run, rows, observed, panes, procs, snapshot_fn=None, now=None, dry_run=False):
+    """Apply plan_rows to the registry rows. Returns (rows, healed, warnings): healed is [(name, old id, new id)].
+    A row whose parent could not be looked up warns once and then stays quiet for SKIP_S (heal-skip.json in the state dir, written
+    under the save lock, not on --dry-run): every five minutes the same warning, the same lookups, would be noise."""
+    import time
+    from pathlib import Path
+
+    from . import fsutil
+    if not cfg.heal_subagent or not cfg.codex.enabled:
+        return rows, [], []
+    now = time.time() if now is None else now
+    memo = Path(cfg.state_dir) / SKIP_FILE
+    recent = _skip_load(memo, now)
+    decisions = plan_rows(cfg, run, rows, observed, panes, procs, snapshot_fn,
+                          skip={k: v.get("sid") for k, v in recent.items()})
+    by_name = {d.row.tmux: d for d in decisions}
+    out = [replace(r, session_id=by_name[r.tmux].parent) if r.tmux in by_name and by_name[r.tmux].parent else r for r in rows]
+    healed = [(d.row.tmux, d.row.session_id, d.parent) for d in decisions if d.parent]
+    warnings = [warning_text(d) for d in decisions if d.problem]
+    if not dry_run:
+        keep = {k: v for k, v in recent.items() if any(r.tmux == k and r.session_id == v.get("sid") for r in rows)}
+        for d in decisions:
+            if d.problem and d.looked:
+                keep[d.row.tmux] = {"sid": d.row.session_id, "at": now}
+        if keep != recent or (keep and not memo.exists()):
+            try:
+                fsutil.atomic_write(memo, json.dumps(keep), mode=fsutil.PRIVATE_FILE)
+            except OSError:
+                pass
     return out, healed, warnings

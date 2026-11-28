@@ -38,6 +38,7 @@ class CodexThread:
     flags: tuple[str, ...]  # activeFlags: waitingOnApproval / waitingOnUserInput
     updated_at: datetime
     path: str | None  # rollout path
+    thread_source: str = ""  # threadSource ("guardian_review" for a review subagent)
 
 
 @dataclass(frozen=True)
@@ -100,7 +101,7 @@ def _thread(raw):
         parent_id=parent if isinstance(parent, str) else None,
         status=kind if isinstance(kind, str) and kind else "unknown",
         flags=tuple(f for f in flags if isinstance(f, str)) if isinstance(flags, list) else (),
-        updated_at=updated, path=path if isinstance(path, str) else None)
+        updated_at=updated, path=path if isinstance(path, str) else None, thread_source=_str(raw.get("threadSource")))
 
 
 def parse_threads(result):

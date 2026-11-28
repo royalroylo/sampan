@@ -13,7 +13,7 @@ from urllib.parse import quote
 
 from . import codex_daemon
 from .claude_state import Reply
-from .codex_subagent import is_subagent, rollout_meta, source_is_subagent
+from .codex_subagent import is_subagent, rollout_meta
 from .fsutil import cache_by_stat, reverse_lines
 from .procs import UUID_RE, is_uuid
 
@@ -98,15 +98,18 @@ def rollout_from_lsof(run, pid, codex_home):
         m = ROLLOUT_RE.match(path.name)
         if m and any(root in path.parents for root in roots):
             found[m.group(1)] = path
-    if len(found) != 1:
-        return None
-    (tid, path), = found.items()
-    meta = rollout_meta(path)  # a review subagent's rollout is never the pane's conversation
-    if meta is not None:
-        return None if meta.subagent else tid
-    from . import codex_subagent  # the rollout cannot be read: the threads table is the second opinion
-    row = codex_subagent.db_rows(codex_home, [tid]).get(tid)
-    return None if row is not None and row.subagent else tid
+    mains = {}
+    for tid, path in found.items():  # a review subagent's rollout (the first line says) is never the pane's conversation
+        meta = rollout_meta(path)
+        if meta is None:
+            from . import codex_subagent  # the rollout cannot be read: the threads table is the second opinion
+            row = codex_subagent.db_rows(codex_home, [tid]).get(tid)
+            if row is not None and row.subagent:
+                continue
+        elif meta.subagent:
+            continue
+        mains[tid] = path
+    return next(iter(mains)) if len(mains) == 1 else None
 
 
 def _state_db(codex_home):
@@ -165,7 +168,7 @@ def daemon_fallback(snap, cwd, exclude, started_at, panes_in_cwd=1):
     near its start time (a `/new` long after launch)."""
     cwds = {cwd, os.path.realpath(cwd)}
     ids = sorted({t.id for t in snap.threads
-                  if t.originator in TUI_ORIGINATORS and not source_is_subagent(t.source) and t.id not in exclude and (t.id in snap.loaded or t.status in ("active", "idle"))
+                  if t.originator in TUI_ORIGINATORS and not is_subagent(t.source, t.thread_source) and t.id not in exclude and (t.id in snap.loaded or t.status in ("active", "idle"))
                   and (t.cwd in cwds or os.path.realpath(t.cwd) in cwds)
                   and t.updated_at.timestamp() >= started_at - TIE_TOLERANCE})
     if len(ids) > max(1, panes_in_cwd):

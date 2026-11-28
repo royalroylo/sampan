@@ -67,6 +67,7 @@ callable (`runner.py`). That is what makes the suite fast and safe: tests pass a
 | `usage/<profile>.json` | latest Claude 5h / weekly quota written by `sampan statusline` (Codex is read from its own rollout files, never copied here) |
 | `resources.json` (`resources.lock`) | the last two memory readings (for the swap write-out rate), the last time "high and being written out" held, the boot time; written at most every 30 s |
 | `limits-reservations.json` (`limits.lock`) | places of agents that are starting and not yet in `ps`: name, writer's pid and start time, expiry (about 2 minutes); only the file and a read-only look at the dispatches are touched under the lock |
+| `heal-skip.json` | Codex rows whose parent conversation `sampan save` could not find (name, conversation, time): left alone for an hour so the same lookups and warning do not repeat every 5 minutes |
 | `hooks/<pid>.json` | written by the optional SessionStart hook |
 | `update-check.json` | cached newest version tag (6 hours) |
 | `~/Library/LaunchAgents/io.github.royalroylo.sampan-save.plist` | macOS save every 5 minutes |

@@ -8,8 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
-from sampan import codex_subagent, deliver, doctor, save
-from sampan.codex_daemon import CodexThread, DaemonSnapshot
+from sampan import codex_daemon, codex_subagent, deliver, doctor, save
+from sampan.codex_daemon import DaemonSnapshot
 from sampan.codex_state import daemon_fallback, live_codex, rollout_from_lsof, threads_fallback
 from sampan.procs import list_procs
 from sampan.registry import Row, load_rows, write_rows
@@ -135,16 +135,35 @@ class Picking(Base):
                               datetime(2026, 11, 28, tzinfo=timezone.utc))
 
     @staticmethod
-    def thread(tid, source="vscode", parent=None):
-        return CodexThread(tid, "", CWD, "sampan", source, parent, "idle", (), datetime.fromtimestamp(4_000_000_000, timezone.utc), None)
+    def thread(tid, source="vscode", parent=None, thread_source=None):
+        """A daemon thread parsed from the app-server's own JSON (camel case, an object source), as it really arrives."""
+        raw = {"id": tid, "cwd": CWD, "originator": "sampan", "source": source, "status": {"type": "idle"},
+               "updatedAt": 4_000_000_000}
+        if parent:
+            raw["parentThreadId"] = parent
+        if thread_source:
+            raw["threadSource"] = thread_source
+        return codex_daemon._thread(raw)
 
     def test_daemon_fallback_skips_subagents_but_not_forks(self):
-        snap = self.snap(self.thread(MAIN), self.thread(GUARD, "subagent", MAIN), self.thread(SPAWNED, "subagent", MAIN))
+        snap = self.snap(self.thread(MAIN), self.thread(GUARD, {"subAgent": {"other": "guardian"}}, MAIN),
+                         self.thread(SPAWNED, {"subAgent": {"thread_spawn": {"depth": 1}}}, MAIN),
+                         self.thread(REVIEW, {"subagent": "review"}, MAIN))
         self.assertEqual(daemon_fallback(snap, CWD, set(), NOW - 100), MAIN)
         self.assertEqual(daemon_fallback(self.snap(self.thread(FORK, "vscode", parent=MAIN)), CWD, set(), NOW - 100), FORK)
 
     def test_daemon_fallback_with_only_subagents_finds_nothing(self):
-        self.assertIsNone(daemon_fallback(self.snap(self.thread(GUARD, "subagent", MAIN)), CWD, set(), NOW - 100))
+        for source in ({"subAgent": {"other": "guardian"}}, {"subagent": "review"}, "subAgent"):
+            self.assertIsNone(daemon_fallback(self.snap(self.thread(GUARD, source, MAIN)), CWD, set(), NOW - 100), source)
+
+    def test_a_daemon_thread_is_a_subagent_by_its_thread_source_too(self):
+        thread = self.thread(GUARD, "vscode", MAIN, thread_source="guardian_review")
+        self.assertEqual(thread.thread_source, "guardian_review")
+        self.assertIsNone(daemon_fallback(self.snap(thread), CWD, set(), NOW - 100))
+
+    def test_the_cases_of_the_app_servers_key_do_not_matter(self):
+        for source in ({"subAgent": 1}, {"SUBAGENT": 1}, {"subagent": 1}, "subAgent", '{"subAgent": {"other": "x"}}'):
+            self.assertTrue(codex_subagent.source_is_subagent(source), source)
 
 
 class Lsof(Base):
@@ -155,6 +174,14 @@ class Lsof(Base):
             run = FakeRunner().on(["lsof"], cp(out=lsof_out(path)))
             tid = rollout_from_lsof(run, 201, self.home.path)
             self.assertEqual(tid, want)
+
+    def test_a_main_conversation_and_a_guardian_open_together_is_the_main_one(self):
+        guard = self.home.rollout(GUARD, source=GUARDIAN_SOURCE, parent=MAIN)
+        main = self.home.rollout(MAIN)
+        run = FakeRunner().on(["lsof"], cp(out=lsof_out(guard, main)))
+        self.assertEqual(rollout_from_lsof(run, 201, self.home.path), MAIN)
+        two_mains = FakeRunner().on(["lsof"], cp(out=lsof_out(main, self.home.rollout(OTHER))))
+        self.assertIsNone(rollout_from_lsof(two_mains, 201, self.home.path))  # still two conversations: unknown
 
     def test_the_db_row_alone_excludes_when_the_rollout_cannot_be_read(self):
         self.home.thread(GUARD, GUARDIAN_SOURCE)
@@ -329,6 +356,64 @@ class Heal(Base):
         _, healed, _ = self.heal([self.row(sid=DEEP)])
         self.assertEqual(healed, [("a", DEEP, MAIN)])
 
+    def test_two_rows_on_subagents_of_one_parent_are_both_left_alone(self):
+        self.home.thread(GUARD2, GUARDIAN_SOURCE)
+        self.home.rollout(GUARD2, source=GUARDIAN_SOURCE, parent=MAIN)
+        rows, healed, warnings = self.heal([self.row("a", GUARD), self.row("b", GUARD2)])
+        self.assertEqual([r.session_id for r in rows], [GUARD, GUARD2])
+        self.assertEqual(healed, [])
+        self.assertEqual(len(warnings), 2)
+        self.assertTrue(all("另一個 session" in w for w in warnings))
+
+    def test_rows_of_different_parents_are_both_healed(self):
+        self.home.thread(OTHER, "vscode")
+        self.home.thread(GUARD2, GUARDIAN_SOURCE)
+        self.home.rollout(GUARD2, source=GUARDIAN_SOURCE, parent=OTHER)
+        _, healed, _ = self.heal([self.row("a", GUARD), self.row("b", GUARD2)])
+        self.assertEqual(sorted(healed), [("a", GUARD, MAIN), ("b", GUARD2, OTHER)])
+
+    def test_the_daemon_names_the_parent_when_nothing_else_does(self):
+        self.home.thread(GUARD2, GUARDIAN_SOURCE)  # no rollout, no spawn edge
+        asked = []
+
+        def snap(*a, **k):
+            asked.append(1)
+            thread = codex_daemon._thread({"id": GUARD2, "cwd": CWD, "originator": "sampan", "source": {"subAgent": {"other": "guardian"}},
+                                           "parentThreadId": MAIN, "status": {"type": "idle"}, "updatedAt": 4_000_000_000})
+            return DaemonSnapshot(self.home.path, None, (thread,), frozenset(), datetime(2026, 11, 28, tzinfo=timezone.utc))
+        _, healed, _ = codex_subagent.heal_rows(self.cfg, FakeRunner(), [self.row(sid=GUARD2)], (), self.panes, self.procs,
+                                                snapshot_fn=snap)
+        self.assertEqual(healed, [("a", GUARD2, MAIN)])
+        self.assertEqual(len(asked), 1)
+
+    def test_nothing_is_read_when_no_row_is_a_subagent(self):
+        run = FakeRunner(strict=True)
+        rows, healed, warnings = codex_subagent.heal_rows(self.cfg, run, [self.row(sid=MAIN)], (), self.panes, self.procs)
+        self.assertEqual((healed, warnings, run.calls), ([], [], []))
+        self.assertFalse((Path(self.cfg.state_dir) / codex_subagent.SKIP_FILE).exists())
+
+    def test_a_row_that_cannot_be_fixed_warns_once_then_is_left_for_an_hour(self):
+        self.home.thread(GUARD2, GUARDIAN_SOURCE)  # no parent anywhere
+        rows = [self.row(sid=GUARD2)]
+        calls = []
+        with mock.patch.object(codex_subagent, "root_of", side_effect=lambda *a, **k: (calls.append(1), (None, "找不到父對話"))[1]):
+            first = codex_subagent.heal_rows(self.cfg, FakeRunner(), rows, (), self.panes, self.procs, now=1000.0)
+            again = codex_subagent.heal_rows(self.cfg, FakeRunner(), rows, (), self.panes, self.procs, now=1300.0)
+            later = codex_subagent.heal_rows(self.cfg, FakeRunner(), rows, (), self.panes, self.procs,
+                                             now=1000.0 + codex_subagent.SKIP_S + 1)
+        self.assertEqual((len(first[2]), len(again[2]), len(later[2])), (1, 0, 1))
+        self.assertEqual(len(calls), 2)  # the second round looked nothing up
+        self.assertTrue(((Path(self.cfg.state_dir) / codex_subagent.SKIP_FILE).stat().st_mode & 0o777) == 0o600)
+
+    def test_a_changed_conversation_is_looked_at_again_and_dry_run_remembers_nothing(self):
+        self.home.thread(GUARD2, GUARDIAN_SOURCE)
+        with mock.patch.object(codex_subagent, "root_of", return_value=(None, "找不到父對話")):
+            codex_subagent.heal_rows(self.cfg, FakeRunner(), [self.row(sid=GUARD2)], (), self.panes, self.procs, now=1000.0, dry_run=True)
+            self.assertFalse((Path(self.cfg.state_dir) / codex_subagent.SKIP_FILE).exists())
+            codex_subagent.heal_rows(self.cfg, FakeRunner(), [self.row(sid=GUARD2)], (), self.panes, self.procs, now=1000.0)
+            changed = codex_subagent.heal_rows(self.cfg, FakeRunner(), [self.row(sid=GUARD)], (), self.panes, self.procs, now=1001.0)
+        self.assertEqual(len(changed[2]), 1)  # another conversation under the same name: not the remembered one
+
     def test_the_switch_turns_it_off(self):
         import dataclasses
         self.cfg = dataclasses.replace(self.cfg, heal_subagent=False)
@@ -396,18 +481,44 @@ class Refusals(Base):
         self.home.thread(GUARD, GUARDIAN_SOURCE)
         self.home.rollout(GUARD, source=GUARDIAN_SOURCE, parent=MAIN)
         write_rows(self.cfg.registry_path, [Row("a", "codex", "codex", GUARD, CWD)], "t", self.cfg.history_dir)
-        checks = doctor._codex_registered(self.cfg)
+        checks = doctor._codex_registered(self.cfg, self.doctor_run())
         self.assertEqual([c.level for c in checks], ["warn"])
-        self.assertIn("改回父對話", checks[0].fix if hasattr(checks[0], "fix") else str(checks[0]))
+        self.assertIn("跑一次 sampan save 會改回父對話", checks[0].detail)
+        self.assertIn(MAIN[:8], checks[0].detail)
         write_rows(self.cfg.registry_path, [Row("a", "codex", "codex", MAIN, CWD)], "t", self.cfg.history_dir)
-        self.assertEqual([c.level for c in doctor._codex_registered(self.cfg)], ["ok"])
+        self.assertEqual([c.level for c in doctor._codex_registered(self.cfg, self.doctor_run())], ["ok"])
+
+    def doctor_run(self):
+        return FakeRunner().on(["tmux", "-u", "list-panes"], cp(out=pane_line("a", "%1", 100, "zsh", CWD) + "\n")).on(
+            ["ps", "-A"], cp(out=ps_line(100, 1, "-zsh", "-zsh") + "\n"))
+
+    def test_doctor_judges_like_save_the_parent_on_another_row_and_the_switch(self):
+        import dataclasses
+        self.home.thread(MAIN)
+        self.home.thread(GUARD, GUARDIAN_SOURCE)
+        self.home.rollout(GUARD, source=GUARDIAN_SOURCE, parent=MAIN)
+        write_rows(self.cfg.registry_path, [Row("a", "codex", "codex", GUARD, CWD), Row("b", "codex", "codex", MAIN, CWD)],
+                   "t", self.cfg.history_dir)
+        (check,) = doctor._codex_registered(self.cfg, self.doctor_run())
+        self.assertIn("別的 session", check.detail)
+        write_rows(self.cfg.registry_path, [Row("a", "codex", "codex", GUARD, CWD)], "t", self.cfg.history_dir)
+        off = dataclasses.replace(self.cfg, heal_subagent=False)
+        (check,) = doctor._codex_registered(off, self.doctor_run())
+        self.assertIn("heal_subagent", check.detail)
+
+    def test_doctor_reads_nothing_more_when_no_row_is_a_subagent(self):
+        self.home.thread(MAIN)
+        write_rows(self.cfg.registry_path, [Row("a", "codex", "codex", MAIN, CWD)], "t", self.cfg.history_dir)
+        run = FakeRunner(strict=True)  # no tmux, no ps: they are not asked
+        self.assertEqual([c.level for c in doctor._codex_registered(self.cfg, run)], ["ok"])
+        self.assertEqual(run.calls, [])
 
     def test_doctor_says_why_when_it_cannot(self):
         self.home.thread(GUARD, GUARDIAN_SOURCE)
         write_rows(self.cfg.registry_path, [Row("a", "codex", "codex", GUARD, CWD)], "t", self.cfg.history_dir)
-        (check,) = doctor._codex_registered(self.cfg)
+        (check,) = doctor._codex_registered(self.cfg, self.doctor_run())
         self.assertEqual(check.level, "warn")
-        self.assertIn("找不到父對話", str(check))
+        self.assertIn("找不到父對話", check.detail)
 
 
 class Config(Base):
