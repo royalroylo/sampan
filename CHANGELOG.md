@@ -5,6 +5,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.28.3] - 2026-11-28
+
+Upgrading: nothing to do. **A Codex session could be registered on its review subagent's conversation** instead of the one you talk to: `sampan send` then queued the message where nobody reads it and the reply was never found. Fixed; after upgrading, the next `sampan save` (every 5 minutes) puts such a row back on its parent conversation (`sampan save --dry-run` shows it first; `[save] heal_subagent = false` turns it off). No registry, dispatch or config format changes.
+
+### Fixed
+
+- **Subagents are never picked.** A Codex review subagent (the guardian and the like) carries its parent's originator and directory, so the lookups that match a pane to a conversation took it for the pane's own. They now drop every thread whose `source` says subagent (all shapes: `{"subagent": {"other": …}}`, `{"subagent": "…"}`, `{"subagent": {"thread_spawn": …}}`) or whose `thread_source` is `guardian_review` / `subagent`: in the threads table, in the daemon's list, in the rollout a process holds open (its first line is read; the table is the second opinion) and for `sampan adopt`. A fork or an attached thread is still a main conversation and is kept.
+- **A row already on a subagent is put back.** `sampan save` (after the merge, under the registry lock) changes a Codex row to the parent conversation when: this round did not observe the row, it is not retired, no Codex runs in its tmux session, the parent is found (the rollout's `parent_thread_id`, else the database's spawn edge, else the daemon's `parentThreadId`; a subagent of a subagent goes up to the first main conversation), is in Codex's database, not archived, not a subagent and in the same directory, no other row holds it, and no other live Codex is in that directory. Otherwise nothing changes and one warning says why. The summary counts them (`改回父對話 N`) and `--dry-run` previews them.
+- **Nothing is sent to a subagent.** `sampan send` (and the MCP tools) refuse a Codex target whose registered conversation is a subagent, with the reason, instead of queuing the message where nobody reads it.
+
+### Added
+
+- `sampan doctor` checks whether a registered Codex conversation is a subagent, and says what `sampan save` will do or why it cannot.
+- `[save] heal_subagent` (default `true`) in `config.toml`.
+
 ## [0.28.2] - 2026-11-27
 
 Upgrading: nothing to do; no setting, registry, dispatch or config format changes.
@@ -717,7 +732,8 @@ First public release. Versions up to 0.5.3 were released privately under the nam
 ### Security
 - Credentials in git URLs are no longer shown in output.
 
-[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.28.2...HEAD
+[Unreleased]: https://github.com/royalroylo/sampan/compare/v0.28.3...HEAD
+[0.28.3]: https://github.com/royalroylo/sampan/releases/tag/v0.28.3
 [0.28.2]: https://github.com/royalroylo/sampan/releases/tag/v0.28.2
 [0.28.1]: https://github.com/royalroylo/sampan/releases/tag/v0.28.1
 [0.28.0]: https://github.com/royalroylo/sampan/releases/tag/v0.28.0

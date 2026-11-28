@@ -6,6 +6,7 @@ into an empty prompt. Codex: `codex queue --thread` takes the text as one argv e
 import os
 import subprocess
 
+from . import codex_subagent
 from .clock import fmt_local, parse_iso
 from .codex_daemon import CODEX_NOT_FOUND, first_line
 from .launch import codex_env
@@ -23,6 +24,7 @@ REASON_DRAFT = "對方輸入框有未送出的字"
 REASON_BLOCKED = "對方畫面停在選單或提示"
 REASON_COPY_MODE = "對方畫面在捲動模式（tmux copy mode）"
 REASON_QUEUE_TIMEOUT = "可能已送出，請確認（codex queue 逾時）"
+REASON_SUBAGENT = "登記的 Codex 對話是審查小代理，不是主對話，沒有送；請跑 sampan doctor（sampan save 會改回父對話）"
 
 
 class Unsure(str):
@@ -132,6 +134,8 @@ def _ours_pending(screen, first, raw=False):
 def to_codex(cfg, run, thread_id, text):
     """Queue the text on a Codex thread. None on success, else a one-line reason; Unsure when `codex queue` timed out
     (the daemon may have taken the message: it is never queued again)."""
+    if codex_subagent.thread_is_subagent(cfg.codex.home, thread_id) is True:  # a review subagent takes no messages
+        return REASON_SUBAGENT
     extra = codex_env(cfg)
     env = {**os.environ, **extra} if extra else None
     r = run(["codex", "queue", "--thread", thread_id, "--message", text], env=env,

@@ -13,7 +13,7 @@ What does not happen: nothing in detection, the registry or the leaf modules imp
 
 1. **Detection** (read-only; turns the outside world into plain data)
    - `resources.py` (the machine's memory, swap, load: one sampler `snapshot`, one `classify` that decides the red memory light; `resources.json` keeps the previous reading), `tmux.py` (panes), `procs.py` (process tree, environments), `observe.py` (one consistent snapshot of both),
-     `claude_state.py` / `codex_state.py` (which conversation a process is in; context use; last activity),
+     `claude_state.py` / `codex_state.py` (which conversation a process is in; context use; last activity), `codex_subagent.py` (which Codex threads are review subagents and who their parent is; the heal `sampan save` applies),
      `screens.py` (every Claude / Codex screen marker and prompt parser lives here and only here),
      `status.py` (the `State` enum and `StatusRow` shown to the user).
 2. **Registry** (the only durable state)

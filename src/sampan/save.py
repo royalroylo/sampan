@@ -1,6 +1,7 @@
 import os
 
 from .clock import now_iso
+from .codex_subagent import heal_rows
 from .fsutil import PRIVATE_FILE, private_dir, try_chmod
 from .machine import registry_machine
 from .observe import PROC_ROOT, agent_sessions, observe
@@ -63,28 +64,35 @@ def cmd_save(cfg, run, out, *, quiet=False, brief=False, dry_run=False, proc_roo
         quiet_keep = agent_sessions(procs, panes) - {ob.tmux for ob in observed}
         now = now_iso()
         res = merge(old, observed, {p.session for p in panes}, now, server, keep_silently=quiet_keep)
+        healed = []
+        if cfg.heal_subagent:  # after the merge, before the write, under the same lock
+            res.rows, healed, heal_warnings = heal_rows(cfg, run, res.rows, {ob.tmux for ob in observed}, panes, procs)
+            res.warnings += heal_warnings
         if not dry_run:
             stamp_missing(tmux, observed, res.rows)
             write_rows(cfg.registry_path, res.rows, now, cfg.history_dir, machine=registry_machine(cfg))
     warnings += res.warnings
     summary = (f"新增 {len(res.added)}、更新 {len(res.updated)}、改名 {len(res.renamed)}、"
-               f"已停止 {len(res.pending)}、警告 {len(warnings)}，共 {len(res.rows)} 列")
+               f"已停止 {len(res.pending)}、{f'改回父對話 {len(healed)}、' if healed else ''}警告 {len(warnings)}，共 {len(res.rows)} 列")
     append_log(cfg, f"{'dry-run' if dry_run else 'ok'} {summary}")
     if brief:
         head = [f"已停止 {len(res.pending)}（-v 看清單）"] if res.pending else []
+        head += [f"改回父對話 {len(healed)}"] if healed else []
         head += [f"警告 {len(warnings)}"] if warnings else []
         if head:
             out(f"存檔：{'、'.join(head)}")
         for w in warnings:
             out(f"  ⚠ {w}")
         return 0
-    if quiet and not warnings:
+    if quiet and not warnings and not healed:
         return 0
     out(f"sampan save{'（dry-run，未寫入）' if dry_run else ''}：{summary}")
     for name in res.added:
         out(f"  + {name}")
     for old_name, new_name in res.renamed:
         out(f"  ~ {old_name} → {new_name}")
+    for name, was, now_id in healed:
+        out(f"  ↺ {name}：登記的 Codex 對話是審查小代理（{was[:8]}），改回父對話（{now_id[:8]}）")
     for name in res.pending:
         out(f"  … {name}：已停止（sampan restore 接回；不用了就 sampan retire）")
     for w in warnings:

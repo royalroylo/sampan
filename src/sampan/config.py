@@ -12,6 +12,7 @@ class ConfigError(Exception):
     pass
 
 
+HEAL_SUBAGENT_DEFAULT = True  # [save] heal_subagent when the file does not say (the one place the default is set)
 SOURCE_RULE = "GitHub owner/repo 或 git 網址（https://…、ssh://…、git@host:path）"
 _GITHUB_RE = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9_.-]*/[A-Za-z0-9_.-]+$")
 _URL_RE = re.compile(r"^(?:https?|ssh)://[^/\s]+/\S+$|^[\w.-]+@[\w.-]+:\S+$")
@@ -145,6 +146,7 @@ class Config:
     mcp_confirm: bool = True  # [mcp] confirm: the MCP tools that act are marked, so the agent's own permission prompt asks the user
     limits: Limits = Limits()
     resource_bar: bool = True  # [ui] resource_bar: the memory / load / count line at the bottom right of the main list
+    heal_subagent: bool = HEAL_SUBAGENT_DEFAULT  # [save] heal_subagent: `sampan save` puts a Codex conversation registered as a review subagent back on its parent
 
     @property
     def codex_profiles(self):
@@ -288,6 +290,10 @@ def load_config(path, *, home=None, state_dir=None):
     recent_days = restore.get("recent_days", 7)
     if isinstance(recent_days, bool) or not isinstance(recent_days, int) or recent_days < 0:
         raise ConfigError(f"[restore] recent_days 要是非負整數，目前是 {recent_days!r}")
+    save_tbl = table(data.get("save", {}), "[save]")
+    heal_subagent = save_tbl.get("heal_subagent", HEAL_SUBAGENT_DEFAULT)
+    if not isinstance(heal_subagent, bool):
+        raise ConfigError(f"[save] heal_subagent 要是 true 或 false，目前是 {heal_subagent!r}")
     disp = table(data.get("dispatches", {}), "[dispatches]")
     keep_days = disp.get("keep_days", 90)
     if isinstance(keep_days, bool) or not isinstance(keep_days, int) or keep_days < 0:
@@ -332,6 +338,7 @@ def load_config(path, *, home=None, state_dir=None):
         mcp_confirm=mcp_confirm,
         limits=limits,
         resource_bar=resource_bar,
+        heal_subagent=heal_subagent,
     )
 
 

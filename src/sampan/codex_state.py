@@ -13,6 +13,7 @@ from urllib.parse import quote
 
 from . import codex_daemon
 from .claude_state import Reply
+from .codex_subagent import is_subagent, rollout_meta, source_is_subagent
 from .fsutil import cache_by_stat, reverse_lines
 from .procs import UUID_RE, is_uuid
 
@@ -89,15 +90,23 @@ def rollout_from_lsof(run, pid, codex_home):
     if r.returncode != 0:
         return None
     roots = _sessions_dirs(codex_home)
-    ids = set()
+    found = {}
     for line in r.stdout.splitlines():
         if not line.startswith("n"):
             continue
         path = Path(line[1:])
         m = ROLLOUT_RE.match(path.name)
         if m and any(root in path.parents for root in roots):
-            ids.add(m.group(1))
-    return ids.pop() if len(ids) == 1 else None
+            found[m.group(1)] = path
+    if len(found) != 1:
+        return None
+    (tid, path), = found.items()
+    meta = rollout_meta(path)  # a review subagent's rollout is never the pane's conversation
+    if meta is not None:
+        return None if meta.subagent else tid
+    from . import codex_subagent  # the rollout cannot be read: the threads table is the second opinion
+    row = codex_subagent.db_rows(codex_home, [tid]).get(tid)
+    return None if row is not None and row.subagent else tid
 
 
 def _state_db(codex_home):
@@ -113,11 +122,12 @@ def _state_db(codex_home):
 # threads are source 'vscode' with originator 'codex-tui' — or 'sampan' when sampan has been polling that daemon (seen
 # 2026-10-30 on Codex 0.164). The Desktop app is 'vscode' + 'Codex Desktop': not a match.
 TUI_ORIGINATORS = ("codex-tui", "sampan")
-_THREADS_SQL = "select id, created_at from threads where ({match}) and archived = 0 and cwd in ({marks})"
+_THREADS_SQL = "select id, created_at, source{extra} from threads where ({match}) and archived = 0 and cwd in ({marks})"
 
 
 def threads_fallback(codex_home, cwd, started_at, exclude):
-    """Interactive thread in cwd created closest to started_at (≤ 120 s); None when absent, AMBIGUOUS when two are as close."""
+    """Interactive thread in cwd created closest to started_at (≤ 120 s); None when absent, AMBIGUOUS when two are as close.
+    Subagents (the review guardian) carry the parent's originator: they are dropped by their source."""
     db = _state_db(codex_home)
     if db is None:
         return None
@@ -126,15 +136,18 @@ def threads_fallback(codex_home, cwd, started_at, exclude):
     try:
         con = sqlite3.connect(f"file:{quote(str(db))}?mode=ro", uri=True)
         try:
+            cols = {r[1] for r in con.execute("pragma table_info(threads)")}
+            extra = ", thread_source" if "thread_source" in cols else ", null"
             try:
-                rows = con.execute(_THREADS_SQL.format(match="source = 'cli' or originator in (?, ?)", marks=marks),
+                rows = con.execute(_THREADS_SQL.format(match="source = 'cli' or originator in (?, ?)", marks=marks, extra=extra),
                                    (*TUI_ORIGINATORS, *cwds)).fetchall()
             except sqlite3.OperationalError:  # an older state db without the originator column
-                rows = con.execute(_THREADS_SQL.format(match="source = 'cli'", marks=marks), cwds).fetchall()
+                rows = con.execute(_THREADS_SQL.format(match="source = 'cli'", marks=marks, extra=extra), cwds).fetchall()
         finally:
             con.close()
     except sqlite3.Error:
         return None
+    rows = [(tid, created) for tid, created, source, thread_source in rows if not is_subagent(source, thread_source)]
     diffs = sorted((abs(created - started_at), tid) for tid, created in rows
                    if tid not in exclude and isinstance(created, (int, float)))
     diffs = [d for d in diffs if d[0] <= FALLBACK_WINDOW]
@@ -152,7 +165,7 @@ def daemon_fallback(snap, cwd, exclude, started_at, panes_in_cwd=1):
     near its start time (a `/new` long after launch)."""
     cwds = {cwd, os.path.realpath(cwd)}
     ids = sorted({t.id for t in snap.threads
-                  if t.originator in TUI_ORIGINATORS and t.id not in exclude and (t.id in snap.loaded or t.status in ("active", "idle"))
+                  if t.originator in TUI_ORIGINATORS and not source_is_subagent(t.source) and t.id not in exclude and (t.id in snap.loaded or t.status in ("active", "idle"))
                   and (t.cwd in cwds or os.path.realpath(t.cwd) in cwds)
                   and t.updated_at.timestamp() >= started_at - TIE_TOLERANCE})
     if len(ids) > max(1, panes_in_cwd):
